@@ -51,7 +51,8 @@ AFTER_EPISODE_MIN = 3        # after any episode, wait this long before speaking
 IGNORED_HUSH_MIN = 10        # a suggestion the patient ignored: nothing new for this long
 IGNORED_BACKOFF_MIN = 30     # ...and that topic waits 30, then 60, 120, 240 min after each ignore in a row
 DECLINED_BACKOFF_MIN = 60    # "No, thanks." / Return to main menu: that topic waits an hour
-OWN_CHOICE_MIN = 30          # never offer to undo a switch the patient chose themselves this recently
+OWN_CHOICE_MIN = 30          # don't offer to undo a switch the patient chose themselves this recently...
+CLEARLY_C = 1.5              # ...unless the room is now clearly past their threshold (e.g. 18 °C for "cold below 20")
 EXTREME_HIGH_C = 30.0        # outside these the room is unsafe (or the sensor is wrong): page the nurse at once,
 EXTREME_LOW_C = 16.0         # awake or not, screen or not
 
@@ -423,13 +424,17 @@ class Agent:
         comfort = L["comfort"]
         if (p["night"] and comfort.get("runs_warm") and p["temp_c"] >= L["warm_above_c"]
                 and L["night_checkins_enabled"] and self._cooled_down("warm_night")
-                and not self.own_choice("fan", "off")):
+                and not (self.own_choice("fan", "off") and p["temp_c"] < L["warm_above_c"] + CLEARLY_C)):
             return "warm_night", (f"Night ({p['time']}), eyes open {int((p['eyes_open_ratio'] or 1) * 100)}%, "
-                                  f"room {p['temp_c']} °C >= {L['warm_above_c']} °C, memory: runs warm at night")
+                                  f"room {p['temp_c']} °C >= {L['warm_above_c']} °C, memory: runs warm at night. "
+                                  "Make one suggestion now.")
         cold = comfort.get("cold_below_c")
         if (cold is not None and p["temp_c"] <= cold and self._cooled_down("cold")
-                and not self.own_choice("fan", "on")):
-            return "cold", f"Room {p['temp_c']} °C <= {cold} °C, memory: feels cold below {cold} °C"
+                and not (self.own_choice("fan", "on") and p["temp_c"] > cold - CLEARLY_C)):
+            own = self.own_choice("fan", "on")
+            return "cold", (f"Room {p['temp_c']} °C <= {cold} °C, memory: feels cold below {cold} °C"
+                            + (f"; they turned the fan on themselves at {own}, so ask kindly, don't assume" if own else "")
+                            + ". Make one suggestion now.")
         changes = self.room_changes(p)
         if changes and self.client is not None and time.monotonic() - self.last_change_look >= CHANGE_GAP_S \
                 and not self._backed_off("room_change") and (L["night_checkins_enabled"] or not p["night"]):
@@ -572,7 +577,7 @@ class Agent:
     # ----- respecting silence ---------------------------------------------------------------------
     def _respect_silence(self, name: str) -> None:
         """After an episode the agent speaking first was ignored or declined, it backs off (code, not AI)."""
-        if name == "patient":                     # the patient asked: their answers are not a "not now"
+        if name == "patient" or not self.answers:  # the patient asked, or nothing reached the screen: no break
             return
         now = clock.now().timestamp()
         self.hush_until = max(self.hush_until, now + AFTER_EPISODE_MIN * 60)

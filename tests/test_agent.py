@@ -353,12 +353,25 @@ def test_declined_suggestion_waits_an_hour(tmp_path):
 
 
 def test_never_undo_the_patients_own_choice(tmp_path):
-    agent, live, room, _ = make(tmp_path, temp=19.0, at="10:00")
-    room.execute("fan", "on", by="patient")          # they want the fan, even though it is cool
+    agent, live, room, _ = make(tmp_path, temp=19.5, at="10:00")
+    room.execute("fan", "on", by="patient")          # they want the fan, even though it is a bit cool
     assert agent.own_choice("fan", "on")
     assert agent.trigger(agent.perceive()) is None   # no "Feeling cold? Fan off?"
     clock.set_time("10:45")
     assert agent.trigger(agent.perceive())[0] == "cold"
+
+
+def test_clearly_cold_asks_even_after_their_own_fan(tmp_path):
+    agent, live, room, _ = make(tmp_path, temp=18.0, at="10:00")
+    room.execute("fan", "on", by="patient")
+    assert agent.trigger(agent.perceive())[0] == "cold"   # 18 °C is clearly below "cold below 20"
+
+
+def test_a_silent_look_does_not_start_a_break(tmp_path):
+    agent, live, *_ = make(tmp_path)
+    agent.answers = []
+    agent._respect_silence("room_change")
+    assert agent.hush_until == 0 and agent.backoff == {}
 
 
 def test_patient_requests_do_not_back_off(tmp_path):
