@@ -1,3 +1,4 @@
 14:46 agent (patient side): awake.py (eyes open/awake), memory.py (facts, learn: comfort, silence, option ranking), agent.py (triggers warm-night/cold/patient-asked; Claude tool loop with code-enforced Yes-before-act + question limit; rules fallback); 2 AM loop end to end on the real screens; 135 tests pass
 15:01 voice: calibration uses the instant offline system voice (faster rate, newest prompt replaces stale ones); Ava stays for the app; 135 tests pass
 15:14 agent: Claude writes the Talk to AI menu (refreshed in the background, Something else always last), every menu choice goes to Claude, AI check-ins every 3 min when awake + idle (may stay quiet), suggestions phrased as questions, unknown-patient guidance; tests no longer write to logs/events.jsonl; 140 tests pass
+15:23 agent: choosing a switch in the menu (e.g. Turn fan on) counts as the patient's approval for that exact action; 147 tests pass

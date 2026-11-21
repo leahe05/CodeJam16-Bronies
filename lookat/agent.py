@@ -119,6 +119,19 @@ class Menu(BaseModel):
     why: str
 
 
+def action_in(text: str) -> Optional[tuple]:
+    """The room action a patient's own choice names, e.g. "Turn fan on" -> ("fan", "on"). Else None."""
+    words = set(str(text).lower().replace(",", " ").replace(".", " ").split())
+    device = "fan" if words & {"fan", "cooler", "cool"} else "lamp" if words & {"lamp", "light", "lights"} else None
+    if device is None:
+        return None
+    if words & {"off", "warmer", "dim", "dark"}:
+        return device, "off"
+    if words & {"on", "cooler", "cool", "brighter"}:
+        return device, "on"
+    return None
+
+
 def is_yes(answer: str) -> bool:
     return str(answer).strip().lower().startswith(YES_WORDS)
 
@@ -241,7 +254,11 @@ class Agent:
             self.feed("decided", "Quiet for 2 hours: no suggestions until " +
                       time.strftime("%H:%M", time.localtime(self.quiet_until)), "the patient asked for quiet")
         else:   # any option, including the ones Claude wrote: Claude decides what to do with it
-            self.episode("patient", f'The patient opened Talk to AI and chose "{choice}". Act on it.')
+            act = action_in(choice)
+            note = (f' Choosing it IS their approval to {act[0]} {act[1]}: act() now, no need to ask first.'
+                    if act else "")
+            self.episode("patient", f'The patient opened Talk to AI and chose "{choice}". Act on it.{note}',
+                         approved=act)
         self._publish()
 
     # ----- perception + triggers ---------------------------------------------------------------
@@ -289,9 +306,10 @@ class Agent:
         return None
 
     # ----- one episode -------------------------------------------------------------------------
-    def episode(self, name: str, reason: str) -> None:
+    def episode(self, name: str, reason: str, approved: Optional[tuple] = None) -> None:
+        """approved = a room action the patient already chose themselves (e.g. "Turn fan on" in the menu)."""
         self.last_run[name] = clock.now()
-        self.approved: Optional[tuple] = None
+        self.approved: Optional[tuple] = approved
         self.questions = 0
         self.night = clock.is_night()
         self.trigger_name = name
@@ -369,6 +387,8 @@ class Agent:
                                      "reason": f"Room {self.live.room.state()['temp_c']} °C, below their cold threshold.",
                                      "urgency": "normal", "why": "only a nurse can fix this"})
             c("finish", {"summary": f"Cold check-in: {ans}", "why": "done"})
+        elif self.approved:                                       # the patient chose a switch in the menu
+            self._fix_and_check({"device": self.approved[0], "cmd": self.approved[1]}, "Still not comfortable")
         elif self.choice and self.choice not in ("Get more comfortable",):   # a menu choice, no AI
             visit = self.memory.learn()["last_nurse_visit"]
             what = "something not on the list" if self.choice == "Something else" else self.choice.lower()

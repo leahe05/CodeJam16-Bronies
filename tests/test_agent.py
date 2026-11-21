@@ -264,3 +264,25 @@ def test_ai_checkin_only_with_claude_and_it_may_stay_quiet(tmp_path):
     assert name == "checkin"
     agent.episode(name, "look-in")
     assert agent.questions == 0 and not live.alerts         # it chose silence, and no rules ran
+
+
+@pytest.mark.parametrize("text,want", [("Turn fan on", ("fan", "on")), ("Turn the lights off", ("lamp", "off")),
+                                       ("Make it cooler", ("fan", "on")), ("Water", None), ("Call the nurse", None)])
+def test_action_in(text, want):
+    from lookat.agent import action_in
+    assert action_in(text) == want
+
+
+def test_menu_choice_turn_fan_on_is_the_approval(tmp_path):
+    client = MenuClient(["Water", "Rest"], turns=[[tool("act", device="fan", cmd="on")], [tool("finish", summary="Fan on")]])
+    agent, live, room, screens = make(tmp_path, client=client, at="10:00", temp=22.0)
+    agent._on_patient_event(("assistant_choice", "Turn fan on"))
+    assert room.state()["fan_on"] and not screens.seen          # done without asking again
+    agent.choice = None
+    assert agent.call("act", {"device": "lamp", "cmd": "on", "why": ""}).startswith("REFUSED")
+
+
+def test_menu_choice_fan_without_ai(tmp_path):
+    agent, live, room, screens = make(tmp_path, answers=["Yes"], at="10:00", temp=22.0)
+    agent._on_patient_event(("assistant_choice", "Turn fan on"))
+    assert room.state()["fan_on"] and screens.seen == ["Better now?"]
