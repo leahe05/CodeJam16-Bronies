@@ -25,11 +25,20 @@
   const DEAD = 0.04;            // dead band around a zone border, share of the screen width
   const SEND_MS = 100;          // POST the zone this often
   const LOST_MS = 600;          // no prediction this long = no gaze (null)
-  const POINTS = [[.1, .12], [.5, .12], [.9, .12], [.1, .5], [.5, .5], [.9, .5], [.1, .88], [.5, .88], [.9, .88]];
-  const SETTLE_MS = 900, RECORD_MS = 1300, SAMPLE_MS = 50;
+  // 9-point grid, then the far left/right edges and the middle row again: left/right is all that matters.
+  const POINTS = [[.1, .12], [.5, .12], [.9, .12], [.1, .5], [.5, .5], [.9, .5], [.1, .88], [.5, .88], [.9, .88],
+                  [.03, .5], [.97, .5], [.25, .5], [.75, .5], [.9, .3], [.1, .3], [.9, .7], [.1, .7]];
+  const SETTLE_MS = 900, RECORD_MS = 1500, SAMPLE_MS = 50;
+  // Check after the dot: look at the left / centre / right column; where the tracker THINKS you look there
+  // sets the zone borders (half-way between those), so a tracker that reads everything a bit to the left
+  // still gets "right" right. If the three don't come out in order, the dot calibration runs again.
+  const CHECK = [["left", 1 / 6], ["middle", .5], ["right", 5 / 6]];
+  const CHECK_SETTLE_MS = 1200, CHECK_MS = 2200, MIN_SPREAD = 0.08;
   const CONFIRM_S = 0.3, LONG_S = 2.0;      // config.CONFIRM_S / config.EMERGENCY_S
   const EYES_OPEN = 0.16;                  // eyelid gap / eye width above this = open
 
+  let borders = [1 / 3, 2 / 3];   // zone borders, share of the screen width (set by the check)
+  let probe = null;               // predictions collected during the check
   let xs = [], ys = [], lastPred = 0, zone = null, running = false, calibrating = false;
   let showDot = params.get("dot") !== "0";
   // eyebrows: value = brow-to-eyelid distance / face height (smoothed); thr/rel from calibration
@@ -59,6 +68,11 @@
     #wg-dot { position: fixed; width: 7vh; height: 7vh; margin: -3.5vh 0 0 -3.5vh; border-radius: 50%; z-index: 9;
       pointer-events: none; border: 2px solid rgba(165, 243, 252, .55); background: rgba(103, 232, 249, .10);
       transition: left .12s linear, top .12s linear, opacity .3s; }
+    .wg-col { position: fixed; top: 12vh; bottom: 12vh; width: 28vw; margin-left: -14vw; border-radius: 3vh; z-index: 21;
+      border: 2px dashed var(--card-border, rgba(165,243,252,.35)); display: flex; align-items: center; justify-content: center;
+      font-size: 4vh; font-weight: 600; color: var(--hint, #a9c6ff); opacity: .6; transition: all .3s; }
+    .wg-col.on { opacity: 1; border: 3px solid var(--ask-border, #a5f3fc); background: var(--ask-bg, rgba(103,232,249,.16));
+      color: var(--text, #fff); box-shadow: var(--ask-glow, 0 0 5vh rgba(34,211,238,.5)); }
     #wg-zone { position: fixed; top: 0; bottom: 0; width: 33.34vw; z-index: 1; pointer-events: none;
       background: linear-gradient(180deg, transparent, rgba(103,232,249,.06) 40%, transparent); transition: left .25s ease, opacity .3s; }
     #webgazerVideoContainer { display: none !important; }`;
@@ -90,7 +104,7 @@
     const st = el("wg-cal", `<div class="msg"><b>Starting the camera…</b><p>Loading eye tracking (a few seconds).</p></div>`);
     try {
       await begin();
-      await calibrate();
+      await calibrateGaze();
       await calibrateBrows();
     } catch (e) {
       console.error("WG", e);
@@ -110,6 +124,7 @@
     wg.saveDataAcrossSessions(false);                // a fresh calibration every start
     wg.setRegression("ridge").applyKalmanFilter(true);
     wg.setGazeListener((data) => {
+      if (data && probe) { probe.push(data.x / innerWidth); return; }
       if (!data || calibrating || frozen()) return;    // eyebrows up: ignore the jumpy predictions
       xs.push(data.x); ys.push(data.y);
       if (xs.length > SMOOTH) { xs.shift(); ys.shift(); }
@@ -214,7 +229,6 @@
   async function calibrate() {
     const wg = window.webgazer;
     calibrating = true;
-    wg.clearData();
     const cal = el("wg-cal", `<div class="msg"><b>Follow the dot with your eyes</b><p>Keep your head still.</p></div>`);
     const dot = el("wg-target");
     say("Follow the dot with your eyes. Keep your head still.");
@@ -238,10 +252,53 @@
     calibrating = false;
   }
 
+  // ---------------- check: where does the tracker put each column? ----------------
+  async function checkZones() {
+    calibrating = true;
+    const cal = el("wg-cal", `<div class="msg"><b>Now look at each box</b><p>Keep looking until it moves on.</p></div>`);
+    say("Now look at each box until it moves on.");
+    await wait(2000);
+    cal.innerHTML = CHECK.map(([z, cx]) => `<div class="wg-col" data-z="${z}" style="left:${cx * 100}vw">`
+      + `${{ left: "Left", middle: "Centre", right: "Right" }[z]}</div>`).join("");
+    const got = {};
+    for (const [z] of CHECK) {
+      const box = cal.querySelector(`[data-z="${z}"]`);
+      box.classList.add("on");
+      say({ left: "Look left.", middle: "Look at the centre.", right: "Look right." }[z]);
+      await wait(CHECK_SETTLE_MS);
+      probe = [];
+      await wait(CHECK_MS);
+      got[z] = probe.length >= 5 ? median(probe) : null;
+      probe = null;
+      box.classList.remove("on");
+    }
+    calibrating = false;
+    const { left: l, middle: m, right: r } = got;
+    console.log("WG check", got);
+    if (l == null || m == null || r == null || !(m - l > MIN_SPREAD && r - m > MIN_SPREAD)) return false;
+    borders = [(l + m) / 2, (m + r) / 2];
+    return true;
+  }
+
+  // Dot, then the check; up to 3 rounds (each round adds more dot training).
+  async function calibrateGaze() {
+    window.webgazer.clearData();
+    for (let round = 0; round < 3; round++) {
+      await calibrate();
+      if (await checkZones()) { el("wg-cal").remove(); return; }
+      const cal = el("wg-cal", `<div class="msg"><b>Let's do the dot once more</b><p>Keep your head still and follow it with your eyes.</p></div>`);
+      say("Let's do the dot once more.");
+      await wait(2500);
+      cal.remove();
+    }
+    borders = [1 / 3, 2 / 3];                        // still not in order: plain thirds
+    el("wg-cal").remove();
+  }
+
   // ---------------- live: zone -> backend ----------------
   const median = (a) => { const s = [...a].sort((p, q) => p - q); return s[s.length >> 1]; };
   function zoneOf(x) {
-    const w = innerWidth, a = w / 3, b = 2 * w / 3, d = DEAD * w;
+    const w = innerWidth, a = borders[0] * w, b = borders[1] * w, d = DEAD * w;
     if (zone === "left" && x < a + d) return "left";        // stay unless clearly past the border
     if (zone === "right" && x > b - d) return "right";
     if (zone === "middle" && x > a - d && x < b + d) return "middle";
@@ -283,7 +340,7 @@
 
   document.addEventListener("keydown", (e) => {
     const k = e.key.toLowerCase();
-    if (k === "r" && running && !calibrating) calibrate();
+    if (k === "r" && running && !calibrating) calibrateGaze();
     if (k === "b" && running && !calibrating) calibrateBrows();
     if (k === "d") showDot = !showDot;
   });

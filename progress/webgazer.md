@@ -3,3 +3,4 @@
 16:06 webgazer: eyebrows + eyes-open read in the browser from WebGazer's face points, with their own calibration after the dot (B = redo); main.py --gaze web needs no Python camera; home = Room Controls left, greeting centre, Talk to AI right; 171 tests pass
 16:15 webgazer: gaze frozen while the eyebrows rise (+0.7 s after), so a raise no longer moves the selection; Room Controls = one switch per device (Turn the lamp on/off, Turn the fan on/off, label follows the state); 172 tests pass
 16:25 webgazer: big cards fill the screen height; background dims while a card is selected
+16:32 webgazer: longer dot calibration (17 points) + left/centre/right check that sets the zone borders
