@@ -12,6 +12,8 @@ import itertools
 import threading
 import time
 
+from lookat import config
+
 CYCLE_S = 3.0
 
 
@@ -89,6 +91,9 @@ class Fake:
         self.temp_c, self.setpoint_c = 24.5, 22.0
         self.lamp_on, self.fan_on = True, False
         self.overlay_until = 0.0
+        from lookat.speech import Announcer, WebVoice
+        self.voice = WebVoice()
+        self.announcer = Announcer(self.voice.say, queue=self.voice)
         self.alert_ids = itertools.count(4)
         self.qids = itertools.count(2)
         self.alerts = [
@@ -156,8 +161,9 @@ class Fake:
         if time.time() < self.overlay_until:
             overlay = {"kind": "call_nurse", "text": "Your nurse has been called"}
         up = bool(focus and focus["state"] == "asking")
+        self.announcer.update(base, focus, None, now=elapsed)
         return {"v": 1, **base, "focus": focus, "overlay": overlay, "clock": self.clock(),
-                "room": self.room(), "face": True,
+                "room": self.room(), "face": True, "ask_s": config.ASK_TIMEOUT_S, "voice": self.voice.recent(),
                 "brow": {"up": up, "held_s": 0.6 if up else 0.0, "long_s": 2.0}}
 
     def nurse_json(self):

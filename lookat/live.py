@@ -44,6 +44,8 @@ class Live:
         self.listeners: list = []        # callbacks(event_tuple) - the agent subscribes here
         self.camera_ok = False
         self.calibration: Optional[dict] = None   # {"text", "spot"} while calibrating
+        self.announcer = None            # lookat.speech.Announcer: spoken feedback (main.py sets it)
+        self.voice_out = None            # lookat.speech.WebVoice: lines the patient page reads aloud
         self._ids = itertools.count(1)
         self._reset_state()
 
@@ -64,6 +66,9 @@ class Live:
         self.last_visit: Optional[str] = None
         self.summary: Optional[str] = None
         self.eyes_override: Optional[str] = None
+        self.awake_state: dict = {"eyes_open": None, "open_ratio": None, "awake": None}   # main.py, from awake.py
+        self.memory_view: Optional[dict] = None   # the agent publishes what it learned (panel)
+        self.quiet_until: Optional[str] = None
 
     # ----- camera loop ----------------------------------------------------
     def frame(self, now: float, spot: Optional[str], events=(), face: bool = True, confidence: float = 0.0,
@@ -77,7 +82,8 @@ class Live:
                 return []
             out = list(self.sm.tick(now, busy=self.machine.busy))
             self.chosen = None                    # label chosen this frame (operator feedback)
-            for action in self.machine.step(now, spot, events, face, self.sm.active_spots()):
+            holding = bool(self.brow.get("up"))   # a raise in progress: wait for it to come down
+            for action in self.machine.step(now, spot, events, face, self.sm.active_spots(), holding=holding):
                 if action[0] == "call_nurse":
                     out += self.sm.call_nurse(now)
                 elif action[0] == "select":
@@ -87,6 +93,11 @@ class Live:
             self.room.tick(now)
             for ev in out:
                 self._handle(ev, now)
+            if self.announcer is not None:
+                try:
+                    self.announcer.update(self.sm.view(now), self.machine.view(), self.chosen, out, now=now)
+                except Exception as e:   # noqa: BLE001 - the voice must never stop the camera loop
+                    log_event("voice_error", error=repr(e))
         for ev in out:
             self._notify(ev)
         return out
@@ -153,7 +164,8 @@ class Live:
         return {"v": 1, **v, "focus": None if self.calibration else self.machine.view(),
                 "clock": {"time": clock.hhmm(), "demo": clock.demo},
                 "room": {k: r[k] for k in ("temp_c", "setpoint_c", "lamp_on", "fan_on")},
-                "face": self.face,
+                "face": self.face, "ask_s": config.ASK_TIMEOUT_S,
+                "voice": self.voice_out.recent() if self.voice_out is not None else [],
                 "brow": {"up": bool(self.brow.get("up")), "held_s": round(float(self.brow.get("held_s", 0.0)), 2),
                          "long_s": config.EMERGENCY_S}}
 
@@ -173,11 +185,12 @@ class Live:
         fan = r["fan"]
         return {"v": 1, "clock": {"time": clock.hhmm(), "day": clock.now().strftime("%a %b %d"), "demo": clock.demo},
                 "perception": {"temp_c": r["temp_c"], "setpoint_c": r["setpoint_c"], "lamp_on": r["lamp_on"],
-                               "fan_on": r["fan_on"], "eyes_open": None, "awake": None, "open_ratio": None,
+                               "fan_on": r["fan_on"], "eyes_open": self.awake_state.get("eyes_open"),
+                               "awake": self.awake_state.get("awake"), "open_ratio": self.awake_state.get("open_ratio"),
                                "face": self.face, "last_visit": self.last_visit, "screen": self.sm.kind,
-                               "quiet_until": None},
-                "memory": {"facts": self.facts, "routines": [], "top_options": [], "hidden_options": [],
-                           "night_checkins": True},
+                               "quiet_until": self.quiet_until},
+                "memory": self.memory_view or {"facts": self.facts, "routines": [], "top_options": [],
+                                               "hidden_options": [], "night_checkins": True},
                 "feed": self.feed[-30:],
                 "status": {"camera": self.camera_ok, "lamp": r["lamp"]["online"],
                            "fan": "simulated" if fan["simulated"] else fan["online"],

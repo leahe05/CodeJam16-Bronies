@@ -5,7 +5,7 @@ from lookat.fake_api import SCREENS, Fake
 from lookat.server import public as _public, safe as _safe
 
 SCREEN_KEYS = {"v", "screen", "badge", "title", "subtitle", "icon", "left", "middle", "right", "footer",
-               "page", "show_call_nurse", "focus", "overlay", "clock", "room", "face", "brow"}
+               "page", "show_call_nurse", "focus", "overlay", "clock", "room", "face", "brow", "ask_s", "voice"}
 SCREEN_IDS = {"idle", "suggestion", "checkin", "assistant", "room", "lights", "temperature", "nurse"}
 
 
