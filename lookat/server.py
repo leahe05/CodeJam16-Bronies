@@ -57,6 +57,7 @@ def make_app(backend, title: str = "LookAt", web_dir: str = WEB_DIR):
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import FileResponse, HTMLResponse
     from fastapi.staticfiles import StaticFiles
+    from starlette.concurrency import run_in_threadpool
 
     app = FastAPI(title=title)
     # Lea may develop with her own dev server (another port) calling this API.
@@ -102,12 +103,14 @@ def make_app(backend, title: str = "LookAt", web_dir: str = WEB_DIR):
     @app.post("/api/nurse/{path:path}")
     async def api_nurse_post(path: str, request: Request):
         body = await _json(request)
-        return public(safe(lambda: backend.nurse_action(path, body)))
+        # in a worker thread: "suggest" and "summary" may wait on the AI for seconds, and the
+        # patient screen's polls must keep being answered meanwhile
+        return public(await run_in_threadpool(safe, lambda: backend.nurse_action(path, body)))
 
     @app.post("/api/demo")
     async def api_demo(request: Request):
         body = await _json(request)
-        return public(safe(lambda: backend.demo_action(body)))
+        return public(await run_in_threadpool(safe, lambda: backend.demo_action(body)))
 
     return app
 

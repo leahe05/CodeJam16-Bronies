@@ -171,7 +171,9 @@
     const bt = ensure("browtag", `${icon("brows")}<span class="bt-t"></span><i class="bt-bar"><i></i></i>`);
     const held = +b.held_s || 0, long = +b.long_s || 2;
     bt.classList.toggle("show", !!b.up && !(d.overlay && d.overlay.kind === "call_nurse"));
-    bt.querySelector(".bt-t").textContent = held >= long * 0.5 ? "Keep raised to call nurse" : "Eyebrows up";
+    // past half the long raise: say what is about to happen and how to stop it (never "keep holding")
+    bt.querySelector(".bt-t").textContent = held >= long * 0.5
+      ? `Nurse in ${Math.max(0, long - held).toFixed(1)} s – lower to cancel` : "Eyebrows up";
     bt.querySelector(".bt-bar i").style.width = (b.up ? Math.min(100, (held / long) * 100) : 0) + "%";
 
     const demo = ensure("demotag");
