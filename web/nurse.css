@@ -83,6 +83,8 @@ p, li { line-height: 1.5; overflow-wrap: anywhere; }
 .alert-card[data-priority="urgent"] .priority-label { background: #f4d4d9; color: #7a1f2b; }
 .alert-card[data-priority="soon"] { background: #fff7e6; border-left-color: #a16a15; }
 .alert-card[data-priority="soon"] .priority-label { background: #f5e1b7; color: #65440f; }
+.alert-card[data-priority="unrated"] .priority-label { background: #e8edf3; color: #465b70; }
+.request-recommendation { font-weight: 650; }
 .supervisor { border-top: 4px solid var(--blue); }
 .proposal-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr)); gap: .75rem; margin-top: .9rem; }
 .proposal { display: flex; flex-direction: column; }

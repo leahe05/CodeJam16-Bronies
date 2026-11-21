@@ -5,6 +5,7 @@ import math
 import threading
 import time
 from collections import deque
+from queue import Empty, Queue
 
 
 CHECK_IN_PROMPT = (
@@ -12,11 +13,12 @@ CHECK_IN_PROMPT = (
     "Include the patient's current status and relevant preferences."
 )
 DEFAULT_INTERVAL_S = 30.0
+PRIORITY_RANKS = {"urgent": 2, "soon": 1, "routine": 0, "unrated": -1}
 log = logging.getLogger(__name__)
 
 
 class NurseSupervisor:
-    def __init__(self, interval_s=DEFAULT_INTERVAL_S):
+    def __init__(self, interval_s=DEFAULT_INTERVAL_S, *, decide=None):
         if not math.isfinite(interval_s) or interval_s <= 0:
             raise ValueError("Check-in interval must be positive and finite.")
         self.interval_s = interval_s
@@ -28,6 +30,8 @@ class NurseSupervisor:
         self._generation = {}
         self._ids = itertools.count(1)
         self._lock = threading.Lock()
+        self._decide = decide
+        self._review_tasks = Queue()
 
     def register(self, patient_id, check_in):
         with self._lock:
@@ -107,8 +111,68 @@ class NurseSupervisor:
                 self._store_profile(patient_id, profile)
             return self._receive_request(patient_id, request, **details)
 
+    @property
+    def ai_enabled(self):
+        return self._decide is not None
+
+    def review_request(self, patient_id, request, *, at, profile, confirmed=False, request_id=None,
+                       reason=None, time_sensitive=False):
+        self.publish_profile(patient_id, profile)
+        with self._lock:
+            alert_id, created = self._receive_request(patient_id, request, at=at, request_id=request_id,
+                                                      reason=reason, review=True)
+            if created and self.ai_enabled:
+                report = " ".join(part for part in (
+                    request, reason, "The patient agent reports that this is time-sensitive." if time_sensitive else None,
+                ) if part)
+                self._review_tasks.put((patient_id, alert_id, report, profile, confirmed))
+            return alert_id, created
+
+    def run_reviews(self, stop):
+        while not stop.is_set():
+            try:
+                job = self._review_tasks.get(timeout=.2)
+            except Empty:
+                continue
+            patient_id, alert_id, request, profile, confirmed = job
+            try:
+                decision = self._decide(request, profile, confirmed)
+            except Exception:
+                log.warning("AI review unavailable for nurse request %s", alert_id)
+                decision = None
+            self._apply_review(patient_id, alert_id, request, profile, decision)
+
+    def _apply_review(self, patient_id, alert_id, request, profile, decision):
+        with self._lock:
+            alert = next((item for item in self._requests[patient_id] if item["id"] == alert_id), None)
+            if alert is None or alert["done"]:
+                return
+            if decision is None:
+                alert["review"] = "needs_review"
+                return
+            level = decision["priority"]
+            alert["priority"] = {**alert["priority"], "level": level, "rank": PRIORITY_RANKS[level]}
+            alert["urgency"] = "urgent" if level == "urgent" else "normal"
+            alert["ai_rationale"] = decision["rationale"]
+            alert["recommendation"] = decision["recommendation"]
+            alert["review"] = "question_queued" if decision["action"] == "ask" else "ai_reviewed"
+            if decision["action"] == "ask":
+                question_id = f"{alert_id}-question"
+                self._questions[patient_id][question_id] = {
+                    "id": question_id, "evidence": request, "preference": " · ".join(profile.get("preferences", [])),
+                    "steps": decision["steps"], "source": "ai", "origin_alert": alert_id,
+                }
+
+    def update_question_request(self, patient_id, alert_id, state):
+        with self._lock:
+            alert = next((item for item in self._requests[patient_id] if item["id"] == alert_id), None)
+            if alert and not alert["done"]:
+                alert["review"] = state
+                if state == "clarified":
+                    alert["done"] = True
+
     def _receive_request(self, patient_id, request, *, at, reason=None, urgent=False, time_sensitive=False,
-                         request_id=None, kind="page", delivery="proactive"):
+                         request_id=None, kind="page", delivery="proactive", review=False):
         requests = self._requests[patient_id]
         if request_id is not None:
             previous = next((item for item in requests if item["_request_id"] == request_id), None)
@@ -116,19 +180,24 @@ class NurseSupervisor:
                 return previous["id"], False
         order = next(self._ids)
         alert_id = f"agent-{order}"
-        if kind == "call" or urgent:
-            priority, rank = "urgent", 2
+        if review:
+            priority = "unrated"
+        elif kind == "call" or urgent:
+            priority = "urgent"
         elif time_sensitive:
-            priority, rank = "soon", 1
+            priority = "soon"
         else:
-            priority, rank = "routine", 0
-        requests.appendleft({
+            priority = "routine"
+        alert = {
             "id": alert_id, "_request_id": request_id, "time": at, "kind": kind,
             "urgency": "urgent" if priority == "urgent" else "normal", "source": "patient",
-            "priority": {"level": priority, "rank": rank, "order": order},
+            "priority": {"level": priority, "rank": PRIORITY_RANKS[priority], "order": order},
             "request": None if kind == "call" else request, "text": request, "reason": reason,
             "delivery": delivery, "done": False, "actions": [{"id": "ack", "label": "On my way"}],
-        })
+        }
+        if review:
+            alert["review"] = "analyzing" if self.ai_enabled else "needs_review"
+        requests.appendleft(alert)
         return alert_id, True
 
     def alerts(self, patient_id):

@@ -1,8 +1,12 @@
+import random
 import threading
+import time
+
+import pytest
 
 from lookat import nurse_ai
 from lookat.nurse_patient_profile import CARE_CHOICES
-from lookat.nurse_shift import SHIFT_UPDATES, ShiftPlayback, ShiftUpdate
+from lookat.nurse_shift import ShiftPlayback
 from lookat.nurse_supervisor import CHECK_IN_PROMPT, NurseSupervisor
 from lookat.supervisor_demo import make_demo_patients
 
@@ -137,54 +141,94 @@ def test_patient_agent_can_push_and_retry_with_its_own_identity():
     assert morgan.nurse_json()["alerts"][0]["done"]
 
 
-def test_shift_streams_route_requests_and_keep_patient_specific_questions_queued():
-    playback = ShiftPlayback()
-    avery, morgan = make_demo_patients(playback=playback)
-    patients = {"avery": avery, "morgan": morgan}
-    assert not avery.proposal() and not morgan.proposal()
-
-    for event in SHIFT_UPDATES:
-        patients[event.patient].receive_shift_update(event)
-
-    assert "water" in avery.nurse_json()["alerts"][0]["request"]
-    water_id = avery.nurse_json()["alerts"][0]["id"]
-    assert avery.nurse_action("alert", {"id": water_id, "action": "ack"})["ok"]
-    assert avery.nurse_json()["shift"]["feed"][1]["response"] == "Nurse acknowledged · On my way"
-    proactive = morgan.nurse_json()["alerts"]
-    assert [alert["priority"]["level"] for alert in proactive] == ["urgent", "routine"]
-    assert "massage" in proactive[1]["request"]
-    assert not avery.proposal() and not morgan.proposal()
-    assert "Waiting" in avery.nurse_json()["shift"]["feed"][2]["response"]
-
-    avery.supervisor.check_patients()
-    assert {alert["delivery"] for alert in morgan.nurse_json()["alerts"]} == {"check-in", "proactive"}
-    assert [alert["priority"]["level"] for alert in morgan.nurse_json()["alerts"]] == ["urgent", "soon", "routine"]
-    morgan_requests = [alert["request"] for alert in morgan.nurse_json()["alerts"]]
-    assert any("brief" in request for request in morgan_requests)
-    assert any("sitting upright" in request for request in morgan_requests)
-    assert avery.proposal()["evidence"] == morgan.proposal()["evidence"]
-    assert "window" in avery.proposal()["steps"][0]["question"]
-    assert "fan" in morgan.proposal()["steps"][0]["question"]
-    assert avery.nurse_json()["shift"]["queued_questions"] == 2
-    draft = avery.proposal()
-    assert avery.nurse_action("proposal/dismiss", {"id": draft["id"]})["ok"]
-    assert "sitting upright" in avery.proposal()["steps"][0]["question"]
-    assert all("massage" not in entry["status"] for entry in avery.nurse_json()["shift"]["feed"])
+def eventually(predicate):
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        if predicate():
+            return
+        time.sleep(.01)
+    assert predicate()
 
 
-def test_shift_starts_on_request_and_completes_after_both_feeds():
-    playback = ShiftPlayback((ShiftUpdate(0, "avery", "Avery update"),
-                              ShiftUpdate(0, "morgan", "Morgan update")))
+def test_independent_random_streams_start_and_stop_without_needing_a_key(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    playback = ShiftPlayback(.005, .02, seed=7)
     avery, morgan = make_demo_patients(playback=playback)
     assert avery.nurse_json()["shift"]["state"] == "ready"
     assert "Penguin Cam" in avery.nurse_json()["shift"]["camera"]["name"]
     assert "Elephant Cam" in morgan.nurse_json()["shift"]["camera"]["name"]
-    assert avery.nurse_action("shift/start", {})["ok"]
-    assert morgan.nurse_json()["shift"]["state"] == "running"
-    playback.run(threading.Event(), {"avery": avery, "morgan": morgan})
+    stop = threading.Event()
+    worker = threading.Thread(target=playback.run, args=(stop, {"avery": avery, "morgan": morgan}))
+    worker.start()
+    try:
+        assert not avery.nurse_json()["alerts"] and not morgan.nurse_json()["alerts"]
+        assert avery.nurse_action("shift/start", {})["ok"]
+        eventually(lambda: all(len(patient.nurse_json()["alerts"]) >= 2 for patient in (avery, morgan)))
+        assert avery.nurse_action("shift/end", {})["ok"]
+    finally:
+        stop.set()
+        worker.join(2)
+    assert not worker.is_alive()
     assert avery.nurse_json()["shift"]["state"] == "complete"
-    assert [entry["status"] for entry in avery.nurse_json()["shift"]["feed"]] == ["Avery update"]
-    assert [entry["status"] for entry in morgan.nurse_json()["shift"]["feed"]] == ["Morgan update"]
+    for patient in (avery, morgan):
+        assert len({alert["request"] for alert in patient.nurse_json()["alerts"]}) >= 2
+        assert all(alert["review"] == "needs_review" and alert["priority"]["level"] == "unrated"
+                   for alert in patient.nurse_json()["alerts"])
+        assert not patient.proposal()
+
+
+def test_supervisor_uses_ai_priority_and_queues_clarification_for_approval():
+    def decide(request, profile, confirmed):
+        if "undecided" in request:
+            assert "window closed" in " ".join(profile["preferences"])
+            assert not confirmed
+            return {"priority": "soon", "action": "ask", "rationale": "The patient requested a comfort change.",
+                    "recommendation": "Check whether they would like the fan.",
+                    "steps": [{"question": "Would a fan on low help?", "request": "Patient requests a fan on low."}]}
+        return {"priority": "urgent", "action": "notify", "rationale": "The patient said they need help now.",
+                "recommendation": "Notify the nurse to review the request.", "steps": []}
+
+    avery, morgan = make_demo_patients(playback=ShiftPlayback(), decide=decide)
+    stop = threading.Event()
+    worker = threading.Thread(target=avery.supervisor.run_reviews, args=(stop,))
+    worker.start()
+    try:
+        assert avery.nurse_action("patient/request", {"request": "Patient asks for help now."})["ok"]
+        assert morgan.nurse_action("patient/request", {"request": "Patient is undecided about room comfort."})["ok"]
+        eventually(lambda: avery.nurse_json()["alerts"][0]["review"] == "ai_reviewed")
+        eventually(morgan.proposal)
+        assert avery.nurse_json()["alerts"][0]["priority"]["level"] == "urgent"
+        assert morgan.nurse_json()["alerts"][0]["priority"]["level"] == "soon"
+        assert "fan" in morgan.nurse_json()["alerts"][0]["recommendation"]
+        proposal = morgan.proposal()
+        assert not avery.proposal()
+        assert morgan.screen_json()["screen"] == "idle"
+        assert morgan.nurse_action("proposal/approve", {"id": proposal["id"], "source": "ai"})["ok"]
+        assert morgan.screen_json()["title"] == "Would a fan on low help?"
+        assert choose(morgan, "left")["ok"]
+        assert any(alert["review"] == "clarified" and alert["done"] for alert in morgan.nurse_json()["alerts"])
+    finally:
+        stop.set()
+        worker.join(2)
+
+
+def test_invalid_claude_decision_is_rejected_and_calls_still_bypass_review(monkeypatch):
+    monkeypatch.setattr(nurse_ai, "_request_json", lambda *args: {"priority": "whenever"})
+    with pytest.raises(ValueError):
+        nurse_ai.decide_request("Water", {})
+    avery, _ = make_demo_patients(playback=ShiftPlayback(), decide=nurse_ai.decide_request)
+    stop = threading.Event()
+    worker = threading.Thread(target=avery.supervisor.run_reviews, args=(stop,))
+    worker.start()
+    try:
+        avery.nurse_action("patient/request", {"request": "Water"})
+        eventually(lambda: avery.nurse_json()["alerts"][0]["review"] == "needs_review")
+        avery.demo_action({"action": "call_nurse"})
+        assert avery.nurse_json()["alerts"][0]["priority"]["level"] == "urgent"
+        assert avery.nurse_json()["alerts"][1]["priority"]["level"] == "unrated"
+    finally:
+        stop.set()
+        worker.join(2)
 
 
 def test_supervisor_ranks_requests_with_fifo_within_priority_and_preserves_legacy_calls():
@@ -208,11 +252,11 @@ def test_patient_agents_supply_distinct_profiles_and_publish_live_updates():
     assert original["vitals"]["current"] != other["vitals"]["current"]
     assert original["habits"] != other["habits"]
     assert original["camera"]["url"] != other["camera"]["url"]
-    avery.receive_shift_update(ShiftUpdate(4, "avery", "Requested water", "proactive", "Bring water", temperature=24))
+    avery.emit_random_request(random.Random(6))
     latest = avery.supervisor.latest_profile("avery")
     assert latest == avery.nurse_json()["profile"]
-    assert latest["room"]["temp_c"] == 24
-    assert latest["status"] == "Requested water"
+    assert latest["room"]["temp_c"] != original["room"]["temp_c"]
+    assert latest["status"] == avery.nurse_json()["alerts"][0]["request"]
     assert len(latest["vitals"]["samples"]) == 4
     assert morgan.nurse_json()["profile"] == other
 

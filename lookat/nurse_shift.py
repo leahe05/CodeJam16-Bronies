@@ -1,5 +1,6 @@
-"""Scripted patient-agent signals for the standalone nurse shift demo."""
-from dataclasses import dataclass
+"""Independent, random patient-agent arrivals for the nurse shift demo."""
+import math
+import random
 from threading import Event
 import time
 
@@ -12,48 +13,13 @@ SHIFT_CAMERAS = {
 }
 
 
-@dataclass(frozen=True)
-class ShiftUpdate:
-    seconds: int
-    patient: str
-    status: str
-    delivery: str = "status"
-    request: str = ""
-    choices: tuple = ()
-    temperature: int | None = None
-    urgent: bool = False
-    time_sensitive: bool = False
-
-
-SHIFT_UPDATES = (
-    ShiftUpdate(0, "avery", "Awake and settled in bed. Prefers fresh air and help sitting upright for drinks."),
-    ShiftUpdate(0, "morgan", "Awake and resting. Prefers a closed window, quiet, and help with personal care."),
-    ShiftUpdate(5, "avery", "Confirmed they would like water.", "proactive",
-                "Please bring Avery a glass of water."),
-    ShiftUpdate(12, "morgan", "Asked for help with a brief change soon and requested privacy.", "scheduled",
-                "Morgan would like help changing their brief in private.", time_sensitive=True),
-    ShiftUpdate(22, "avery", "Awake later than usual. Room feels warm at 24 °C.", "question",
-                temperature=24),
-    ShiftUpdate(22, "morgan", "Awake later than usual. Room feels warm at 24 °C.", "question",
-                temperature=24),
-    ShiftUpdate(29, "avery", "Asked for help cleaning up after a spill.", "proactive",
-                "Avery would like help cleaning their hands and the bedside table."),
-    ShiftUpdate(36, "avery", "Indicated they would like to sit up.", "question",
-                choices=("sit_up", "pillow")),
-    ShiftUpdate(46, "morgan", "Asked for a gentle hand massage if the nurse is available.", "proactive",
-                "Morgan requested a gentle hand massage."),
-    ShiftUpdate(50, "morgan", "Wants a snack and prefers the blinds closed while resting.", "question",
-                choices=("food", "close_blinds")),
-    ShiftUpdate(56, "morgan", "Asked for a nurse right away to help sit upright in bed.", "proactive",
-                "Morgan requests immediate help sitting upright in bed.", urgent=True),
-    ShiftUpdate(66, "avery", "No additional request at the end of the shift simulation."),
-    ShiftUpdate(66, "morgan", "No additional request at the end of the shift simulation."),
-)
-
-
 class ShiftPlayback:
-    def __init__(self, updates=SHIFT_UPDATES):
-        self.updates = updates
+    def __init__(self, minimum_s=4.0, maximum_s=12.0, *, seed=None):
+        if not (math.isfinite(minimum_s) and math.isfinite(maximum_s) and 0 < minimum_s < maximum_s):
+            raise ValueError("Request intervals must satisfy 0 < minimum < maximum.")
+        self.minimum_s = minimum_s
+        self.maximum_s = maximum_s
+        self.random = random.Random(seed)
         self.started = Event()
         self.finished = Event()
 
@@ -64,13 +30,23 @@ class ShiftPlayback:
     def start(self):
         self.started.set()
 
+    def finish(self):
+        self.finished.set()
+
     def run(self, stop, patients):
         while not self.started.wait(.1):
             if stop.is_set():
                 return
-        started_at = time.monotonic()
-        for update in self.updates:
-            if stop.wait(max(0, started_at + update.seconds - time.monotonic())):
+        clocks = {patient: random.Random(self.random.getrandbits(64)) for patient in patients}
+        due = {patient: time.monotonic() + rng.uniform(self.minimum_s, self.maximum_s)
+               for patient, rng in clocks.items()}
+        while not self.finished.is_set():
+            patient = min(due, key=due.get)
+            remaining = max(0, due[patient] - time.monotonic())
+            if stop.wait(min(remaining, .2)):
                 return
-            patients[update.patient].receive_shift_update(update)
-        self.finished.set()
+            if time.monotonic() < due[patient] or self.finished.is_set():
+                continue
+            rng = clocks[patient]
+            patients[patient].emit_random_request(rng)
+            due[patient] = time.monotonic() + rng.uniform(self.minimum_s, self.maximum_s)

@@ -5,7 +5,7 @@ const savedAgentsKey = "lookat.nurse.agents";
 const $ = id => document.getElementById(id);
 const list = value => Array.isArray(value) ? value.filter(item => item != null) : [];
 const priorityLevels = { urgent: { label: "Urgent", rank: 2 }, soon: { label: "Soon", rank: 1 },
-  routine: { label: "Routine", rank: 0 } };
+  routine: { label: "Routine", rank: 0 }, unrated: { label: "Unranked", rank: -1 } };
 const priorityLevel = alert => {
   if (alert.kind === "call" || alert.urgency === "urgent") return "urgent";
   return Object.hasOwn(priorityLevels, alert.priority?.level) ? alert.priority.level : "routine";
@@ -113,7 +113,7 @@ function notify(text) {
 
 function flashUrgentAlerts(agent, data) {
   const pending = list(data.alerts).filter(alert => !alert.done);
-  const keyFor = alert => JSON.stringify([alert.id, alert.time, alert.text]);
+  const keyFor = alert => JSON.stringify([alert.id, alert.time, alert.text, urgent(alert)]);
   const incoming = pending.filter(alert => !agent.pendingAlerts.has(keyFor(alert)));
   agent.pendingAlerts = new Set(pending.map(keyFor));
   if (!incoming.length) return;
@@ -296,6 +296,16 @@ function alertCard({ agent, alert }, handled) {
   card.append(meta, element("h3", "", alert.request || alert.text || "Patient alert"));
   if (!alert.request && alert.kind === "call") card.append(element("p", "muted", "Patient did not specify what they need."));
   if (alert.reason) card.append(element("p", "muted", alert.reason));
+  if (alert.recommendation) card.append(element("p", "request-recommendation", alert.recommendation));
+  if (alert.ai_rationale) card.append(element("p", "muted", "Claude: " + alert.ai_rationale));
+  const review = {
+    analyzing: "Claude is reviewing",
+    needs_review: "Nurse review needed",
+    question_queued: "Suggested question awaiting approval",
+    waiting_answer: "Waiting for the patient’s answer",
+    clarified: "Patient clarified the request",
+  }[alert.review];
+  if (review) card.append(element("p", "muted", review));
   const actions = handled ? [] : list(alert.actions).filter(action => action.id);
   if (actions.length && alert.id != null) {
     const row = element("div", "alert-actions");
@@ -362,6 +372,10 @@ function renderShift(roster) {
   }[state]);
   $("start-shift").hidden = state !== "ready";
   $("start-shift").disabled = first.busy || first.state !== "online";
+  $("end-shift").hidden = state !== "running";
+  $("end-shift").disabled = first.busy || first.state !== "online";
+  updateText($("shift-ai-status"), first.data.shift.ai_enabled ?
+    "Claude reviews incoming requests" : "Claude is not configured. Requests go to the nurse for review.");
   updateRegion($("shift-feeds"), patients.map(agent => [
     agentName(agent), agent.data.patient.room, agent.data.shift.camera, agent.data.shift.feed
   ]),
@@ -797,6 +811,13 @@ $("start-shift").addEventListener("click", () => {
   const agent = [...agents.values()].find(item => item.data?.shift);
   if (agent) act(agent, "/shift/start", {}, "Shift started.", () => {
     agent.data.shift.state = "running";
+  });
+});
+
+$("end-shift").addEventListener("click", () => {
+  const agent = [...agents.values()].find(item => item.data?.shift);
+  if (agent) act(agent, "/shift/end", {}, "Shift ended.", () => {
+    agent.data.shift.state = "complete";
   });
 });
 
