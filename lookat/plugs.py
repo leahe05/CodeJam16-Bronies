@@ -80,10 +80,14 @@ class PlugWorker:
     async def _connect(self) -> bool:
         from kasa import Discover
         self._next_try = time.monotonic() + RETRY_S
+        user, password = os.environ.get("KASA_USER"), os.environ.get("KASA_PASSWORD")
+        if not (user and password) and not self._warned:
+            print(f"PLUG {self.name}: KASA_USER / KASA_PASSWORD are not set in THIS window. "
+                  "Save them with setx, then open a NEW PowerShell window.")
+        dev = None
         try:
-            dev = await Discover.discover_single(
-                self.ip, discovery_timeout=TIMEOUT_S, timeout=TIMEOUT_S,
-                username=os.environ.get("KASA_USER"), password=os.environ.get("KASA_PASSWORD"))
+            dev = await Discover.discover_single(self.ip, discovery_timeout=TIMEOUT_S, timeout=TIMEOUT_S,
+                                                 username=user, password=password)
             if dev is None:
                 raise ConnectionError("no answer")
             await dev.update()
@@ -95,6 +99,11 @@ class PlugWorker:
             print(f"PLUG {self.name} online at {self.ip} ({'ON' if self.is_on else 'OFF'})")
             return True
         except Exception as e:   # noqa: BLE001 - any failure means offline, never crash
+            if dev is not None:      # close its web session (else "Unclosed client session")
+                try:
+                    await dev.disconnect()
+                except Exception:   # noqa: BLE001
+                    pass
             self._offline(e)
             return False
 
@@ -122,6 +131,10 @@ class PlugWorker:
             self._set(bool(self._dev.is_on))
             log_event("plug", name=self.name, cmd=cmd, on=self.is_on, ms=self.last_ms)
         except Exception as e:   # noqa: BLE001
+            try:
+                await self._dev.disconnect()
+            except Exception:   # noqa: BLE001
+                pass
             self._dev = None
             self._offline(e)
 
@@ -144,7 +157,10 @@ class PlugWorker:
     def _offline(self, err: Exception) -> None:
         self.online = False
         if not self._warned:
-            print(f"PLUG {self.name} OFFLINE at {self.ip} ({type(err).__name__}) - run the network check (PLAN.md R1)")
+            hint = ("wrong or missing Kasa login: KASA_USER must be the account that owns the plug; "
+                    "open a NEW PowerShell window after setx" if "Authentication" in type(err).__name__
+                    else "run the network check (PLAN.md R1): laptop on the right Wi-Fi? plug powered?")
+            print(f"PLUG {self.name} OFFLINE at {self.ip} ({type(err).__name__}) - {hint}")
             log_event("plug_offline", name=self.name, ip=self.ip, error=type(err).__name__)
             self._warned = True
 
