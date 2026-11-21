@@ -49,8 +49,11 @@ async function poll() {
     if (d.page) foot += `  (page ${d.page.index + 1} of ${d.page.count})`;
     if (d.face === false) foot = "Move into view of the camera. " + foot;
     text($("foot"), foot);
-    $("overlay").style.display = d.overlay ? "flex" : "none";
-    text($("overlay"), d.overlay && d.overlay.text);
+    const ov = $("overlay"), o = d.overlay;
+    ov.style.display = o ? "flex" : "none";
+    ov.style.background = o && o.kind === "calibrate" ? "#0b1d3f" : "rgba(200, 60, 30, .9)";
+    ov.style.justifyContent = o && o.spot === "left" ? "flex-start" : o && o.spot === "right" ? "flex-end" : "center";
+    text(ov, o && (o.kind === "calibrate" && o.spot ? "● " + o.text + " ●" : o.text));
   } catch (e) {
     text($("title"), "Can't reach the LookAt program");
   }

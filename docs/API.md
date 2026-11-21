@@ -55,7 +55,7 @@ Rules for both sides:
 | `page` | `{"index": 0, "count": 2}` when answers are paged 2 at a time (draw page dots), or null |
 | `show_call_nurse` | draw the bottom "Call Nurse • Long eyebrow raise anywhere" banner (false in nurse mode) |
 | `focus` | where the patient is looking: `state` = `"dwell"` (looking, soft glow), `"asking"` (locked, bright fill + "Raise your eyebrows"), `"chosen"` (flash, ~0.5 s). null = nothing |
-| `overlay` | `{"kind": "call_nurse", "text": "Your nurse has been called"}` for ~6 s after a long raise (full-screen red-orange glow), otherwise null |
+| `overlay` | `{"kind": "call_nurse", "text": "Your nurse has been called"}` for ~6 s after a long raise (full-screen red-orange glow). `{"kind": "calibrate", "text": "Look at the LEFT edge of the screen", "spot": "left"}` during calibration: full screen, show the text and a big glowing dot at that edge (`spot` "left"/"middle"/"right", or null = just the text, e.g. "Raise your eyebrows"). Otherwise null |
 | `clock` | current (demo) time; `demo` true = show a small "DEMO TIME" tag |
 | `room` | live room state (for "Lamp is ON", "Room is 24.5 °C") |
 | `face` | false = no face in view: show a subtle "Move into view of the camera" hint |

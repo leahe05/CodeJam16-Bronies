@@ -24,7 +24,8 @@ VOTE_FRAMES = 10
 MIN_CONF = 0.7
 CALIB_FRAMES = 90
 SETTLE_S = 2.0
-SPOKEN_NAMES = {"left": "the YES card", "middle": "the lamp", "right": "the NO card"}
+SPOKEN_NAMES = {"left": "the LEFT edge of the screen", "middle": "the CENTER of the screen",
+                "right": "the RIGHT edge of the screen"}
 
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CALIB_DIR = os.path.join(_REPO, "calib")
