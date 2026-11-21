@@ -1,5 +1,6 @@
 """Two simulated patient agents reporting to one nurse supervisor."""
 import argparse
+from collections import deque
 import socket
 import threading
 import time
@@ -7,6 +8,7 @@ import time
 from lookat import nurse_ai
 from lookat.fake_api import Fake, opt, screen
 from lookat.nurse_link import NurseLink
+from lookat.nurse_patient_profile import CARE_CHOICES, MEASUREMENTS, PATIENT_CONTEXT
 from lookat.nurse_shift import SHIFT_CAMERAS, ShiftPlayback
 from lookat.nurse_supervisor import DEFAULT_INTERVAL_S, NurseSupervisor
 from lookat.server import make_app
@@ -24,16 +26,6 @@ class SimulatedPatient(Fake):
         ("22:24:25", "Patient", "Chose", "Yes"),
         ("22:24:26", "Patient agent", "Replied", "I’ll let your nurse know you’re warm."),
     )
-    questions = {
-        "window": ("Would opening the window a little help you sleep?",
-                   "Patient requests opening the window a little."),
-        "fan": ("Would a fan on low help you sleep?", "Patient requests a fan on low."),
-        "lighter_blanket": ("Would you like a lighter blanket?", "Patient requests a lighter blanket."),
-        "remove_blanket": ("Would you like to remove a blanket?", "Patient requests removing a blanket."),
-        "sit_up": ("Would you like help sitting upright?", "Patient requests help sitting upright."),
-        "pillow": ("Would you like your pillows adjusted instead?", "Patient requests a pillow adjustment."),
-    }
-
     def suggest_question(self, report):
         late = (minutes(report["time"]) - minutes(report["usual_bedtime"])) % (24 * 60)
         warmer = round(report["temp_c"] - report["usual_temp_c"], 1)
@@ -51,7 +43,8 @@ class SimulatedPatient(Fake):
         }
 
     def question_steps(self, wants):
-        return [{"question": self.questions[want][0], "request": self.questions[want][1]} for want in wants]
+        return [{"question": question, "request": request} for _, question, request in
+                (CARE_CHOICES[want] for want in wants)]
 
     def __init__(self, supervisor, patient_id, name, room, preference, common_wants):
         self.supervisor = supervisor
@@ -60,6 +53,7 @@ class SimulatedPatient(Fake):
         self.companion_port = None
         self.preference = preference
         self.common_wants = common_wants
+        self.context = PATIENT_CONTEXT[patient_id]
         super().__init__(still="idle")
         self.nurse_link = NurseLink(None, demo_awareness="awake")
         self._reset_state()
@@ -83,6 +77,10 @@ class SimulatedPatient(Fake):
         self.approved_steps = []
         self.last_suggestion = None
         self.interaction_start = time.monotonic()
+        self.patient_status = "Resting in bed"
+        self.vital_samples = deque(maxlen=6)
+        for at, values in zip(("22:20:00", "22:25:00", "22:29:00"), self.context["vitals"]):
+            self.vital_samples.append({"time": at, **dict(zip(MEASUREMENTS, values))})
         for at, actor, action, text in self.initial_history:
             self.nurse_link.record_interaction(actor, action, text, at=at)
 
@@ -108,6 +106,28 @@ class SimulatedPatient(Fake):
             "common_wants": self.common_wants,
         }
 
+    def patient_profile(self):
+        bedside = self.nurse_link.snapshot(time.monotonic())
+        meal = self.context["last_meal"]
+        minutes_since = meal["minutes_before_start"] + int((time.monotonic() - self.interaction_start) // 60)
+        return {
+            "patient": {"id": self.patient_id, "name": self.patient, "room": self.room_name},
+            "_observed_at": time.monotonic(),
+            "reported_at": self.interaction_time(),
+            "status": self.patient_status,
+            "posture": "In bed",
+            "awareness": bedside["awareness"],
+            "visitors_present": bedside["visitors_present"],
+            "room": {**self.room(), "window": self.context["window"], "blinds": self.context["blinds"]},
+            "vitals": {"source": "simulated", "current": self.vital_samples[-1],
+                       "samples": list(self.vital_samples)},
+            "last_meal": {"name": meal["name"], "time": meal["time"], "minutes_since": minutes_since},
+            "camera": SHIFT_CAMERAS[self.patient_id],
+            "preferences": [fact["text"] for fact in self.facts],
+            "habits": list(self.context["habits"]),
+            "care_choices": [{"id": key, "label": choice[0]} for key, choice in CARE_CHOICES.items()],
+        }
+
     def check_in(self, prompt):
         """Answer the supervisor from this patient's own status and preferences."""
         with self.lock:
@@ -123,11 +143,16 @@ class SimulatedPatient(Fake):
                 "time": self.interaction_time(),
                 "status": report,
                 "preferences": list(self.facts),
+                "profile": self.patient_profile(),
                 "question": question,
                 "attention": None,
             }
 
     def proposal(self):
+        queued = self.supervisor.pending_questions(self.patient_id)
+        if queued:
+            first = queued[0]
+            return self.refined_proposal if (self.refined_proposal or {}).get("id") == first["id"] else first
         report = self.supervisor.latest_report(self.patient_id)
         proposal = report and report["question"]
         if proposal and proposal["id"] != self.resolved_proposal:
@@ -139,6 +164,7 @@ class SimulatedPatient(Fake):
         data["patient"] = {"id": self.patient_id, "name": self.patient, "room": self.room_name}
         report = self.supervisor.latest_report(self.patient_id)
         data.update(simulation=True, proposal=self.proposal(), next_visit=[], routines=[],
+                    profile=self.supervisor.latest_profile(self.patient_id),
                     alerts=self.supervisor.alerts(self.patient_id) + data["alerts"],
                     bedside=self.nurse_link.snapshot(time.monotonic()),
                     history=self.nurse_link.interaction_history(), ai_drafts=nurse_ai.available())
@@ -175,6 +201,18 @@ class SimulatedPatient(Fake):
     def nurse_action(self, path, body):
         if path == "proposal/refine":
             return self._refine_proposal(body.get("id"))
+        if path == "check-in/suggest":
+            choice = body.get("choice")
+            if not isinstance(choice, str) or choice not in CARE_CHOICES:
+                return {"ok": False, "error": "Choose a care topic."}
+            with self.lock:
+                self.supervisor.queue_question(self.patient_id, {
+                    "id": f"{self.patient_id}-care-{choice}",
+                    "evidence": self.patient_status,
+                    "preference": self.preference,
+                    "steps": self.question_steps((choice,)),
+                })
+            return {"ok": True}
         if path == "patient/request":
             request = body.get("request")
             reason = body.get("reason")
@@ -191,13 +229,16 @@ class SimulatedPatient(Fake):
                 alert_id, created = self.supervisor.receive_request(
                     self.patient_id, request.strip(), at=self.interaction_time(),
                     reason=reason, urgent=urgent, time_sensitive=time_sensitive, request_id=request_id,
+                    profile=self.patient_profile(),
                 )
                 if created:
                     self._interaction("Patient agent", "Requested help", request.strip())
             return {"ok": True, "id": alert_id}
         if path == "simulate/agent-request":
-            request = "Please bring the patient a glass of water."
-            return self.nurse_action("patient/request", {"request": request, "reason": "The patient asked for water."})
+            choice = body.get("choice", "water")
+            if not isinstance(choice, str) or choice not in CARE_CHOICES:
+                return {"ok": False, "error": "Choose a care topic."}
+            return self.nurse_action("patient/request", {"request": CARE_CHOICES[choice][2]})
         if path == "alert" and str(body.get("id", "")).startswith("agent-"):
             if body.get("action") == "ack" and self.supervisor.acknowledge(self.patient_id, body["id"]):
                 return {"ok": True}
@@ -217,7 +258,11 @@ class SimulatedPatient(Fake):
         if path == "presence":
             if "present" not in body:
                 return {"ok": False, "error": "present is required"}
-            return self.nurse_link.set_visitors(body["present"])
+            with self.lock:
+                result = self.nurse_link.set_visitors(body["present"])
+                if result["ok"]:
+                    self.supervisor.publish_profile(self.patient_id, self.patient_profile())
+                return result
         if path == "suggest":
             question = str(body.get("question") or "").strip()
             if not question:
@@ -248,6 +293,7 @@ class SimulatedPatient(Fake):
     def _resolve_proposal(self, proposal_id):
         self.resolved_proposal = proposal_id
         self.refined_proposal = None
+        self.supervisor.resolve_question(self.patient_id, proposal_id)
 
     def _refine_proposal(self, proposal_id):
         with self.lock:
@@ -277,7 +323,8 @@ class SimulatedPatient(Fake):
     def _call_nurse(self, reason):
         self.overlay_until = time.time() + 6
         self.supervisor.receive_request(self.patient_id, "Patient used the call signal",
-                                        at=self.interaction_time(), reason=reason, urgent=True, kind="call")
+                                        at=self.interaction_time(), reason=reason, urgent=True, kind="call",
+                                        profile=self.patient_profile())
         self._interaction("Patient", "Called nurse", reason)
 
     def demo_action(self, body):
@@ -315,7 +362,8 @@ class SimulatedPatient(Fake):
                 outcome = step["request"]
                 q["request"] = outcome
                 self._interaction("Patient agent", "Reported to nurse", outcome)
-                self.supervisor.receive_request(self.patient_id, outcome, at=self.interaction_time())
+                self.supervisor.receive_request(self.patient_id, outcome, at=self.interaction_time(),
+                                                profile=self.patient_profile())
             elif remaining:
                 self.approved_steps = remaining
                 self._send_question(remaining[0]["question"], ["Yes", "No"], actor="Nurse supervisor")
@@ -347,6 +395,9 @@ class ShiftPatient(SimulatedPatient):
                 self.interaction_start = time.monotonic()
             if update.temperature is not None:
                 self.temp_c = update.temperature
+            self.patient_status = update.status
+            values = self.context["vitals"][len(self.shift_feed) % len(self.context["vitals"])]
+            self.vital_samples.append({"time": self.interaction_time(), **dict(zip(MEASUREMENTS, values))})
             entry = {
                 "time": self.interaction_time(), "status": update.status, "delivery": update.delivery,
                 "response": "Shared by patient agent", "_request": update.request,
@@ -356,12 +407,14 @@ class ShiftPatient(SimulatedPatient):
             if update.delivery == "proactive":
                 self.supervisor.receive_request(self.patient_id, update.request, at=entry["time"],
                                                 reason=update.status, urgent=update.urgent,
-                                                time_sensitive=update.time_sensitive)
+                                                time_sensitive=update.time_sensitive, profile=self.patient_profile())
                 entry["response"] = "Supervisor alerted the nurse"
                 self._interaction("Nurse supervisor", "Forwarded to nurse", update.request)
             elif update.delivery in ("scheduled", "question"):
                 entry["response"] = "Waiting for the next supervisor check-in"
                 self._pending_updates.append((update, entry))
+            if update.delivery != "proactive":
+                self.supervisor.publish_profile(self.patient_id, self.patient_profile())
 
     def check_in(self, prompt):
         with self.lock:
@@ -384,16 +437,9 @@ class ShiftPatient(SimulatedPatient):
             return {
                 "prompt": prompt, "time": self.interaction_time(), "status": self.report(),
                 "preferences": list(self.facts), "question": None, "attention": None,
+                "profile": self.patient_profile(),
                 "questions": questions, "requests": requests,
             }
-
-    def proposal(self):
-        questions = self.supervisor.pending_questions(self.patient_id)
-        return (self.refined_proposal or questions[0]) if questions else None
-
-    def _resolve_proposal(self, proposal_id):
-        super()._resolve_proposal(proposal_id)
-        self.supervisor.resolve_question(self.patient_id, proposal_id)
 
     def nurse_json(self):
         return {

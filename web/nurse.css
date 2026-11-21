@@ -205,6 +205,16 @@ textarea { resize: vertical; }
 .note p, .note ul { margin-top: .25rem; }
 .note ul { padding-left: 1.25rem; }
 .note li + li { margin-top: .3rem; }
+.profile-metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .5rem; margin: .65rem 0; }
+.profile-metrics div { padding: .5rem .6rem; border-radius: .5rem; background: #eef4fb; }
+.profile-metrics dt { font-size: .78rem; font-weight: 650; color: var(--muted); }
+.profile-metrics dd { margin: .18rem 0 0; overflow-wrap: anywhere; }
+.vitals-table { width: 100%; border-collapse: collapse; font-size: .85rem; margin-top: .75rem; }
+.vitals-table caption { text-align: left; font-weight: 700; margin-bottom: .3rem; }
+.vitals-table th, .vitals-table td { text-align: left; padding: .35rem .3rem; border-bottom: 1px solid var(--line); }
+.vitals-table thead { font-size: .78rem; color: var(--muted); }
+.current-reading { font-weight: 650; }
+.trend-reading { color: var(--muted); font-variant-numeric: tabular-nums; }
 .chat-timeline { list-style: none; padding: 0; margin: .6rem 0 0; max-height: 23rem; overflow: auto; }
 .chat-entry { display: grid; grid-template-columns: 4.5rem minmax(0, 1fr); gap: .4rem; padding: .5rem 0; }
 .chat-entry + .chat-entry { border-top: 1px solid var(--line); }

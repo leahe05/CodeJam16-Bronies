@@ -5,8 +5,10 @@ import time
 
 
 SHIFT_CAMERAS = {
-    "avery": {"name": "San Diego Zoo Penguin Cam", "url": "https://zoo.sandiegozoo.org/cams/penguin-cam"},
-    "morgan": {"name": "Smithsonian Elephant Cam", "url": "https://www.nationalzoo.si.edu/webcams/elephants"},
+    "avery": {"name": "San Diego Zoo Penguin Cam", "url": "https://zoo.sandiegozoo.org/cams/penguin-cam",
+              "source": "demo"},
+    "morgan": {"name": "Smithsonian Elephant Cam", "url": "https://www.nationalzoo.si.edu/webcams/elephants",
+               "source": "demo"},
 }
 
 
@@ -34,10 +36,14 @@ SHIFT_UPDATES = (
                 temperature=24),
     ShiftUpdate(22, "morgan", "Awake later than usual. Room feels warm at 24 °C.", "question",
                 temperature=24),
+    ShiftUpdate(29, "avery", "Asked for help cleaning up after a spill.", "proactive",
+                "Avery would like help cleaning their hands and the bedside table."),
     ShiftUpdate(36, "avery", "Indicated they would like to sit up.", "question",
                 choices=("sit_up", "pillow")),
     ShiftUpdate(46, "morgan", "Asked for a gentle hand massage if the nurse is available.", "proactive",
                 "Morgan requested a gentle hand massage."),
+    ShiftUpdate(50, "morgan", "Wants a snack and prefers the blinds closed while resting.", "question",
+                choices=("food", "close_blinds")),
     ShiftUpdate(56, "morgan", "Asked for a nurse right away to help sit upright in bed.", "proactive",
                 "Morgan requests immediate help sitting upright in bed.", urgent=True),
     ShiftUpdate(66, "avery", "No additional request at the end of the shift simulation."),

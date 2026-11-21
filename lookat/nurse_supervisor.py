@@ -22,6 +22,7 @@ class NurseSupervisor:
         self.interval_s = interval_s
         self._agents = {}
         self._reports = {}
+        self._profiles = {}
         self._requests = {}
         self._questions = {}
         self._generation = {}
@@ -45,6 +46,8 @@ class NurseSupervisor:
                     if self._generation[patient_id] != generation:
                         continue
                     self._reports[patient_id] = report
+                    if report.get("profile"):
+                        self._store_profile(patient_id, report["profile"])
                     if report.get("attention"):
                         self._receive_request(patient_id, **report["attention"], delivery="check-in")
                     for request in report.get("requests", ()):
@@ -65,9 +68,23 @@ class NurseSupervisor:
         with self._lock:
             return self._reports.get(patient_id)
 
+    def publish_profile(self, patient_id, profile):
+        with self._lock:
+            self._store_profile(patient_id, profile)
+
+    def _store_profile(self, patient_id, profile):
+        prior = self._profiles.get(patient_id, {})
+        if profile.get("_observed_at", 0) >= prior.get("_observed_at", 0):
+            self._profiles[patient_id] = profile
+
+    def latest_profile(self, patient_id):
+        with self._lock:
+            return self._profiles.get(patient_id)
+
     def reset_patient(self, patient_id):
         with self._lock:
             self._reports.pop(patient_id, None)
+            self._profiles.pop(patient_id, None)
             self._requests[patient_id].clear()
             self._questions[patient_id].clear()
             self._generation[patient_id] += 1
@@ -76,12 +93,18 @@ class NurseSupervisor:
         with self._lock:
             return list(self._questions[patient_id].values())
 
+    def queue_question(self, patient_id, question):
+        with self._lock:
+            self._questions[patient_id].setdefault(question["id"], question)
+
     def resolve_question(self, patient_id, question_id):
         with self._lock:
             self._questions[patient_id].pop(question_id, None)
 
-    def receive_request(self, patient_id, request, **details):
+    def receive_request(self, patient_id, request, *, profile=None, **details):
         with self._lock:
+            if profile is not None:
+                self._store_profile(patient_id, profile)
             return self._receive_request(patient_id, request, **details)
 
     def _receive_request(self, patient_id, request, *, at, reason=None, urgent=False, time_sensitive=False,

@@ -1,6 +1,7 @@
 import threading
 
 from lookat import nurse_ai
+from lookat.nurse_patient_profile import CARE_CHOICES
 from lookat.nurse_shift import SHIFT_UPDATES, ShiftPlayback, ShiftUpdate
 from lookat.nurse_supervisor import CHECK_IN_PROMPT, NurseSupervisor
 from lookat.supervisor_demo import make_demo_patients
@@ -195,3 +196,36 @@ def test_supervisor_ranks_requests_with_fifo_within_priority_and_preserves_legac
     alerts = avery.nurse_json()["alerts"]
     assert [alert["text"] for alert in alerts] == ["Help now", "Patient used the call signal", "Help soon", "Water"]
     assert [alert["priority"]["level"] for alert in alerts] == ["urgent", "urgent", "soon", "routine"]
+
+
+def test_patient_agents_supply_distinct_profiles_and_publish_live_updates():
+    avery, morgan = make_demo_patients(playback=ShiftPlayback())
+    original = avery.nurse_json()["profile"]
+    other = morgan.nurse_json()["profile"]
+    assert original["last_meal"]["minutes_since"] == 85
+    assert other["last_meal"]["minutes_since"] == 140
+    assert original["vitals"]["current"] == original["vitals"]["samples"][-1]
+    assert original["vitals"]["current"] != other["vitals"]["current"]
+    assert original["habits"] != other["habits"]
+    assert original["camera"]["url"] != other["camera"]["url"]
+    avery.receive_shift_update(ShiftUpdate(4, "avery", "Requested water", "proactive", "Bring water", temperature=24))
+    latest = avery.supervisor.latest_profile("avery")
+    assert latest == avery.nurse_json()["profile"]
+    assert latest["room"]["temp_c"] == 24
+    assert latest["status"] == "Requested water"
+    assert len(latest["vitals"]["samples"]) == 4
+    assert morgan.nurse_json()["profile"] == other
+
+
+def test_all_care_topics_can_be_patient_requests_or_nurse_review_drafts():
+    avery, morgan = make_demo_patients(playback=ShiftPlayback())
+    assert {choice["id"] for choice in avery.nurse_json()["profile"]["care_choices"]} == set(CARE_CHOICES)
+    for action, (_, question, request) in CARE_CHOICES.items():
+        assert avery.nurse_action("simulate/agent-request", {"choice": action})["ok"]
+        assert avery.nurse_action("check-in/suggest", {"choice": action})["ok"]
+        proposal = avery.proposal()
+        assert proposal["steps"] == [{"question": question, "request": request}]
+        assert avery.screen_json()["screen"] == "idle"
+        assert avery.nurse_action("proposal/dismiss", {"id": proposal["id"]})["ok"]
+    assert len(avery.nurse_json()["alerts"]) == len(CARE_CHOICES)
+    assert not morgan.nurse_json()["alerts"] and not morgan.proposal()

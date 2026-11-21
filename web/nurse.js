@@ -338,6 +338,17 @@ function renderAlerts() {
   updateText($("queue-count"), complete || pending.length ? `${pending.length} open` : "Checking for requests…");
 }
 
+function cameraLink(camera, id) {
+  if (typeof camera?.url !== "string" || !camera.url.startsWith("https://")) return null;
+  const link = element("a", "demo-camera", camera.name || "Open camera");
+  link.id = id;
+  link.href = camera.url;
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  link.append(element("small", "", camera.source === "demo" ? "Demo camera · Opens in new tab" : "Opens in new tab"));
+  return link;
+}
+
 function renderShift(roster) {
   const patients = roster.filter(agent => agent.data?.shift);
   const first = patients[0];
@@ -357,16 +368,8 @@ function renderShift(roster) {
     () => patients.map(agent => {
       const card = element("article", "shift-feed");
       card.append(element("h3", "", [agentName(agent), agent.data.patient.room].filter(Boolean).join(" · ")));
-      const camera = agent.data.shift.camera;
-      if (typeof camera?.url === "string" && camera.url.startsWith("https://")) {
-        const link = element("a", "demo-camera", camera.name);
-        link.id = "demo-camera-" + encodeURIComponent(agent.origin);
-        link.href = camera.url;
-        link.target = "_blank";
-        link.rel = "noopener noreferrer";
-        link.append(element("small", "", "Demo camera · Opens in new tab"));
-        card.append(link);
-      }
+      const camera = cameraLink(agent.data.shift.camera, "demo-camera-" + encodeURIComponent(agent.origin));
+      if (camera) card.append(camera);
       const updates = list(agent.data.shift.feed);
       if (!updates.length) {
         card.append(element("p", "muted", "Waiting for the first patient-agent update."));
@@ -464,16 +467,23 @@ function summaryLabel(summary) {
 
 function tileStatus(data) {
   const bedside = data?.bedside;
-  const temperature = data?.room?.temp_c;
+  const profile = data?.profile;
+  const temperature = profile?.room?.temp_c ?? data?.room?.temp_c;
   const summary = bedside?.interaction_summary;
-  const vitals = vitalLines(bedside?.vitals);
+  const vitals = vitalLines(profile?.vitals?.current ?? bedside?.vitals);
   const metrics = element("span", "tile-metrics");
-  for (const text of [awarenessLabel(bedside?.awareness), presenceLabel(bedside?.visitors_present),
-    Number.isFinite(temperature) ? `Room ${temperature} °C` : "Room temperature unavailable"]) {
+  const meal = elapsedMeal(profile?.last_meal?.minutes_since);
+  for (const text of [
+    awarenessLabel(profile?.awareness ?? bedside?.awareness),
+    presenceLabel(profile?.visitors_present ?? bedside?.visitors_present),
+    Number.isFinite(temperature) ? `Room ${temperature} °C` : "Room temperature unavailable",
+    meal && "Meal " + meal
+  ].filter(Boolean)) {
     metrics.append(element("span", "metric", text));
   }
   const vitalsLine = element("span", "tile-vitals");
-  vitalsLine.append(element("strong", "", bedside?.vitals?.simulated ? "Simulated vitals" : "Vitals"),
+  vitalsLine.append(element("strong", "", profile?.vitals?.source === "simulated" || bedside?.vitals?.simulated ?
+    "Simulated vitals" : "Vitals"),
     element("span", "", vitals.join(" · ") || "Unavailable"));
   const summaryLine = element("span", "tile-summary");
   const summaryHeading = element("span", "summary-heading");
@@ -487,7 +497,8 @@ function renderRoster() {
   const roster = [...agents.values()];
   updateRegion($("patients"), [selected, roster.map(agent =>
     [agent.origin, agentName(agent), agent.data?.patient?.room, agentStatus(agent), agent.busy,
-      agent.data?.bedside, agent.data?.room?.temp_c])], () =>
+      agent.data?.bedside, agent.data?.room?.temp_c, agent.data?.profile?.vitals?.current,
+      agent.data?.profile?.last_meal])], () =>
     roster.map(agent => {
       const item = element("li", "patient-item");
       const tile = button("", "patient-tile", () => openPatient(agent.origin));
@@ -529,6 +540,84 @@ function stateLabel(name, value) {
   return typeof value === "boolean" ? name + (value ? " on" : " off") : null;
 }
 
+function elapsedMeal(minutes) {
+  if (!Number.isFinite(minutes) || minutes < 0) return null;
+  const hours = Math.floor(minutes / 60);
+  const remaining = minutes % 60;
+  return [hours ? hours + " h" : null, remaining || !hours ? remaining + " min" : null].filter(Boolean).join(" ") + " ago";
+}
+
+function vitalsTable(vitals) {
+  const samples = list(vitals?.samples).slice(-4);
+  const last = vitals?.current || samples.at(-1);
+  if (!last) return null;
+  const readings = [
+    ["Heart rate", "bpm", sample => sample.heart_rate_bpm],
+    ["SpO₂", "%", sample => sample.spo2_pct],
+    ["Respiratory rate", "/min", sample => sample.respiratory_rate_bpm],
+    ["Blood pressure", "mmHg", sample =>
+      Number.isFinite(sample.systolic_mmhg) && Number.isFinite(sample.diastolic_mmhg) ?
+        `${sample.systolic_mmhg}/${sample.diastolic_mmhg}` : null]
+  ];
+  const table = element("table", "vitals-table");
+  table.append(element("caption", "", [vitals.source === "simulated" ? "Simulated vitals" : "Vitals",
+    last.time].filter(Boolean).join(" · ")));
+  const headers = element("tr");
+  for (const label of ["Reading", "Current", "Recent trend"]) {
+    const cell = element("th", "", label);
+    cell.scope = "col";
+    headers.append(cell);
+  }
+  const head = element("thead");
+  head.append(headers);
+  const body = element("tbody");
+  for (const [label, unit, read] of readings) {
+    const values = samples.map(read);
+    const current = read(last);
+    if (current == null && values.every(value => value == null)) continue;
+    const row = element("tr");
+    const heading = element("th", "", label);
+    heading.scope = "row";
+    row.append(heading, element("td", "current-reading", current == null ? "Unavailable" : `${current} ${unit}`),
+      element("td", "trend-reading", values.length ? values.map(value => value ?? "—").join(" → ") : "Unavailable"));
+    body.append(row);
+  }
+  table.append(head, body);
+  return table;
+}
+
+function patientProfile(profile) {
+  const section = element("section", "note patient-profile");
+  section.append(element("h3", "", "Patient agent profile"));
+  if (profile.reported_at) section.append(element("p", "muted", "Reported at " + profile.reported_at));
+  const room = profile.room || {};
+  const conditions = [
+    ["Room temperature", Number.isFinite(room.temp_c) ? room.temp_c + " °C" : null],
+    ["Last meal", [elapsedMeal(profile.last_meal?.minutes_since), profile.last_meal?.name,
+      profile.last_meal?.time].filter(Boolean).join(" · ")],
+    ["Bedside", [awarenessLabel(profile.awareness), profile.posture, presenceLabel(profile.visitors_present)]
+      .filter(Boolean).join(" · ")],
+    ["Room comfort", [typeof room.window === "string" && "Window " + room.window.toLowerCase(),
+      typeof room.blinds === "string" && "Blinds " + room.blinds.toLowerCase()]
+      .filter(Boolean).join(" · ")]
+  ].filter(([, value]) => value);
+  const summary = element("dl", "profile-metrics");
+  for (const [label, value] of conditions) {
+    const item = element("div");
+    item.append(element("dt", "", label), element("dd", "", value));
+    summary.append(item);
+  }
+  section.append(summary);
+  if (profile.status) section.append(element("p", "", profile.status));
+  const vitals = vitalsTable(profile.vitals);
+  if (vitals) section.append(vitals);
+  const context = note("Preferences and habits", [...list(profile.preferences), ...list(profile.habits)]);
+  if (context) section.append(context);
+  const camera = cameraLink(profile.camera, "profile-camera");
+  if (camera) section.append(camera);
+  return section;
+}
+
 function patientNotes(data) {
   const room = data.room || {};
   const session = data.session || {};
@@ -536,7 +625,7 @@ function patientNotes(data) {
   const fan = stateLabel("Fan", room.fan_on);
   const checkIn = data.agent_checkin;
   return [
-    bedside && note("Bedside status", [
+    data.profile ? patientProfile(data.profile) : bedside && note("Bedside status", [
       awarenessLabel(bedside.awareness),
       presenceLabel(bedside.visitors_present),
       bedside.vitals?.simulated ? "Simulated vitals" : null,
@@ -552,9 +641,9 @@ function patientNotes(data) {
     note("Conversation", [
       session.waiting ? "Waiting for a patient answer" : session.active ? "Session active" : null,
     ]),
-    note("Patient preferences", list(data.facts).map(fact => fact.text)),
+    !data.profile && note("Patient preferences", list(data.facts).map(fact => fact.text)),
     note("Room status", [
-      Number.isFinite(room.temp_c) ? `${room.temp_c} °C` : null,
+      !data.profile && Number.isFinite(room.temp_c) ? `${room.temp_c} °C` : null,
       Number.isFinite(room.setpoint_c) ? `Setpoint ${room.setpoint_c} °C` : null,
       stateLabel("Lamp", room.lamp_on),
       fan && (room.fan_simulated ? fan + " (simulated)" : fan)
@@ -626,7 +715,8 @@ function renderSimulation(agent, data) {
   const panel = $("simulation");
   panel.hidden = !data;
   const q = data?.session?.waiting ? list(data.session.thread).at(-1) : null;
-  updateRegion(panel, [agent.origin, data?.simulation, data?.tracked_demo, data?.agent_checkin?.interval_s,
+  const choices = list(data?.profile?.care_choices);
+  updateRegion(panel, [agent.origin, data?.simulation, data?.tracked_demo, data?.agent_checkin?.interval_s, choices,
     q, agent.state, agent.busy], () => {
     if (!data) return [];
     const link = element("a", "button", "Open patient screen");
@@ -635,7 +725,27 @@ function renderSimulation(agent, data) {
     link.rel = "noopener";
     if (!data.simulation) return [link];
     const rows = [element("h3", "", "Simulate patient input"), link];
-    if (data.agent_checkin) {
+    if (choices.length) {
+      const label = element("label", "", "Care topic");
+      label.htmlFor = "demo-care-choice";
+      const select = element("select");
+      select.id = "demo-care-choice";
+      for (const choice of choices) {
+        const option = element("option", "", choice.label);
+        option.value = choice.id;
+        select.append(option);
+      }
+      select.value = agent.careChoice || choices[0].id;
+      select.addEventListener("change", () => { agent.careChoice = select.value; });
+      const controls = element("div", "form-row");
+      const push = button("Simulate patient request", "button", () =>
+        act(agent, "/simulate/agent-request", { choice: select.value }, "The patient agent sent a request."));
+      const draft = button("Suggest check-in", "button", () =>
+        act(agent, "/check-in/suggest", { choice: select.value }, "Check-in queued for nurse review."));
+      push.disabled = draft.disabled = select.disabled = agent.busy || agent.state !== "online";
+      controls.append(push, draft);
+      rows.push(label, select, controls);
+    } else if (data.agent_checkin) {
       const push = button("Simulate agent request", "button", () =>
         act(agent, "/simulate/agent-request", {}, "The patient agent sent a request to the nurse."));
       push.disabled = agent.busy || agent.state !== "online";
@@ -676,7 +786,7 @@ function render() {
   renderPatientActions(agent, data);
   renderSimulation(agent, data);
   renderHistory(data);
-  updateRegion($("notes"), [selected, data?.bedside, data?.agent_checkin, data?.next_visit, data?.session, data?.facts, data?.room,
+  updateRegion($("notes"), [selected, data?.profile, data?.bedside, data?.agent_checkin, data?.next_visit, data?.session, data?.facts, data?.room,
     data?.routines, data?.recent, data?.summary], () => {
     const notes = data ? patientNotes(data) : [];
     return notes.length ? notes : [element("p", "empty note", data ? "No status notes yet." : "Waiting for patient data…")];
