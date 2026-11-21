@@ -23,6 +23,20 @@ RETRY_S = 5.0
 TIMEOUT_S = 5
 
 
+def saved_env(name: str) -> Optional[str]:
+    """os.environ first; on Windows also the value `setx` saved for the user, so a
+    terminal that was opened before setx still works. The value is never printed."""
+    value = os.environ.get(name)
+    if value or os.name != "nt":
+        return value
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as key:
+            return winreg.QueryValueEx(key, name)[0] or None
+    except OSError:
+        return None
+
+
 class PlugWorker:
     def __init__(self, name: str, ip: str, on_change: Optional[Callable[[str, bool], None]] = None):
         self.name = name
@@ -80,10 +94,10 @@ class PlugWorker:
     async def _connect(self) -> bool:
         from kasa import Discover
         self._next_try = time.monotonic() + RETRY_S
-        user, password = os.environ.get("KASA_USER"), os.environ.get("KASA_PASSWORD")
+        user, password = saved_env("KASA_USER"), saved_env("KASA_PASSWORD")
         if not (user and password) and not self._warned:
-            print(f"PLUG {self.name}: KASA_USER / KASA_PASSWORD are not set in THIS window. "
-                  "Save them with setx, then open a NEW PowerShell window.")
+            print(f"PLUG {self.name}: KASA_USER / KASA_PASSWORD are not saved. "
+                  'Run setx KASA_USER "..." and setx KASA_PASSWORD "..." once.')
         dev = None
         try:
             dev = await Discover.discover_single(self.ip, discovery_timeout=TIMEOUT_S, timeout=TIMEOUT_S,
@@ -157,8 +171,8 @@ class PlugWorker:
     def _offline(self, err: Exception) -> None:
         self.online = False
         if not self._warned:
-            hint = ("wrong or missing Kasa login: KASA_USER must be the account that owns the plug; "
-                    "open a NEW PowerShell window after setx" if "Authentication" in type(err).__name__
+            hint = ("wrong Kasa login: KASA_USER / KASA_PASSWORD must be the TP-Link account that owns the plug"
+                    if "Authentication" in type(err).__name__
                     else "run the network check (PLAN.md R1): laptop on the right Wi-Fi? plug powered?")
             print(f"PLUG {self.name} OFFLINE at {self.ip} ({type(err).__name__}) - {hint}")
             log_event("plug_offline", name=self.name, ip=self.ip, error=type(err).__name__)

@@ -113,6 +113,23 @@ def calibrate(tracker, live: Live, speaker, patient: str, what: str):
         return calibrate_gestures(tracker, prompt, patient)
     finally:
         live.set_calibration(None)
+        # the calibration windows would stay on screen, frozen, on top of the live one
+        for name in ("LookAt gaze (operator)", "LookAt gestures (operator)"):
+            try:
+                cv2.destroyWindow(name)
+            except cv2.error:
+                pass
+        cv2.waitKey(1)
+
+
+def raise_window() -> None:
+    """Bring the live operator window to the front once."""
+    try:
+        cv2.setWindowProperty(WINDOW, cv2.WND_PROP_TOPMOST, 1)
+        cv2.waitKey(1)
+        cv2.setWindowProperty(WINDOW, cv2.WND_PROP_TOPMOST, 0)
+    except cv2.error:
+        pass
 
 
 def draw_operator(frame, live: Live, gaze_conf: float, det, fps: float, keyboard: bool = False):
@@ -156,13 +173,14 @@ def run_camera(args, live: Live) -> None:
         if settings is None:
             settings = calibrate(tracker, live, speaker, args.patient, "gestures")
         det = GestureDetector(settings, on_release=True)
-        print(f"Ready. Eyebrow threshold {det.threshold:.2f} ({settings['gesture']}).")
-        fps, last = 0.0, time.monotonic()
+        print(f"Ready. Eyebrow threshold {det.threshold:.2f} ({settings['gesture']}). "
+              f"Watch the '{WINDOW}' window; press q in it to quit.")
+        fps, last, raised = 0.0, time.monotonic(), False
         while True:
             frame, f = tracker.read()
             if frame is None:
                 live.camera_ok = False
-                print("Camera stopped giving frames.")
+                print("Stopped: the camera stopped giving frames (unplugged, or used by another app?).")
                 break
             now = time.monotonic()
             spot, conf = gaze.predict(f)
@@ -174,14 +192,20 @@ def run_camera(args, live: Live) -> None:
                 cv2.putText(frame, "FACE TOO SMALL: move the camera closer", (30, frame.shape[0] - 100),
                             cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 3)
             draw_operator(frame, live, conf, det, fps)
+            if not raised:
+                raise_window()
+                raised = True
             key = cv2.waitKey(1) & 0xFF
             if key == ord("q"):
+                print("Stopped: q pressed.")
                 break
             if key == ord("c"):
                 gaze = calibrate(tracker, live, speaker, args.patient, "gaze")
+                raised = False
             elif key == ord("g"):
                 settings = calibrate(tracker, live, speaker, args.patient, "gestures")
                 det = GestureDetector(settings, on_release=True)
+                raised = False
     finally:
         live.camera_ok = False
         tracker.close()
