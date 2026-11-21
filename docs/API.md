@@ -139,7 +139,8 @@ Examples of each screen are in `lookat/fake_api.py` (`SCREENS`).
   "clock": {"time": "02:14", "day": "Night 1", "demo": true},
   "perception": {"temp_c": 24.5, "setpoint_c": 22.0, "lamp_on": true, "fan_on": false,
                  "eyes_open": true, "awake": true, "open_ratio": 0.92, "face": true,
-                 "last_visit": "23:40", "screen": "idle", "quiet_until": null},
+                 "last_visit": "23:40", "screen": "idle", "quiet_until": null,
+                 "agent": "Watching the room"},
   "memory": {
     "facts": [{"text": "Runs warm at night", "source": "chart"}, {"text": "Feels cold below 20 °C", "source": "chart"}],
     "routines": [{"text": "Lamp off at 22:00", "status": "candidate", "evidence": "patient turned it off 21:55, 22:05, 22:00 on Nov 14-16"}],
@@ -155,6 +156,7 @@ Examples of each screen are in `lookat/fake_api.py` (`SCREENS`).
   "status": {"camera": true, "lamp": true, "fan": "simulated", "ai": true}
 }
 ```
+- `perception.agent`: one line on what the agent is doing or why it is quiet right now (e.g. "Quiet: the patient's face is not seen", "Waiting until 17:12 after the last question", "Watching the room"). Show it near the room state so the operator knows why nothing pops up.
 - `feed`: newest **last**; `stage` is `noticed`, `decided`, `did`, `checked`, `outcome`, `learned` or `error`. Show each agent episode as a card going Noticed → Decided → Did → Checked → Outcome; mark `fallback: true` steps "(rule-based)".
 
 ### Demo controls (POST `/api/demo`, operator only)

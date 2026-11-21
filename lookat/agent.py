@@ -52,6 +52,8 @@ IGNORED_HUSH_MIN = 10        # a suggestion the patient ignored: nothing new for
 IGNORED_BACKOFF_MIN = 30     # ...and that topic waits 30, then 60, 120, 240 min after each ignore in a row
 DECLINED_BACKOFF_MIN = 60    # "No, thanks." / Return to main menu: that topic waits an hour
 OWN_CHOICE_MIN = 30          # never offer to undo a switch the patient chose themselves this recently
+EXTREME_HIGH_C = 30.0        # outside these the room is unsafe (or the sensor is wrong): page the nurse at once,
+EXTREME_LOW_C = 16.0         # awake or not, screen or not
 
 SYSTEM = """You are LookAt, an assistant for a patient who cannot speak or move and answers only by \
 looking left/center/right at a screen and raising their eyebrows. You speak first so they need fewer \
@@ -258,7 +260,11 @@ class Agent:
             return
         if self.client is not None and self.can_speak() and self.situation() != self.menu_sig:
             self.refresh_menu()
-        trig = self.trigger(self.perceive())
+        p = self.perceive()
+        self.live.agent_status = self.status(p)
+        if self.extreme(p):
+            return
+        trig = self.trigger(p)
         if trig:
             self.episode(*trig)
 
@@ -365,6 +371,47 @@ class Agent:
         if out or now["lamp_on"] != old["lamp_on"] or now["fan_on"] != old["fan_on"]:
             self.seen = now                         # the patient's own switches update quietly
         return out
+
+    def status(self, p: dict) -> str:
+        """Why the agent is quiet right now, or what it is doing (one line for the panel)."""
+        live = self.live
+        if self.client is None:
+            note = " (rules only: no API key)"
+        else:
+            note = ""
+        if live.calibration is not None:
+            return "Quiet: calibrating" + note
+        if live.session.get("active"):
+            return "Quiet: the nurse is talking with the patient" + note
+        if self.quiet_until and clock.now().timestamp() < self.quiet_until:
+            return "Quiet: the patient asked for quiet until " + time.strftime("%H:%M", time.localtime(self.quiet_until)) + note
+        if not live.sm.can_interrupt() or live.machine.busy:
+            return "Waiting: the patient is using the screen" + note
+        if p["awake"] is None:
+            return "Quiet: the patient's face is not seen (is the patient tab visible?)" + note
+        if not p["awake"]:
+            return "Quiet: the patient seems asleep" + note
+        if clock.now().timestamp() < self.hush_until:
+            return "Giving the patient a break until " + time.strftime("%H:%M", time.localtime(self.hush_until)) + note
+        if time.monotonic() - self.last_choice < SETTLE_S:
+            return "Waiting a moment after the patient's last choice" + note
+        held = [k for k in self.backoff if self._backed_off(k)]
+        return "Watching the room" + (f" (on hold: {', '.join(held)})" if held else "") + note
+
+    def extreme(self, p: dict) -> bool:
+        """Room far too hot or cold: page the nurse at once (code, no AI, awake or not). True = it paged."""
+        t = p["temp_c"]
+        if EXTREME_LOW_C < t < EXTREME_HIGH_C or not self._cooled_down("extreme"):
+            return False
+        self.last_run["extreme"] = clock.now()
+        self.fallback = False
+        hot = t >= EXTREME_HIGH_C
+        self.feed("noticed", f"Room reads {t} °C: far too {'hot' if hot else 'cold'}", "trigger: extreme")
+        self.call("page_nurse", {"message": f"Room reads {t} °C. Please check the room (or the sensor).",
+                                 "reason": f"Outside the safe range {EXTREME_LOW_C:g}-{EXTREME_HIGH_C:g} °C; "
+                                           "paged at once, whether the patient is awake or not.",
+                                 "urgency": "urgent", "why": "unsafe temperature"})
+        return True
 
     def trigger(self, p: dict) -> Optional[tuple]:
         """(name, reason) when it is time to speak first, else None. Pure rules, no AI."""

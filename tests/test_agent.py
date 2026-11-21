@@ -401,3 +401,21 @@ def test_only_a_real_no_counts_as_declined(tmp_path):
         agent.backoff.clear(); agent.answers = [ans]
         agent._respect_silence("room_change")
         assert ("room_change" in agent.backoff) is held, ans
+
+
+# ----- extreme temperature + status --------------------------------------------------------------
+def test_extreme_temperature_pages_the_nurse_even_with_no_face(tmp_path):
+    agent, live, room, _ = make(tmp_path, temp=99.0, at="17:00", awake=None)
+    assert agent.trigger(agent.perceive()) is None            # no face: no question on screen...
+    assert agent.extreme(agent.perceive())                    # ...but the nurse is paged at once
+    assert live.alerts[0]["urgency"] == "urgent" and "99.0 °C" in live.alerts[0]["text"]
+    assert not agent.extreme(agent.perceive())                # once, not every second
+
+
+def test_status_says_why_the_agent_is_quiet(tmp_path):
+    agent, live, *_ = make(tmp_path, awake=None)
+    assert "face is not seen" in agent.status(agent.perceive())
+    live.awake_state = {"awake": True, "open_ratio": 0.9}
+    assert agent.status(agent.perceive()).startswith("Watching the room")
+    agent.hush_until = clock.now().timestamp() + 300
+    assert agent.status(agent.perceive()).startswith("Giving the patient a break until")

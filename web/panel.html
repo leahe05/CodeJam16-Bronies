@@ -56,6 +56,12 @@
   .kv { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; margin-top: 12px; font-size: 14px; }
   .kv dt { color: var(--muted); } .kv dd { margin: 0; text-align: right; }
   .yes { color: var(--ok); } .no { color: var(--muted); }
+  .agent { display: flex; gap: 10px; align-items: flex-start; margin-top: 14px; padding: 10px 12px; border-radius: 12px;
+    font-size: 14px; background: rgba(103, 232, 249, .08); border: 1px solid rgba(103, 232, 249, .3); }
+  .agent::before { content: ""; flex: none; width: 9px; height: 9px; margin-top: 6px; border-radius: 50%;
+    background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+  .agent.quiet { background: rgba(251, 191, 36, .08); border-color: rgba(251, 191, 36, .35); }
+  .agent.quiet::before { background: var(--warn); box-shadow: 0 0 8px var(--warn); }
 
   /* demo controls */
   .ctl { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
@@ -178,7 +184,7 @@
     }
     return eps.reverse();
   }
-  const TRIGGER = { warm_night: "Warm at night", cold: "Room is cold", patient: "Patient asked",
+  const TRIGGER = { warm_night: "Warm at night", cold: "Room is cold", patient: "Patient asked", extreme: "Unsafe temperature",
                     room_change: "Room changed", checkin: "Check-in" };
 
   function renderFeed(feed) {
@@ -213,7 +219,8 @@
       + `<dt>Awake</dt><dd>${yn(p.awake, "awake" + (p.open_ratio != null ? ` · eyes ${Math.round(p.open_ratio * 100)}%` : ""), "asleep")}</dd>`
       + `<dt>Screen</dt><dd>${esc(SCREEN[p.screen] || p.screen || "")}</dd>`
       + `<dt>Quiet until</dt><dd>${p.quiet_until ? esc(p.quiet_until) : '<span class="no">not quiet</span>'}</dd>`
-      + `<dt>Last nurse visit</dt><dd>${p.last_visit ? esc(p.last_visit) : '<span class="no">unknown</span>'}</dd></dl>`;
+      + `<dt>Last nurse visit</dt><dd>${p.last_visit ? esc(p.last_visit) : '<span class="no">unknown</span>'}</dd></dl>`
+      + (p.agent ? `<div class="agent${/^Watching/.test(p.agent) ? "" : " quiet"}"><div><b>AI agent</b><br>${esc(p.agent)}</div></div>` : "");
     const facts = m.facts || [];
     $("facts").innerHTML = facts.length ? facts.map((f) => `<li>${esc(f.text)}<span class="src ${f.source === "agent" ? "agent" : ""}">${f.source === "agent" ? "learned" : esc(f.source)}</span></li>`).join("")
       : '<li class="no">Nothing yet: it is getting to know the patient.</li>';

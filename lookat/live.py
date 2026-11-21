@@ -68,6 +68,7 @@ class Live:
         self.eyes_override: Optional[str] = None
         self.awake_state: dict = {"eyes_open": None, "open_ratio": None, "awake": None}   # main.py, from awake.py
         self.memory_view: Optional[dict] = None   # the agent publishes what it learned (panel)
+        self.agent_status = "Starting"             # the agent: what it is doing / why it is quiet (panel)
         self.quiet_until: Optional[str] = None
         self.web_gaze = {"spot": None, "x": None, "y": None, "at": -1e9,   # from the browser (main.py --gaze web)
                          "face": False, "eyes_open": None, "brow": {"up": False, "held_s": 0.0}}
@@ -191,7 +192,7 @@ class Live:
                                "fan_on": r["fan_on"], "eyes_open": self.awake_state.get("eyes_open"),
                                "awake": self.awake_state.get("awake"), "open_ratio": self.awake_state.get("open_ratio"),
                                "face": self.face, "last_visit": self.last_visit, "screen": self.sm.kind,
-                               "quiet_until": self.quiet_until},
+                               "quiet_until": self.quiet_until, "agent": self.agent_status},
                 "memory": self.memory_view or {"facts": self.facts, "routines": [], "top_options": [],
                                                "hidden_options": [], "night_checkins": True},
                 "feed": self.feed[-30:],
