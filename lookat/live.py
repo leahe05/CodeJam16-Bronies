@@ -219,6 +219,8 @@ class Live:
             if not q:
                 return {"ok": False, "error": "empty question"}
             return {"ok": True, **self._suggest(q)}
+        if path == "summary":            # may call the AI (up to 8 s): never hold the lock here
+            return self._shift_summary()
         now = self.now()
         with self.lock:
             if path == "session/start":
@@ -264,9 +266,6 @@ class Live:
                 if not text:
                     return {"ok": False, "error": "empty fact"}
                 self.facts.append({"text": text, "source": "nurse"})
-            elif path == "summary":
-                self.summary = self._summary()
-                return {"ok": True, "text": self.summary}
             else:
                 return {"ok": False, "error": "unknown action"}
             return {"ok": True}
@@ -301,10 +300,23 @@ class Live:
         except Exception:   # noqa: BLE001 - no ask.py yet, no key, or an AI error
             return {"options": fallback_options(question), "source": "fallback"}
 
-    def _summary(self) -> str:
-        if not self.recent:
-            return "Nothing to report yet."
-        return " ".join(f"{r['time']} {r['text']}." for r in reversed(self.recent[:10]))
+    def _shift_summary(self) -> dict:
+        """lookat/summary.py from the patient's memory (main.py sets live.memory) + the agent's checks.
+        Without a memory (tests, fake data): the recent events, as before."""
+        memory = getattr(self, "memory", None)
+        with self.lock:
+            feed, recent = list(self.feed), list(self.recent)
+        if memory is None:
+            text = (" ".join(f"{r['time']} {r['text']}." for r in reversed(recent[:10]))
+                    or "Nothing to report yet.")
+            source = "template"
+        else:
+            from lookat.summary import shift_summary
+            s = shift_summary(memory, feed)
+            text, source = s["text"], s["source"]
+        with self.lock:
+            self.summary = text
+        return {"ok": True, "text": text, "source": source}
 
     # ----- POST /api/gaze (browser eye tracking) ------------------------------
     WEB_GAZE_FRESH_S = 0.6

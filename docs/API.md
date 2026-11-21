@@ -127,7 +127,7 @@ Examples of each screen are in `lookat/fake_api.py` (`SCREENS`).
 | `/api/nurse/room` | `{"device": "lamp"\|"fan", "cmd": "on"\|"off"}` or `{"setpoint_c": 18}` | changes the room (the 18 °C flag comes from this) |
 | `/api/nurse/visit` | `{}` | "I'm here": logs a nurse visit |
 | `/api/nurse/fact` | `{"text": "Prefers the blinds open"}` | adds a preference to memory |
-| `/api/nurse/summary` | `{}` | returns `{"ok": true, "text": "..."}` (up to ~8 s) |
+| `/api/nurse/summary` | `{}` | returns `{"ok": true, "text": "...", "source": "ai"\|"template"}` (up to ~8 s): the shift handover, 3-6 sentences in time order, only from logged events (lookat/summary.py); `template` = written by rules (no key, offline, or the AI text mentioned a time that isn't in the log) |
 
 ---
 
