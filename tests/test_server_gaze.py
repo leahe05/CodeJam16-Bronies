@@ -30,3 +30,34 @@ def test_fake_backend_has_no_web_gaze():
     from lookat.fake_api import Fake
     from lookat.fake_api import make_app as fake_app
     assert not TestClient(fake_app(Fake())).post("/api/gaze", json={"spot": "left"}).json()["ok"]
+
+
+def test_web_mode_end_to_end_room_controls_by_gaze_and_browser_eyebrows():
+    """Browser says: looking at the left column, then a short eyebrow raise -> Room Controls opens."""
+    from lookat.awake import AwakeDetector
+    from main import web_step
+    now = [0.0]
+    live, client = make(now)
+    awake = AwakeDetector()
+    for i in range(8):                                   # 1.6 s of looking left: dwell -> locked
+        now[0] = i * 0.2
+        client.post("/api/gaze", json={"spot": "left", "face": True, "eyes_open": True})
+        web_step(live, awake, now[0])
+    assert live.machine.view() == {"spot": "left", "state": "asking"}
+    now[0] += 0.2
+    client.post("/api/gaze", json={"spot": "left", "face": True, "events": ["confirm"]})
+    web_step(live, awake, now[0])
+    assert live.sm.kind == "room"
+
+
+def test_web_mode_long_raise_calls_the_nurse_and_no_face_means_no_gaze():
+    from lookat.awake import AwakeDetector
+    from main import web_step
+    now = [1.0]
+    live, client = make(now)
+    client.post("/api/gaze", json={"spot": "middle", "face": True, "events": ["emergency"]})
+    web_step(live, AwakeDetector(), 1.0)
+    assert live.screen_json()["overlay"]["kind"] == "call_nurse"
+    now[0] = 2.0
+    client.post("/api/gaze", json={"spot": "left", "face": False})
+    assert web_step(live, AwakeDetector(), 2.0) is None

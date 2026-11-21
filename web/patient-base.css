@@ -316,12 +316,12 @@ html.big .big-opt {
 html.big .big-opt > svg { font-size: calc(var(--u) * 11); color: var(--icon); }
 html.big .big-opt b { font-size: calc(var(--u) * 5.4); font-weight: 650; line-height: 1.1; text-wrap: balance; }
 html.big .big-opt small { font-size: calc(var(--u) * 2.2); color: var(--hint); }
-html.big .home-cols { margin-top: 0; min-height: calc(var(--u) * 62); }
-html.big .home-cols .col.top .big-opt { flex: none; min-height: calc(var(--u) * 46); }
-html.big .home-cols h1.hero { font-size: calc(var(--u) * 7.6); }
-html.big .home-cols .celestial { width: calc(var(--u) * 10); height: calc(var(--u) * 10); }
-html.big .talk-big { flex: none; width: 100%; min-height: calc(var(--u) * 26); margin-top: calc(var(--u) * 3);
-  border: 2.5px solid var(--pill-border); background: var(--pill-bg); box-shadow: var(--pill-glow); }
+html.big .home-cols { margin-top: 0; min-height: calc(var(--u) * 56); align-items: center; }
+html.big .home-cols .big-opt { flex: none; min-height: calc(var(--u) * 44); }
+html.big .home-cols h1.hero { font-size: calc(var(--u) * 7); }
+html.big .home-cols .sub { font-size: calc(var(--u) * 2.6); }
+html.big .home-cols .celestial { width: calc(var(--u) * 11); height: calc(var(--u) * 11); }
+html.big .talk-big { border: 2.5px solid var(--pill-border); background: var(--pill-bg); box-shadow: var(--pill-glow); }
 html.big .big-instr { display: flex; align-items: center; justify-content: center; gap: calc(var(--u) * 1.4);
   margin: calc(var(--u) * 2.4) 0 0; font-size: calc(var(--u) * 2.4); color: var(--hint); }
 html.big .big-instr .instr-i { font-size: calc(var(--u) * 3.6); border: 0; padding: 0; }

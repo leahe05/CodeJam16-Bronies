@@ -106,25 +106,30 @@
   }
 
   // ---------------- big layout: three columns = the three gaze zones ----------------
-  function bigCard(d, spot, live = true) {
-    const o = d[spot];
-    if (!o) return `<div class="col"></div>`;
-    const fallback = spot === "middle" ? "home" : "sparkle";
-    const label = o.id === "engage" ? "Open it" : o.label;   // the engage pill's label is an instruction
-    const opt = o.id === "engage" ? { ...o, hint: "Look center + raise eyebrows" } : o;
-    return `<div class="col"><div class="big-opt" ${live ? `data-spot="${spot}"` : ""}>${icon(optIcon(o) || fallback)}`
-      + `<b>${esc(label)}</b>${live ? hintTag(opt, spot) : ""}</div></div>`;
+  // A big card for option o (the backend's spot) placed in column `zone` (what the patient looks at).
+  function bigOpt(o, spot, zone, live, extra = "") {
+    if (!o) return `<div class="col" data-zone="${zone}"></div>`;
+    const engage = o.id === "engage";
+    const label = engage ? "Open it" : o.label;             // the engage pill's label is an instruction
+    const where = { left: "Look left", middle: "Look center", right: "Look right" }[zone];
+    const opt = { ...o, hint: `${where} + raise eyebrows` };
+    const fallback = { room: "lamp", talk: "chat", engage: "target", home: "home" }[o.id] || "sparkle";
+    return `<div class="col" data-zone="${zone}"><div class="big-opt ${extra}" ${live ? `data-spot="${spot}"` : ""}>`
+      + `${icon(optIcon(o) || fallback)}<b>${esc(label)}</b>${live ? hintTag(opt, spot) : ""}</div></div>`;
   }
+  const bigCard = (d, spot, live = true) => bigOpt(d[spot], spot, spot, live);
   const bigCols = (d, live) => `<div class="cols">${bigCard(d, "left", live)}${bigCard(d, "middle", live)}${bigCard(d, "right", live)}</div>`;
+  // Home + suggestion: Room Controls in the LEFT column, Talk to AI / Open it in the RIGHT column
+  // (it is still the backend's "middle" spot: web/webgaze.js maps the right column to it).
   function bigHome(h, live) {
-    const room = h.left ? `<div class="big-opt" ${live ? 'data-spot="left"' : ""}>${icon(optIcon(h.left) || "lamp")}`
-      + `<b>${esc(h.left.label)}</b>${live ? hintTag(h.left, "left") : ""}</div>` : "";
-    const talk = h.middle ? `<div class="big-opt talk-big" ${live ? 'data-spot="middle"' : ""}>${icon(optIcon(h.middle) || "chat")}`
-      + `<b>${esc(h.middle.label)}</b>${live ? hintTag(h.middle, "middle") : ""}</div>` : "";
-    return `<div class="cols home-cols"><div class="col top">${room}</div>`
-      + `<div class="col mid">${CELESTIAL}<h1 class="hero">${esc(h.title)}</h1>${sub(h)}${talk}</div><div class="col"></div></div>`;
+    return `<div class="cols home-cols">${bigOpt(h.left, "left", "left", live)}`
+      + `<div class="col mid" data-zone="middle">${CELESTIAL}<h1 class="hero">${esc(h.title)}</h1>${sub(h)}</div>`
+      + `${bigOpt(h.middle, "middle", "right", live, "talk-big")}</div>`;
   }
   function bigWin(d) {
+    if (d.screen === "suggestion")
+      return `${chip(d)}<h1>${esc(d.title)}</h1>${sub(d)}<div class="cols">${bigOpt(d.left, "left", "left", true)}`
+        + `<div class="col" data-zone="middle"></div>${bigOpt(d.middle, "middle", "right", true, "talk-big")}</div>`;
     const instr = d.screen === "nurse" && (d.left || d.right || d.middle)
       ? `<p class="big-instr">${icon("brows", "instr-i")}${esc(d.footer || "Look at an answer and raise your eyebrows.")}</p>` : "";
     return `${chip(d)}<h1>${esc(d.title)}</h1>${sub(d)}${bigCols(d, true)}${instr}${dots(d.page)}`;

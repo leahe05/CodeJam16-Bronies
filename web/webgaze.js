@@ -8,7 +8,11 @@
  *      left third / centre third / right third of the screen, with a dead band so jitter at a border
  *      doesn't flip it. The zone is POSTed to /api/gaze ~10x a second; the backend's selection engine
  *      (dwell, eyebrow confirm, long raise = Call Nurse) does the rest, exactly as with the Python gaze.
- *   Keys (operator): R = recalibrate, D = show/hide the gaze dot.
+ *   4. Eyebrows, from the same face points (no Python camera): brow-to-eyelid distance / face height.
+ *      Calibration right after the dot: "Relax" (rest), then "Raise your eyebrows" 3 times. A raise held
+ *      >= CONFIRM_S and released = "confirm" (choose); held >= LONG_S = "emergency" (Call Nurse).
+ *      Eyes open = eyelid gap / eye width (for the agent's "awake").
+ *   Keys (operator): R = redo gaze, B = redo eyebrows, D = show/hide the gaze ring.
  * WebGazer runs fully offline: its face model is in /web/vendor/webgazer/mediapipe/face_mesh.
  * WebGazer.js is GPLv3 (LGPLv3 for companies valued under $1M): web/vendor/webgazer/LICENSE.md.
  */
@@ -23,9 +27,13 @@
   const LOST_MS = 600;          // no prediction this long = no gaze (null)
   const POINTS = [[.1, .12], [.5, .12], [.9, .12], [.1, .5], [.5, .5], [.9, .5], [.1, .88], [.5, .88], [.9, .88]];
   const SETTLE_MS = 900, RECORD_MS = 1300, SAMPLE_MS = 50;
+  const CONFIRM_S = 0.3, LONG_S = 2.0;      // config.CONFIRM_S / config.EMERGENCY_S
+  const EYES_OPEN = 0.16;                  // eyelid gap / eye width above this = open
 
   let xs = [], ys = [], lastPred = 0, zone = null, running = false, calibrating = false;
   let showDot = params.get("dot") !== "0";
+  // eyebrows: value = brow-to-eyelid distance / face height (smoothed); thr/rel from calibration
+  const brow = { value: 0, thr: null, rel: null, since: null, longSent: false, events: [], face: false, eyesOpen: null };
 
   // ---------------- UI ----------------
   document.documentElement.classList.add("gaze-web");
@@ -77,6 +85,7 @@
     try {
       await begin();
       await calibrate();
+      await calibrateBrows();
     } catch (e) {
       console.error("WG", e);
       st.innerHTML = `<div class="msg"><b>Eye tracking could not start</b><p>${String(e && e.message || e)}</p>`
@@ -107,7 +116,90 @@
     wg.showVideoPreview(false).showPredictionPoints(false).showFaceOverlay(false).showFaceFeedbackBox(false);
     wg.removeMouseEventListeners();                  // never learn from the mouse: only from our dots
     running = true;
+    setInterval(browTick, 33);
     setInterval(send, SEND_MS);
+  }
+
+  // ---------------- face points -> eyebrows + eyes open ----------------
+  // MediaPipe face mesh indices: brows 105 (left) / 334 (right), upper eyelids 159 / 386, lower 145 / 374,
+  // eye corners 33-133 / 362-263, forehead 10 and chin 152 (face height).
+  function facePoints() {
+    try {
+      const p = window.webgazer.getTracker().getPositions();
+      return p && p.length > 400 ? p : null;
+    } catch (e) { return null; }
+  }
+  const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+  function measure() {
+    const p = facePoints();
+    if (!p) return null;
+    const face = dist(p[10], p[152]) || 1;
+    const browGap = ((p[159][1] - p[105][1]) + (p[386][1] - p[334][1])) / 2 / face;
+    const ear = (dist(p[159], p[145]) / dist(p[33], p[133]) + dist(p[386], p[374]) / dist(p[362], p[263])) / 2;
+    return { brow: browGap, eyesOpen: ear > EYES_OPEN };
+  }
+  function browTick() {                   // ~30x a second
+    const m = measure();
+    brow.face = !!m;
+    if (!m) { brow.since = null; brow.longSent = false; return; }
+    brow.eyesOpen = m.eyesOpen;
+    brow.value = brow.value ? 0.6 * brow.value + 0.4 * m.brow : m.brow;
+    if (brow.thr == null || calibrating) return;
+    const now = performance.now();
+    if (brow.since == null) {
+      if (brow.value >= brow.thr) { brow.since = now; brow.longSent = false; }
+    } else if (brow.value < brow.rel) {   // released
+      const held = (now - brow.since) / 1000;
+      if (held >= CONFIRM_S && !brow.longSent) brow.events.push("confirm");
+      brow.since = null;
+    } else if (!brow.longSent && (now - brow.since) / 1000 >= LONG_S) {
+      brow.events.push("emergency");      // Call Nurse at once, and the release won't also choose
+      brow.longSent = true;
+    }
+  }
+  const held = () => (brow.since == null ? 0 : (performance.now() - brow.since) / 1000);
+
+  async function calibrateBrows() {
+    calibrating = true;
+    const cal = el("wg-cal", `<div class="msg"><b>Relax your face</b><p>Look at the screen.</p></div>`);
+    const msg = (t, sub) => { cal.innerHTML = `<div class="msg"><b>${t}</b><p>${sub || ""}</p></div>`; };
+    async function record(ms, pick) {
+      const vals = [], end = performance.now() + ms;
+      while (performance.now() < end) { const m = measure(); if (m) vals.push(m.brow); await wait(40); }
+      return vals.length ? pick(vals) : null;
+    }
+    for (let attempt = 0; attempt < 2; attempt++) {
+      msg("Relax your face", "Look at the screen.");
+      say("Relax your face.");
+      await wait(1500);
+      const rest = await record(2000, median);
+      const peaks = [];
+      for (let i = 0; i < 3; i++) {
+        msg("Raise your eyebrows", `${i + 1} of 3`);
+        say("Raise your eyebrows.");
+        await wait(500);
+        peaks.push(await record(1500, (v) => Math.max(...v)));
+        msg("Relax", "");
+        say("Relax.");
+        await wait(1300);
+      }
+      const peak = median(peaks.filter((v) => v != null));
+      if (rest != null && peak != null && peak - rest > 0.012) {
+        brow.thr = rest + 0.5 * (peak - rest);
+        brow.rel = brow.thr - 0.3 * (brow.thr - rest);
+        console.log("WG brows", { rest, peak, thr: brow.thr });
+        break;
+      }
+      msg("Let's try that again", "Raise your eyebrows as high as you can.");
+      say("Let's try that again. Raise your eyebrows as high as you can.");
+      await wait(2500);
+    }
+    if (brow.thr == null) msg("Eyebrows not detected", "Move closer to the camera, light your face, then press B.");
+    else cal.remove();
+    say(brow.thr == null ? "Eyebrows not detected." : "All set.");
+    brow.since = null; brow.events = [];
+    calibrating = false;
+    if (brow.thr == null) { await wait(4000); cal.remove(); }
   }
 
   // ---------------- calibration: follow the dot ----------------
@@ -134,7 +226,6 @@
     }
     dot.remove();
     cal.remove();
-    say("Thank you.");
     xs = []; ys = [];
     calibrating = false;
   }
@@ -147,6 +238,15 @@
     if (zone === "right" && x > b - d) return "right";
     if (zone === "middle" && x > a - d && x < b + d) return "middle";
     return x < a ? "left" : x > b ? "right" : "middle";
+  }
+  // The option the patient sees in that third of the screen on the current layer (the big layout puts
+  // e.g. Talk to AI, which is the backend's "middle" spot, in the right column on the home screen).
+  function spotFor(z) {
+    if (!z) return null;
+    const layer = { idle: "#home", menu: "#menu", window: "#win" }[document.body.dataset.mode] || "#home";
+    const col = document.querySelector(`${layer} [data-zone="${z}"]`);
+    const opt = col && col.querySelector("[data-spot]");
+    return opt ? opt.dataset.spot : (col ? null : z);
   }
   function send() {
     if (calibrating || !running) return;
@@ -164,13 +264,16 @@
     band.style.opacity = showDot && zone ? "1" : "0";
     band.style.left = zone === "left" ? "0" : zone === "middle" ? "33.33vw" : "66.66vw";
     fetch("/api/gaze", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ spot: zone, x: x && Math.round(x / innerWidth * 1000) / 1000,
-                             y: y && Math.round(y / innerHeight * 1000) / 1000 }) }).catch(() => {});
+      body: JSON.stringify({ spot: spotFor(zone), x: x && Math.round(x / innerWidth * 1000) / 1000,
+                             y: y && Math.round(y / innerHeight * 1000) / 1000, face: brow.face,
+                             eyes_open: brow.eyesOpen, brow: { up: brow.since != null, held_s: held() },
+                             events: brow.events.splice(0) }) }).catch(() => {});
   }
 
   document.addEventListener("keydown", (e) => {
     const k = e.key.toLowerCase();
     if (k === "r" && running && !calibrating) calibrate();
+    if (k === "b" && running && !calibrating) calibrateBrows();
     if (k === "d") showDot = !showDot;
   });
 

@@ -204,9 +204,8 @@ def run_camera(args, live: Live) -> None:
     tracker = FaceTracker(args.camera)
     live.camera_ok = True
     try:
-        web = args.gaze == "web"     # --gaze web: the browser tracks the eyes (web/webgaze.js), not Python
-        gaze = None if web else (calibrate(tracker, live, speaker, args.patient, "gaze")
-                                 if args.recalibrate or not GazeModel.exists(args.patient) else GazeModel.load(args.patient))
+        gaze = (calibrate(tracker, live, speaker, args.patient, "gaze")
+                if args.recalibrate or not GazeModel.exists(args.patient) else GazeModel.load(args.patient))
         settings = None if args.recalibrate else load_settings(args.patient)
         if settings is None:
             settings = calibrate(tracker, live, speaker, args.patient, "gestures")
@@ -221,11 +220,7 @@ def run_camera(args, live: Live) -> None:
                 print("Stopped: the camera stopped giving frames (unplugged, or used by another app?).")
                 break
             now = time.monotonic()
-            if web:
-                spot = live.web_spot(time.monotonic()) if f is not None else None
-                conf = 1.0 if spot else 0.0
-            else:
-                spot, conf = gaze.predict(f)
+            spot, conf = gaze.predict(f)
             events = det.update(f, now)
             brow = {"up": det.above_since is not None, "held_s": det.held(now)}
             awake.set_override(live.eyes_override)
@@ -245,7 +240,7 @@ def run_camera(args, live: Live) -> None:
             if key == ord("q"):
                 print("Stopped: q pressed.")
                 break
-            if key == ord("c") and not web:
+            if key == ord("c"):
                 gaze = calibrate(tracker, live, speaker, args.patient, "gaze")
                 raised = False
             elif key == ord("g"):
@@ -257,6 +252,37 @@ def run_camera(args, live: Live) -> None:
         tracker.close()
         if speaker is not args.speech:
             speaker.close()
+
+
+def web_step(live: Live, awake, now: float):
+    """One tick of --gaze web: the browser's latest gaze zone, face, eyes and eyebrow events -> Live.frame."""
+    g = live.web_gaze
+    face = live.web_fresh(now) and g["face"]
+    spot = live.web_spot(now) if face else None
+    awake.set_override(live.eyes_override)
+    blink = None if not face or g["eyes_open"] is None else (0.0 if g["eyes_open"] else 1.0)
+    live.awake_state = awake.update(None if blink is None else {"eyeBlinkLeft": blink, "eyeBlinkRight": blink}, now)
+    brow = g["brow"] if face else {"up": False, "held_s": 0.0}
+    live.frame(now, spot, live.pop_web_events(), face=face, confidence=1.0 if spot else 0.0, brow=brow)
+    return spot
+
+
+def run_web(args, live: Live) -> None:
+    """--gaze web: no Python camera. The patient page (web/webgaze.js) tracks gaze AND eyebrows with
+    WebGazer and sends them to POST /api/gaze; this loop feeds them to the same selection engine."""
+    from lookat.awake import AwakeDetector
+    awake = AwakeDetector()
+    fps, last = 0.0, time.monotonic()
+    print("Web gaze: waiting for the patient page (calibrate there: the dot, then the eyebrows).")
+    while True:
+        key = cv2.waitKey(30) & 0xFF
+        if key == ord("q"):
+            break
+        now = time.monotonic()
+        spot = web_step(live, awake, now)
+        fps = 0.9 * fps + 0.1 / max(now - last, 1e-3)
+        last = now
+        draw_operator(np.zeros((480, 1000, 3), np.uint8), live, 1.0 if spot else 0.0, None, fps, keyboard=False)
 
 
 def run_keyboard(args, live: Live) -> None:
@@ -293,8 +319,8 @@ def main() -> None:
     ap.add_argument("--keyboard", action="store_true", help="no camera: test with the keyboard")
     ap.add_argument("--port", type=int, default=config.PAGE_PORT)
     ap.add_argument("--gaze", choices=("camera", "web"), default="camera",
-                    help="camera = Python gaze (left/center/right calibration); "
-                         "web = WebGazer in the patient page tracks where on the screen you look (big layout)")
+                    help="camera = Python gaze + eyebrows (left/center/right calibration); "
+                         "web = the patient page tracks gaze AND eyebrows with WebGazer (no Python camera, big layout)")
     ap.add_argument("--voice", choices=("edge", "page", "windows", "off"), default="edge",
                     help="edge = Microsoft natural voice from this laptop (internet); "
                          "page = the patient page speaks (Edge natural voice, click it once); "
@@ -313,7 +339,8 @@ def main() -> None:
     print_urls(args.port)
     if args.gaze == "web":
         print(f"  WEB GAZE: open http://localhost:{args.port}/patient?gaze=web on the patient screen, click once,\n"
-              f"  then follow the dot (R = recalibrate, D = hide the gaze dot).\n")
+              f"  follow the dot, then raise your eyebrows when asked (R = redo gaze, B = redo eyebrows,\n"
+              f"  D = hide the gaze ring). Python does not use the camera in this mode.\n")
     print(f"Lamp: {room.lamp.ip or 'simulated'}   Fan: {room.fan.ip or 'simulated (set FAN_IP for plug 2)'}")
     if args.voice == "edge":
         args.speech = EdgeVoice()
@@ -327,7 +354,7 @@ def main() -> None:
     # names the card you look at, then "Raise your eyebrows" right after it; the choice; new screens
     live.announcer = Announcer(args.speech.say, queue=args.speech)
     try:
-        (run_keyboard if args.keyboard else run_camera)(args, live)
+        (run_keyboard if args.keyboard else run_web if args.gaze == "web" else run_camera)(args, live)
     except KeyboardInterrupt:
         pass
     finally:

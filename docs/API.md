@@ -173,6 +173,7 @@ Examples of each screen are in `lookat/fake_api.py` (`SCREENS`).
 `/patient?gaze=web` runs WebGazer (`web/webgaze.js`, vendored in `web/vendor/webgazer/`, offline) and sends the zone the patient looks at ~10x a second:
 
 ```json
-{"spot": "left", "x": 0.12, "y": 0.44}
+{"spot": "middle", "x": 0.81, "y": 0.44, "face": true, "eyes_open": true,
+ "brow": {"up": false, "held_s": 0.0}, "events": ["confirm"]}
 ```
-`spot` = the screen third (`"left"`, `"middle"`, `"right"`) or `null` (no face / no prediction); `x`, `y` = the smoothed gaze point as a share of the screen (for logs only). Returns `{"ok": true}`. With `--gaze web`, `main.py` uses this spot instead of the Python gaze model (stale after 0.6 s = no gaze); eyebrows (choose, long raise = Call Nurse) still come from the Python camera loop. `?gaze=web` (or `?big=1`) also switches the page to the big three-column layout.
+`spot` = the option the patient looks at (the page maps the screen third to the option drawn there, e.g. Talk to AI = `"middle"` sits in the right column on the home screen) or `null`; `x`, `y` = the smoothed gaze point as a share of the screen (logs only); `face`, `eyes_open`, `brow` = from the same WebGazer face points; `events` = eyebrow events since the last message (`"confirm"` = short raise released, `"emergency"` = long raise). Returns `{"ok": true}`. With `--gaze web`, `main.py` does NOT open a camera: gaze, eyebrows and eyes all come from the page (stale after 0.6 s = no face). `?gaze=web` (or `?big=1`) also switches the page to the big three-column layout.

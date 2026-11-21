@@ -69,7 +69,9 @@ class Live:
         self.awake_state: dict = {"eyes_open": None, "open_ratio": None, "awake": None}   # main.py, from awake.py
         self.memory_view: Optional[dict] = None   # the agent publishes what it learned (panel)
         self.quiet_until: Optional[str] = None
-        self.web_gaze = {"spot": None, "x": None, "y": None, "at": -1e9}   # from the browser (main.py --gaze web)
+        self.web_gaze = {"spot": None, "x": None, "y": None, "at": -1e9,   # from the browser (main.py --gaze web)
+                         "face": False, "eyes_open": None, "brow": {"up": False, "held_s": 0.0}}
+        self.web_events: list = []      # eyebrow events from the browser, taken by main.py's web loop
 
     # ----- camera loop ----------------------------------------------------
     def frame(self, now: float, spot: Optional[str], events=(), face: bool = True, confidence: float = 0.0,
@@ -295,12 +297,27 @@ class Live:
     WEB_GAZE_FRESH_S = 0.6
 
     def gaze_action(self, body: dict) -> dict:
+        """The browser's gaze zone + face + eyebrows (web/webgaze.js). events: ["confirm"] / ["emergency"]."""
         spot = body.get("spot")
         if spot not in (None, "left", "middle", "right"):
             return {"ok": False, "error": "spot must be left, middle, right or null"}
+        events = [e for e in (body.get("events") or []) if e in ("confirm", "emergency")]
+        brow = body.get("brow") or {}
         with self.lock:
-            self.web_gaze = {"spot": spot, "x": body.get("x"), "y": body.get("y"), "at": self.now()}
+            self.web_gaze = {"spot": spot, "x": body.get("x"), "y": body.get("y"), "at": self.now(),
+                             "face": bool(body.get("face", spot is not None)),
+                             "eyes_open": body.get("eyes_open"),
+                             "brow": {"up": bool(brow.get("up")), "held_s": float(brow.get("held_s") or 0.0)}}
+            self.web_events += events
         return {"ok": True}
+
+    def pop_web_events(self) -> list:
+        with self.lock:
+            out, self.web_events = self.web_events, []
+        return out
+
+    def web_fresh(self, now: float) -> bool:
+        return now - self.web_gaze["at"] <= self.WEB_GAZE_FRESH_S
 
     def web_spot(self, now: float) -> Optional[str]:
         """The browser's latest gaze zone, or None when it is stale (page closed, face lost)."""
