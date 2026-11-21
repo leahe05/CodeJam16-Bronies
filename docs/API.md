@@ -170,9 +170,9 @@ Examples of each screen are in `lookat/fake_api.py` (`SCREENS`).
 
 ---
 
-## 4. `POST /api/gaze`: browser eye tracking (`main.py --gaze web`)
+## 4. `POST /api/gaze`: browser eye tracking (`main.py`, default `--gaze web`)
 
-`/patient?gaze=web` runs WebGazer (`web/webgaze.js`, vendored in `web/vendor/webgazer/`, offline) and sends the zone the patient looks at ~10x a second:
+With `main.py --gaze web` (the default) `/patient` redirects to `/patient?gaze=web`, which runs WebGazer (`web/webgaze.js`, vendored in `web/vendor/webgazer/`, offline) and sends the zone the patient looks at ~10x a second:
 
 ```json
 {"spot": "middle", "x": 0.81, "y": 0.44, "face": true, "eyes_open": true,

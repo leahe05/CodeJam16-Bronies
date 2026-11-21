@@ -61,3 +61,14 @@ def test_web_mode_long_raise_calls_the_nurse_and_no_face_means_no_gaze():
     now[0] = 2.0
     client.post("/api/gaze", json={"spot": "left", "face": False})
     assert web_step(live, AwakeDetector(), 2.0) is None
+
+
+def test_patient_page_opens_with_web_gaze_when_main_uses_it():
+    from fastapi.testclient import TestClient
+    live = Live(Room(lamp_ip="", fan_ip="", plug_factory=SimPlug))
+    c = TestClient(make_app(live))
+    assert c.get("/patient", follow_redirects=False).status_code == 200          # camera mode: as is
+    live.gaze_mode = "web"
+    r = c.get("/patient?theme=day", follow_redirects=False)
+    assert r.status_code in (302, 307) and r.headers["location"] == "/patient?gaze=web&theme=day"
+    assert c.get("/patient?gaze=web", follow_redirects=False).status_code == 200

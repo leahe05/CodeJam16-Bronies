@@ -76,8 +76,19 @@ def make_app(backend, title: str = "LookAt", web_dir: str = WEB_DIR):
         api = API_FOR_PAGE[name]
         return HTMLResponse(f"<h1>No {name} page yet</h1><p>Data: <a href='{api}'>{api}</a> (docs/API.md)</p>")
 
+    from fastapi.responses import RedirectResponse
+
+    @app.get("/patient")
+    def patient(request: Request):
+        # main.py --gaze web (the default): /patient opens with the page's own eye tracking (WebGazer)
+        if getattr(backend, "gaze_mode", None) == "web" and "gaze" not in request.query_params:
+            q = "&".join(f"{k}={v}" for k, v in request.query_params.items())
+            return RedirectResponse("/patient?gaze=web" + ("&" + q if q else ""))
+        return page("patient")
+
     for name in PAGES:
-        app.add_api_route(f"/{name}", (lambda n: lambda: page(n))(name), methods=["GET"])
+        if name != "patient":
+            app.add_api_route(f"/{name}", (lambda n: lambda: page(n))(name), methods=["GET"])
 
     @app.get("/")
     def index():

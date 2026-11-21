@@ -1,6 +1,8 @@
 """LookAt: the real program.
 
-    py -3.11 main.py --patient NAME [--recalibrate] [--camera 0] [--voice edge|page|windows|off]
+    py -3.11 main.py --patient NAME [--voice edge|page|windows|off]
+        default --gaze web: the patient page (/patient) tracks gaze AND eyebrows itself (WebGazer, big layout)
+    py -3.11 main.py --patient NAME --gaze camera [--recalibrate] [--camera 0]   (the old Python gaze)
     py -3.11 main.py --patient NAME --keyboard      (no camera: test with the keyboard)
 
 Starts the web server (Lea's pages + the JSON API, docs/API.md), the plugs (lamp,
@@ -318,7 +320,7 @@ def main() -> None:
     ap.add_argument("--camera", type=int, default=0)
     ap.add_argument("--keyboard", action="store_true", help="no camera: test with the keyboard")
     ap.add_argument("--port", type=int, default=config.PAGE_PORT)
-    ap.add_argument("--gaze", choices=("camera", "web"), default="camera",
+    ap.add_argument("--gaze", choices=("camera", "web"), default="web",
                     help="camera = Python gaze + eyebrows (left/center/right calibration); "
                          "web = the patient page tracks gaze AND eyebrows with WebGazer (no Python camera, big layout)")
     ap.add_argument("--voice", choices=("edge", "page", "windows", "off"), default="edge",
@@ -330,6 +332,7 @@ def main() -> None:
     check_wifi()
     room = Room()
     live = Live(room, patient=args.patient)
+    live.gaze_mode = "camera" if args.keyboard else args.gaze   # web: /patient opens with WebGazer
     from lookat.agent import MODEL, Agent
     from lookat.memory import Memory
     agent = Agent(live, Memory(args.patient))
@@ -338,7 +341,7 @@ def main() -> None:
     server = start_server(live, args.port)
     print_urls(args.port)
     if args.gaze == "web":
-        print(f"  WEB GAZE: open http://localhost:{args.port}/patient?gaze=web on the patient screen, click once,\n"
+        print(f"  WEB GAZE: open http://localhost:{args.port}/patient on the patient screen, click once,\n"
               f"  follow the dot, then raise your eyebrows when asked (R = redo gaze, B = redo eyebrows,\n"
               f"  D = hide the gaze ring). Python does not use the camera in this mode.\n")
     print(f"Lamp: {room.lamp.ip or 'simulated'}   Fan: {room.fan.ip or 'simulated (set FAN_IP for plug 2)'}")

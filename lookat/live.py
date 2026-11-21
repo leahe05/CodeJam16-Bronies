@@ -68,6 +68,7 @@ class Live:
         self.eyes_override: Optional[str] = None
         self.awake_state: dict = {"eyes_open": None, "open_ratio": None, "awake": None}   # main.py, from awake.py
         self.memory_view: Optional[dict] = None   # the agent publishes what it learned (panel)
+        self.gaze_mode = "camera"                  # "web": the patient page tracks gaze itself (main.py --gaze web)
         self.agent_status = "Starting"             # the agent: what it is doing / why it is quiet (panel)
         self.demo_week: Optional[Callable] = None  # the agent: loads the labelled demo week ("One week later")
         self.quiet_until: Optional[str] = None
