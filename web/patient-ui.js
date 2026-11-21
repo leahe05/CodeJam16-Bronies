@@ -10,6 +10,8 @@
  *          content cross-fades (.win-in.swap). Leaving: #win.closing, then hidden.
  * body[data-mode] = "idle" | "menu" | "window" tells the CSS which layer is in front.
  * html[data-theme] = "day" (07:00-17:00 on the backend clock) | "night"; it cross-fades when it changes.
+ * Calibration (overlay.kind "calibrate"): drawn as an EMPTY check-in window, so the 3 targets are exactly
+ * where the real check-in cards are; the target card glows with a dot. body[data-cal] is set meanwhile.
  */
 (function () {
   "use strict";
@@ -60,6 +62,24 @@
     // slow cross-fade between the two looks (instant on first load or with ?noanim)
     if (!root.dataset.theme || root.classList.contains("noanim") || !document.startViewTransition) set();
     else document.startViewTransition(set);
+  }
+
+  // ---------------- calibration ----------------
+  // The patient is calibrated on the card positions, so draw a real check-in screen with blank cards.
+  // Same parts as a typical check-in (badge, title, picture, 2 cards, centre card) so nothing moves.
+  function calibrationView(d) {
+    const ov = d && d.overlay;
+    if (!ov || ov.kind !== "calibrate") return d;
+    const blank = (spot) => ({ id: "cal-" + spot, label: " ", hint: " ", icon: "target" });
+    return {
+      ...d, screen: "checkin", badge: "Setting up", title: ov.text || "", subtitle: null, icon: "target", page: null,
+      left: blank("left"), middle: blank("middle"), right: blank("right"),
+      focus: null, overlay: null, calibrate: ov.spot || "none",
+    };
+  }
+  function markTarget(d) {
+    document.body.dataset.cal = d.calibrate ? "on" : "";
+    document.querySelectorAll("#win [data-spot]").forEach((el) => el.classList.toggle("cal-target", el.dataset.spot === d.calibrate));
   }
 
   // ---------------- pieces ----------------
@@ -156,6 +176,7 @@
     document.body.dataset.mode = mode;
     document.body.dataset.screen = kind;
     $("bar").classList.toggle("gone", d.show_call_nurse === false);
+    markTarget(d);
   }
 
   function start() {
@@ -164,7 +185,7 @@
       + '<main id="stage"><section id="home"></section><section id="menu"></section><section id="win"></section></main>'
       + `<footer id="bar">${icon("bell", "bar-i")}<b>Call Nurse</b><span class="tx">Long eyebrow raise anywhere</span></footer>`);
     applyTheme(themeFor(null));   // best guess before the first answer, so the page doesn't flash
-    LookAt.start(render, { onData: (d) => applyTheme(themeFor(d)) });
+    LookAt.start(render, { view: calibrationView, onData: (d) => applyTheme(themeFor(d)) });
   }
 
   window.PatientUI = { start };

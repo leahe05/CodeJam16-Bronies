@@ -147,6 +147,12 @@ class Fake:
         f = FOCUS[int(elapsed // (CYCLE_S / 2.5)) % len(FOCUS)]
         focus = {"spot": f[0], "state": f[1]} if f and base.get(f[0]) else None
         overlay = None
+        if self.still == "calibrate":   # preview the calibration overlay: left, middle, right, eyebrows
+            steps = [("Look at the LEFT card", "left"), ("Look at the MIDDLE card", "middle"),
+                     ("Look at the RIGHT card", "right"), ("Raise your eyebrows", None)]
+            text, spot = steps[int(elapsed // 3) % len(steps)]
+            overlay = {"kind": "calibrate", "text": text, "spot": spot}
+            focus = None
         if time.time() < self.overlay_until:
             overlay = {"kind": "call_nurse", "text": "Your nurse has been called"}
         up = bool(focus and focus["state"] == "asking")
@@ -280,7 +286,7 @@ def main():
 
     ap = argparse.ArgumentParser(description="Fake LookAt backend for building the pages")
     ap.add_argument("--port", type=int, default=8000)
-    ap.add_argument("--still", help="always show this screen id (idle, checkin, nurse, ...)")
+    ap.add_argument("--still", help="always show this screen id (idle, checkin, nurse, ...; calibrate = the calibration overlay)")
     args = ap.parse_args()
     fake = Fake(args.still)
 
