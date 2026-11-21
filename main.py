@@ -13,6 +13,7 @@ Keyboard mode keys:  a / s / d = look left / center / right   x = look away
                      space = short eyebrow raise   e = long raise (Call Nurse)   q = quit
 """
 import argparse
+import os
 import socket
 import threading
 import time
@@ -288,7 +289,10 @@ def main() -> None:
         cv2.destroyAllWindows()
         server.should_exit = True
         room.close()
-        print("LookAt stopped.")
+        print("LookAt stopped.", flush=True)
+        # end the process for sure: a stuck camera/voice/web thread kept it alive before, holding
+        # port 8000 and the camera, so the next start failed with "port already in use"
+        os._exit(0)
 
 
 if __name__ == "__main__":
