@@ -316,13 +316,22 @@ def make_app(fake: Fake):
     @app.post("/api/nurse/{path:path}")
     async def api_nurse_post(path: str, request: Request):
         body = await _json(request)
-        return _public(fake.nurse_action(path, body))
+        return _public(_safe(lambda: fake.nurse_action(path, body)))
 
     @app.post("/api/demo")
     async def api_demo(request: Request):
-        return fake.demo_action(await _json(request))
+        body = await _json(request)
+        return _safe(lambda: fake.demo_action(body))
 
     return app
+
+
+def _safe(handler):
+    """Bad input (e.g. "setpoint_c": "abc") -> {"ok": false}, never a server error."""
+    try:
+        return handler()
+    except (TypeError, ValueError) as e:
+        return {"ok": False, "error": f"bad value: {e}"}
 
 
 async def _json(request):

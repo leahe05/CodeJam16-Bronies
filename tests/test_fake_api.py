@@ -44,6 +44,13 @@ def test_cold_setpoint_creates_flag():
     assert len(f.alerts) == n + 1 and f.alerts[0]["kind"] == "flag"
 
 
+def test_bad_numbers_fail_cleanly():
+    from lookat.fake_api import _safe
+    f = Fake()
+    assert _safe(lambda: f.nurse_action("room", {"setpoint_c": "abc"}))["ok"] is False
+    assert _safe(lambda: f.demo_action({"action": "set_temp", "value": None}))["ok"] is False
+
+
 def test_unknown_actions_fail_cleanly():
     f = Fake()
     assert not f.nurse_action("nope", {})["ok"]
