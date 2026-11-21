@@ -16,6 +16,7 @@ Every timestamp comes from lookat.clock (the demo can jump to 2 AM).
 """
 import json
 import os
+import threading
 from collections import Counter
 from typing import Optional
 
@@ -25,6 +26,7 @@ DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 
 LISTS = ("facts", "actions", "questions", "suggestions", "checkins", "pages", "deferred", "nurse_visits",
          "routines")   # routines: approved by the patient (lookat/routines.py)
 NIGHT_SILENCE = 3
+_SAVE_LOCK = threading.RLock()
 HIDE_AFTER = 5
 NEVER_HIDE = ("Something else", "Return to main menu", "Nurse")
 WARM_DEFAULT_C = 23.0
@@ -51,11 +53,14 @@ class Memory:
 
     # ----- writing ----------------------------------------------------------
     def save(self) -> None:
-        os.makedirs(os.path.dirname(self.path), exist_ok=True)
-        tmp = self.path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(self.data, f, indent=1, ensure_ascii=False)
-        os.replace(tmp, self.path)                # atomic: a crash never leaves half a file
+        # one save at a time: the agent and the routine scheduler both save, from different threads,
+        # through the same .tmp file
+        with _SAVE_LOCK:
+            os.makedirs(os.path.dirname(self.path), exist_ok=True)
+            tmp = self.path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(self.data, f, indent=1, ensure_ascii=False)
+            os.replace(tmp, self.path)            # atomic: a crash never leaves half a file
 
     def log(self, kind: str, item: dict) -> dict:
         item = {"time": clock.now().isoformat(timespec="seconds"), **item}
