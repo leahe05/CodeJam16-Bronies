@@ -72,6 +72,9 @@ class Live:
         self.last_visit: Optional[str] = None
         self.summary: Optional[str] = None
         self.eyes_override: Optional[str] = None
+        self.awake_state: dict = {"eyes_open": None, "open_ratio": None, "awake": None}   # main.py, from awake.py
+        self.memory_view: Optional[dict] = None   # the agent publishes what it learned (panel)
+        self.quiet_until: Optional[str] = None
 
     # ----- camera loop ----------------------------------------------------
     def frame(self, now: float, spot: Optional[str], events=(), face: bool = True, confidence: float = 0.0,
@@ -194,11 +197,12 @@ class Live:
         fan = r["fan"]
         return {"v": 1, "clock": {"time": clock.hhmm(), "day": clock.now().strftime("%a %b %d"), "demo": clock.demo},
                 "perception": {"temp_c": r["temp_c"], "setpoint_c": r["setpoint_c"], "lamp_on": r["lamp_on"],
-                               "fan_on": r["fan_on"], "eyes_open": None, "awake": None, "open_ratio": None,
+                               "fan_on": r["fan_on"], "eyes_open": self.awake_state.get("eyes_open"),
+                               "awake": self.awake_state.get("awake"), "open_ratio": self.awake_state.get("open_ratio"),
                                "face": self.face, "last_visit": self.last_visit, "screen": self.sm.kind,
-                               "quiet_until": None},
-                "memory": {"facts": self.facts, "routines": [], "top_options": [], "hidden_options": [],
-                           "night_checkins": True},
+                               "quiet_until": self.quiet_until},
+                "memory": self.memory_view or {"facts": self.facts, "routines": [], "top_options": [],
+                                               "hidden_options": [], "night_checkins": True},
                 "feed": self.feed[-30:],
                 "status": {"camera": self.camera_ok, "lamp": r["lamp"]["online"],
                            "fan": "simulated" if fan["simulated"] else fan["online"],
