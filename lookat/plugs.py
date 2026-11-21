@@ -8,7 +8,9 @@ Each worker has its own thread + asyncio loop. Credentials come from the
 KASA_USER / KASA_PASSWORD environment variables (never printed). After a TP-Link password
 change, a plug that hasn't picked up the new password yet still accepts the old one:
 KASA_OLD_PASSWORD (optional) is tried when a plug refuses KASA_PASSWORD. An offline plug
-logs "PLUG <name> OFFLINE", retries every RETRY_S and never crashes anything.
+logs "PLUG <name> OFFLINE", retries every RETRY_S and never crashes anything. An online plug is
+re-read every HEALTH_S, so one that is unplugged (or switched from the phone) shows the truth
+within seconds; every plug call has a time limit, so a plug that stops answering never hangs.
 Self-test: py -3.11 -m lookat.plugs --ip 172.20.10.2
 """
 import asyncio
@@ -24,6 +26,8 @@ from lookat.state import log_event
 COMMANDS = ("on", "off", "toggle", "flash")
 RETRY_S = 5.0
 TIMEOUT_S = 5
+HEALTH_S = 10.0          # re-read an online plug this often (unplugged -> offline, phone -> state)
+CALL_LIMIT_S = 25.0      # hard limit for one call: a connect may try 2 passwords x (5 s find + 5 s login)
 
 
 class PlugWorker:
@@ -38,6 +42,7 @@ class PlugWorker:
         self._q: "queue.Queue[str]" = queue.Queue()
         self._dev = None
         self._next_try = 0.0
+        self._next_check = 0.0
         self._warned = False
         self._stop = False
         self._thread = threading.Thread(target=self._run, name=f"plug-{name}", daemon=True)
@@ -61,17 +66,23 @@ class PlugWorker:
         loop = asyncio.new_event_loop()
         try:
             if not self.simulated:
-                loop.run_until_complete(self._connect())
+                self._guarded(loop, self._connect())
             while not self._stop:
                 try:
                     cmd = self._q.get(timeout=1.0)
                 except queue.Empty:
-                    if not self.simulated and self._dev is None and time.monotonic() >= self._next_try:
-                        loop.run_until_complete(self._connect())
-                    continue
+                    cmd = None
                 if cmd == "__stop__":
                     break
-                loop.run_until_complete(self._do(cmd))
+                if cmd is not None:
+                    self._guarded(loop, self._do(cmd))
+                elif self.simulated:
+                    continue
+                elif self._dev is None:
+                    if time.monotonic() >= self._next_try:
+                        self._guarded(loop, self._connect())
+                elif time.monotonic() >= self._next_check:
+                    self._guarded(loop, self._check())
         finally:
             if self._dev is not None:
                 try:
@@ -79,6 +90,28 @@ class PlugWorker:
                 except Exception:
                     pass
             loop.close()
+
+    def _guarded(self, loop, coro) -> None:
+        """Run one plug call with a hard time limit. A timeout or any bug drops the session and
+        marks the plug offline (it reconnects by itself); the worker thread never dies."""
+        try:
+            loop.run_until_complete(asyncio.wait_for(coro, CALL_LIMIT_S))
+        except Exception as e:   # noqa: BLE001
+            dev, self._dev = self._dev, None
+            if dev is not None:
+                try:
+                    loop.run_until_complete(asyncio.wait_for(dev.disconnect(), 2))
+                except Exception:   # noqa: BLE001
+                    pass
+            self._next_try = time.monotonic() + RETRY_S
+            self._offline(e)
+
+    async def _check(self) -> None:
+        """Health check: re-read the plug. Raises if it stopped answering (-> _guarded)."""
+        self._next_check = time.monotonic() + HEALTH_S
+        await self._dev.update()
+        self.online = True
+        self._set(bool(self._dev.is_on))
 
     async def _connect(self) -> bool:
         from kasa import Discover
@@ -114,6 +147,7 @@ class PlugWorker:
             self._set(bool(dev.is_on))
             self.online = True
             self._warned = False
+            self._next_check = time.monotonic() + HEALTH_S
             log_event("plug_online", name=self.name, ip=self.ip)
             print(f"PLUG {self.name} online at {self.ip} ({'ON' if self.is_on else 'OFF'})")
             return True

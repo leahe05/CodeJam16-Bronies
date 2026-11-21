@@ -65,5 +65,6 @@ def test_no_face_cancels():
         b.frame(t, "left", [], True)
         t += 0.4
     b.frame(t, None, [], False)
+    b.frame(t + 0.5, None, [], False)      # gone longer than live.FACE_GRACE_S
     s = b.screen_json()
     assert s["focus"] is None and s["face"] is False
