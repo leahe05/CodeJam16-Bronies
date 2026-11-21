@@ -1,255 +1,131 @@
-"""Tests for lookat/machine.py: every rule in CLAUDE.md, with synthetic time."""
+"""Tests for lookat/machine.py (the selection engine), with synthetic time."""
 from lookat import config
-from lookat.machine import ASKING, COOLDOWN, IDLE, QUESTION, ROOM, Machine
+from lookat.machine import ASKING, COOLDOWN, IDLE, Machine
 
 DT = 0.1
+ALL = ("left", "middle", "right")
 
 
-def run(m, t0, t1, spot, events=(), face=True):
-    """Step the machine every DT from t0 (inclusive) to t1 (exclusive). Return all actions."""
-    out = []
-    n = round((t1 - t0) / DT)
-    for i in range(n):
-        out += m.step(round(t0 + i * DT, 3), spot, events, face)
-    return out
+def run(m, start, end, spot, events=(), face=True, active=ALL):
+    """Step every DT from start to end (exclusive); return (actions, next time)."""
+    out, t = [], start
+    while t < end - 1e-9:
+        out += m.step(round(t, 3), spot, events, face, active)
+        t = round(t + DT, 3)
+    return out, t
 
 
-def says(actions):
-    return [a[1] for a in actions if a[0] == "say"]
-
-
-def ask(m, spot, t0=0.0):
-    """Look at spot until it is spoken (DWELL_S). Returns the time after."""
-    t1 = t0 + config.DWELL_S + DT
-    run(m, t0, t1, spot)
-    assert m.state == ASKING
-    return t1
-
-
-Q = {"spoken": "Do you want water or juice?", "left": "Water", "middle": "", "right": "Juice"}
-
-
-# ----- dwell -------------------------------------------------------------
-def test_dwell_speaks_spot_name():
+def test_dwell_locks_the_spot():
     m = Machine()
-    acts = run(m, 0.0, 1.1, "left")
-    assert acts == [("say", "Yes?")]
-    assert m.state == ASKING
+    run(m, 0, config.DWELL_S + DT, "left")
+    assert m.state == ASKING and m.view() == {"spot": "left", "state": "asking"}
 
 
-def test_short_glance_does_nothing():
+def test_no_lock_before_dwell():
     m = Machine()
-    acts = run(m, 0.0, 0.8, "left") + run(m, 0.8, 3.0, None)
-    assert acts == []
-    assert m.state == IDLE
+    run(m, 0, config.DWELL_S - 2 * DT, "left")
+    assert m.state == IDLE and m.view() == {"spot": "left", "state": "dwell"}
 
 
-def test_no_spot_never_asks():
+def test_confirm_selects_and_flashes():
     m = Machine()
-    assert run(m, 0.0, 5.0, None) == []
+    _, t = run(m, 0, 1.5, "right")
+    assert m.step(t, "right", ("confirm",)) == [("select", "right")]
+    assert m.state == COOLDOWN and m.view() == {"spot": "right", "state": "chosen"}
 
 
-def test_switching_spots_restarts_dwell():
+def test_nothing_without_confirm():
     m = Machine()
-    acts = run(m, 0.0, 0.6, "left") + run(m, 0.6, 1.2, "right")
+    acts, _ = run(m, 0, 10, "left")
     assert acts == []
 
 
-# ----- confirm -> fire ---------------------------------------------------
-def test_confirm_left_answers_yes():
+def test_confirm_in_idle_does_nothing():
     m = Machine()
-    t = ask(m, "left")
-    acts = m.step(t, "left", ["confirm"])
-    assert acts == [("answer", "Yes"), ("say", "Yes")]
-    assert m.state == COOLDOWN
+    assert m.step(0, "left", ("confirm",)) == []
 
 
-def test_confirm_right_answers_no():
+def test_look_away_cancels():
     m = Machine()
-    t = ask(m, "right")
-    assert m.step(t, "right", ["confirm"]) == [("answer", "No"), ("say", "No")]
-
-
-def test_confirm_middle_toggles_lamp():
-    m = Machine()
-    t = ask(m, "middle")
-    assert m.step(t, "middle", ["confirm"]) == [("lamp", "toggle")]
-
-
-def test_nothing_happens_without_confirm():
-    m = Machine()
-    acts = run(m, 0.0, 10.0, "left")
-    assert all(a[0] == "say" for a in acts)
-
-
-def test_confirm_while_idle_is_ignored():
-    m = Machine()
-    assert m.step(0.0, "left", ["confirm"]) == []
-    assert m.state == IDLE
-
-
-# ----- cancel ------------------------------------------------------------
-def test_look_away_cancels_ask():
-    m = Machine()
-    t = ask(m, "left")
+    _, t = run(m, 0, 1.5, "left")
     m.step(t, "right")
     assert m.state == IDLE
-    assert m.step(t + DT, "right", ["confirm"]) == []
+    assert m.step(t + DT, "right", ("confirm",)) == []
 
 
-def test_spot_is_locked_while_asking():
+def test_ask_timeout_then_must_look_away():
     m = Machine()
-    t = ask(m, "left")
-    # A confirm arriving on another spot does not answer for that spot.
-    assert m.step(t, "right", ["confirm"]) == []
-
-
-def test_ask_timeout_cancels_and_needs_look_away():
-    m = Machine()
-    t = ask(m, "left")
-    run(m, t, t + config.ASK_TIMEOUT_S + DT, "left")
+    _, t = run(m, 0, 1.0 + config.ASK_TIMEOUT_S + 0.2, "left")
     assert m.state == IDLE
-    # Still staring: no re-ask, confirm does nothing.
-    assert run(m, t + 3.2, t + 6.0, "left") == []
-    assert m.step(t + 6.0, "left", ["confirm"]) == []
-    # Look away and back: asks again.
-    run(m, t + 6.1, t + 6.5, None)
-    assert says(run(m, t + 6.5, t + 7.6, "left")) == ["Yes?"]
+    acts, t = run(m, t, t + 3, "left")
+    assert m.state == IDLE and acts == []
+    run(m, t, t + 0.3, None)
+    run(m, t + 0.3, t + 0.3 + config.DWELL_S + DT, "left")
+    assert m.state == ASKING
 
 
-def test_losing_face_cancels_ask():
+def test_inactive_spot_never_locks():
     m = Machine()
-    t = ask(m, "left")
+    run(m, 0, 3, "right", active=("left", "middle"))
+    assert m.state == IDLE
+
+
+def test_lock_dropped_when_spot_becomes_inactive():
+    m = Machine()
+    _, t = run(m, 0, 1.5, "right")
+    m.step(t, "right", active=("left",))
+    assert m.state == IDLE
+
+
+def test_cooldown_then_look_away_before_choosing_again():
+    m = Machine()
+    _, t = run(m, 0, 1.5, "left")
+    m.step(t, "left", ("confirm",))
+    acts, t = run(m, t + DT, t + 5, "left", ("confirm",))
+    assert acts == []
+    run(m, t, t + 0.3, "middle")
+    acts, _ = run(m, t + 0.3, t + 2, "middle")
+    assert m.state == ASKING
+
+
+def test_long_raise_first_in_every_state():
+    for setup in (0.0, 1.5):          # IDLE, ASKING
+        m = Machine()
+        _, t = run(m, 0, setup, "left")
+        assert m.step(t, "left", ("emergency", "confirm")) == [("call_nurse",)]
+    m = Machine()
+    _, t = run(m, 0, 1.5, "left")
+    m.step(t, "left", ("confirm",))
+    assert m.step(t + DT, "left", ("emergency",)) == [("call_nurse",)]   # COOLDOWN
+
+
+def test_long_raise_works_with_no_active_spots_and_no_face():
+    m = Machine()
+    assert m.step(0, None, ("emergency",), face=False, active=()) == [("call_nurse",)]
+
+
+def test_no_face_cancels_asking():
+    m = Machine()
+    _, t = run(m, 0, 1.5, "left")
     m.step(t, None, face=False)
-    assert m.state == IDLE
-    assert m.step(t + DT, "left", ["confirm"]) == []
+    assert m.state == IDLE and m.view() is None
 
 
-# ----- cooldown ----------------------------------------------------------
-def test_cooldown_blocks_then_returns_to_idle():
+def test_reset_drops_lock_and_needs_look_away():
     m = Machine()
-    t = ask(m, "left")
-    m.step(t, "left", ["confirm"])
-    assert run(m, t + DT, t + config.COOLDOWN_S - DT, "left", ["confirm"]) == []
-    assert m.state == COOLDOWN
-    run(m, t + config.COOLDOWN_S, t + config.COOLDOWN_S + 0.2, None)
+    _, t = run(m, 0, 1.5, "left")
+    m.reset(t)
+    assert m.state == IDLE
+    run(m, t, t + 3, "left")
     assert m.state == IDLE
 
 
-def test_after_cooldown_new_selection_works():
+def test_busy_while_choosing():
     m = Machine()
-    t = ask(m, "middle")
-    m.step(t, "middle", ["confirm"])
-    run(m, t, t + 2.5, None)
-    t2 = ask(m, "middle", t + 2.5)
-    assert m.step(t2, "middle", ["confirm"]) == [("lamp", "toggle")]
-
-
-# ----- question mode -----------------------------------------------------
-def test_start_question_speaks_it():
-    m = Machine()
-    assert m.start_question(Q, 0.0) == [("say", Q["spoken"])]
-    assert m.mode == QUESTION
-
-
-def test_question_spots_use_choices():
-    m = Machine()
-    m.start_question(Q, 0.0)
-    assert says(run(m, 0.0, 1.1, "left")) == ["Water?"]
-
-
-def test_answering_question_returns_to_room():
-    m = Machine()
-    m.start_question(Q, 0.0)
-    t = ask(m, "right")
-    assert m.step(t, "right", ["confirm"]) == [("answer", "Juice"), ("say", "Juice")]
-    assert m.mode == ROOM and m.question is None
-
-
-def test_empty_middle_is_not_selectable():
-    m = Machine()
-    m.start_question(Q, 0.0)
-    assert run(m, 0.0, 5.0, "middle") == []
-
-
-def test_question_times_out():
-    m = Machine()
-    m.start_question(Q, 0.0)
-    acts = run(m, 0.0, config.QUESTION_TIMEOUT_S + 0.2, None)
-    assert ("say", "Question closed") in acts and ("cancel_question",) in acts
-    assert m.mode == ROOM
-
-
-def test_nurse_cancel_returns_to_room():
-    m = Machine()
-    m.start_question(Q, 0.0)
-    assert m.cancel_question(1.0) == [("cancel_question",)]
-    assert m.mode == ROOM
-    assert m.cancel_question(2.0) == []
-
-
-def test_room_meaning_returns_after_question():
-    m = Machine()
-    m.start_question(Q, 0.0)
-    m.cancel_question(1.0)
-    assert says(run(m, 1.0, 2.1, "left")) == ["Yes?"]
-
-
-# ----- middle menu -------------------------------------------------------
-def test_middle_menu_steps_through_items():
-    m = Machine()
-    acts = run(m, 0.0, 8.0, "middle")
-    assert says(acts) == ["Lamp?", "Help?", "Water?", "Pain?"]
-    assert m.state == IDLE
-
-
-def test_confirm_menu_item_sends_it():
-    m = Machine()
-    t = ask(m, "middle")                       # "Lamp?" at 1.0
-    t = 1.0 + 2 * config.MENU_STEP_S + DT      # "Water?" spoken at 4.0
-    run(m, 1.1, t, "middle")
-    assert m.step(t, "middle", ["confirm"]) == [("menu", "Water"), ("say", "Water")]
-
-
-def test_menu_only_in_room_mode():
-    m = Machine()
-    m.start_question({"spoken": "Pick", "left": "A", "middle": "B", "right": "C"}, 0.0)
-    assert says(run(m, 0.0, 8.0, "middle")) == ["B?"]
-
-
-# ----- emergency ---------------------------------------------------------
-EMERGENCY = [("say", "Calling the nurse"), ("lamp", "flash"), ("help",)]
-
-
-def test_emergency_in_idle():
-    m = Machine()
-    assert m.step(0.0, None, ["emergency"]) == EMERGENCY
-    assert m.state == IDLE
-
-
-def test_emergency_during_ask_cancels_it():
-    m = Machine()
-    t = ask(m, "left")
-    assert m.step(t, "left", ["emergency"]) == EMERGENCY
-    assert m.state == IDLE
-    assert m.step(t + DT, "left", ["confirm"]) == []
-
-
-def test_emergency_during_cooldown():
-    m = Machine()
-    t = ask(m, "left")
-    m.step(t, "left", ["confirm"])
-    assert m.step(t + DT, "left", ["emergency"]) == EMERGENCY
-
-
-def test_emergency_keeps_question_open():
-    m = Machine()
-    m.start_question(Q, 0.0)
-    assert m.step(1.0, None, ["emergency"]) == EMERGENCY
-    assert m.mode == QUESTION and m.question is not None
-
-
-def test_emergency_beats_confirm_in_same_frame():
-    m = Machine()
-    t = ask(m, "left")
-    assert m.step(t, "left", ["confirm", "emergency"]) == EMERGENCY
+    assert not m.busy
+    run(m, 0, 0.5, "left")
+    assert m.busy
+    run(m, 0.5, 0.6, None)
+    assert not m.busy
+    run(m, 0.6, 2.0, "right", active=("left", "middle"))   # staring at an empty spot
+    assert not m.busy and m.view() is None
