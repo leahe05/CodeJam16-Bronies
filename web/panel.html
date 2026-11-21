@@ -148,6 +148,9 @@
         <button data-a="eyes" data-v="open">Open</button>
         <button data-a="eyes" data-v="closed">Closed</button>
       </div>
+      <div class="ctl"><label>Memory</label>
+        <button data-a="one_week_later">One week later</button>
+      </div>
       <div class="ctl"><button class="danger" id="reset">Reset demo</button></div>
       <div id="toast"></div>
     </div>
@@ -184,7 +187,7 @@
     }
     return eps.reverse();
   }
-  const TRIGGER = { warm_night: "Warm at night", warm: "Room is warm", cold: "Room is cold", patient: "Patient asked", extreme: "Unsafe temperature",
+  const TRIGGER = { warm_night: "Warm at night", warm: "Room is warm", cold: "Room is cold", habit: "Usual time", patient: "Patient asked", extreme: "Unsafe temperature",
                     room_change: "Room changed", checkin: "Check-in" };
 
   function renderFeed(feed) {
@@ -227,7 +230,10 @@
     const chips = (a, cls = "") => a && a.length ? `<div class="chips">${a.map((o) => `<span class="chip ${cls}">${esc(o)}</span>`).join("")}</div>` : '<div class="no">none yet</div>';
     $("learned").innerHTML = `<h2>Learned from choices</h2><div class="sub">Picked most</div>${chips(m.top_options)}`
       + `<div class="sub">Never picked (hidden)</div>${chips(m.hidden_options, "hid")}`
-      + (m.routines && m.routines.length ? `<div class="sub">Routines</div><ul class="facts">${m.routines.map((r) => `<li>${esc(r.text)} <span class="src">${esc(r.status)}</span></li>`).join("")}</ul>` : "")
+      + `<div class="sub">Habits it noticed</div>` + (m.routines && m.routines.length
+        ? `<ul class="facts">${m.routines.map((r) => `<li>${esc(r.text)} <span class="src agent">${esc(r.status)}</span>`
+          + (r.evidence ? `<div class="sub" style="margin:4px 0 0">${esc(r.evidence)}</div>` : "") + `</li>`).join("")}</ul>`
+        : '<div class="no">none yet (same switch at about the same time on 3+ days)</div>')
       + `<div class="sub">Night check-ins</div><div>${m.night_checkins === false ? '<span class="no">off (ignored 3× in a row)</span>' : '<span class="yes">on</span>'}</div>`;
     renderFeed(d.feed || []);
   }

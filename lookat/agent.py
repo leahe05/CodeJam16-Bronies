@@ -7,6 +7,8 @@ WHEN is decided by deterministic triggers (cheap, explainable, demo-safe):
     cold         awake + room <= memory "feels cold below"
     room_change  the room changed (temperature, time of day, a switch by someone else, waking up): Claude
                  decides whether it is worth a suggestion
+    habit        it is about the time of a habit memory found (e.g. usual bedtime: lamp off ~22:00) and the
+                 switch isn't in that state yet: offer it (from 15 min before to 30 min after)
     extreme      room >= 30 or <= 16 °C: page the nurse at once (awake or not)
 A suggestion shows its 2 concrete choices on the notification ("Turn the fan off" / "Ask nurse for a blanket"),
 "Not now" in the center; ignoring it fades it. Ignored / declined topics back off (respecting silence).
@@ -59,6 +61,7 @@ IGNORED_BACKOFF_MIN = 30     # ...and that topic waits 30, then 60, 120, 240 min
 DECLINED_BACKOFF_MIN = 60    # "No, thanks." / Return to main menu: that topic waits an hour
 OWN_CHOICE_MIN = 30          # don't offer to undo a switch the patient chose themselves this recently...
 CLEARLY_C = 1.5              # ...unless the room is now clearly past their threshold (e.g. 18 °C for "cold below 20")
+HABIT_BEFORE_MIN, HABIT_AFTER_MIN = 15, 30   # offer a habit from 15 min before its usual time to 30 min after
 EXTREME_HIGH_C = 30.0        # outside these the room is unsafe (or the sensor is wrong): page the nurse at once,
 EXTREME_LOW_C = 16.0         # awake or not, screen or not
 
@@ -87,6 +90,9 @@ topic they ignored or declined recently (RECENT SUGGESTIONS in get_context).
 the fan on, do not offer to turn it off unless they are now clearly cold and a while has passed.
 - What you can fix: the fan cools the room only 1-2 °C, the lamp gives light. A blanket, water, position, \
 pillows, pain or anything else needs the nurse.
+- HABIT lines in get_context are habits memory found in the patient's own switches over several days (e.g. \
+"Usual bedtime: lamp off around 22:02"). Use them: around that time, offer it ("It's about your usual \
+bedtime." -> "Turn the lamp off" / "Not yet"); at other times, let them shape what you offer.
 - remember() only a durable preference the patient has shown at least twice, on different occasions, or \
 chose to tell you. One or two switches are not a preference (the team also tests the room).
 - A suggestion shows its 2 options right on the notification ("Not now" is always in the center). \
@@ -237,6 +243,7 @@ class Agent:
         self._stop = False
         self.memory.load_chart(DEMO_CHART)
         live.listeners.append(self.events.put)
+        live.demo_week = self.load_demo_week
         live.room.on_action.append(self._log_action)
         self._publish()
 
@@ -385,6 +392,32 @@ class Agent:
             self.seen = now                         # the patient's own switches update quietly
         return out
 
+    def habit_due(self, p: dict, L: dict) -> Optional[tuple]:
+        """("habit", reason) when it is about the time of a habit and its switch isn't in that state yet."""
+        from lookat.memory import _diff, _mins
+        now = _mins(p["time"])
+        for h in L["habits"]:
+            d = _diff(now, _mins(h["usual"]))
+            if not -HABIT_BEFORE_MIN <= d <= HABIT_AFTER_MIN or p[f"{h['device']}_on"] == (h["cmd"] == "on"):
+                continue
+            if not self._cooled_down("habit") or (p["night"] and not L["night_checkins_enabled"]):
+                return None
+            self.habit = h
+            return "habit", (f"Habit from memory: {h['text']} (on {h['days']} days: {', '.join(h['times'])}). "
+                             f"It is {p['time']} and the {h['device']} is still {'on' if h['cmd'] == 'off' else 'off'}. "
+                             f"Offer it now in one suggestion, e.g. options \"Turn the {h['device']} {h['cmd']}\" / "
+                             "\"Not yet\". If they choose it, act() then finish (no need to check the room).")
+        return None
+
+    def load_demo_week(self) -> str:
+        """Demo "One week later": a labelled week of bedtimes, so memory finds the habit (the real code runs on it)."""
+        n = self.memory.load_demo_week()
+        habits = self.memory.habits()
+        self._publish()
+        self.feed("learned", "One week later: " + ("; ".join(h["text"] for h in habits) if habits else "no habit yet"),
+                  f"demo week loaded ({n} labelled actions)" if n else "demo week was already loaded", fallback=False)
+        return "ok"
+
     def status(self, p: dict) -> str:
         """Why the agent is quiet right now, or what it is doing (one line for the panel)."""
         live = self.live
@@ -451,6 +484,9 @@ class Agent:
             return "cold", (f"Room {p['temp_c']} °C <= {cold} °C, memory: feels cold below {cold} °C"
                             + (f"; they turned the fan on themselves at {own}, so ask kindly, don't assume" if own else "")
                             + ". Make one suggestion now.")
+        habit = self.habit_due(p, L)
+        if habit:
+            return habit
         changes = self.room_changes(p)
         if changes and self.client is not None and time.monotonic() - self.last_change_look >= CHANGE_GAP_S \
                 and not self._backed_off("room_change") and (L["night_checkins_enabled"] or not p["night"]):
@@ -538,6 +574,16 @@ class Agent:
                                      "reason": f"Room {self.live.room.state()['temp_c']} °C, above their warm threshold.",
                                      "urgency": "normal", "why": "nothing more I can switch"})
             c("finish", {"summary": f"Warm check-in: {ans}", "why": "respect the answer"})
+        elif name == "habit":
+            h = getattr(self, "habit", None) or {}
+            dev, cmd = h.get("device", "lamp"), h.get("cmd", "off")
+            ans = c("suggest", {"text": "It's about your usual bedtime." if h.get("bedtime")
+                                else f"You usually turn the {dev} {cmd} about now.",
+                                "question": f"Turn the {dev} {cmd}?", "options": [f"Turn the {dev} {cmd}", "Not yet"],
+                                "if_yes": None, "why": h.get("text", "habit from memory")})
+            if action_in(ans) == (dev, cmd):
+                c("act", {"device": dev, "cmd": cmd, "why": "the patient chose it"})
+            c("finish", {"summary": f"Habit ({h.get('text', '')}): {ans}", "why": "done"})
         elif name == "cold":
             fan = self.live.room.state()["fan_on"]
             opts = ["Turn the fan off", "Ask nurse for a blanket"] if fan else ["Ask nurse for a blanket", "No, thanks."]
@@ -780,7 +826,9 @@ class Agent:
         with self.live.lock:
             self.live.facts = [{"text": f["text"], "source": f["source"]} for f in self.memory.data["facts"]]
             self.live.memory_view = {
-                "facts": self.live.facts, "routines": [],
+                "facts": self.live.facts,
+                "routines": [{"text": h["text"], "status": "habit", "evidence": ", ".join(h["times"])}
+                             for h in L["habits"]],
                 "top_options": L["option_ranking"].get("comfort", [])[:3],
                 "hidden_options": L["hidden_options"].get("comfort", []),
                 "night_checkins": L["night_checkins_enabled"]}

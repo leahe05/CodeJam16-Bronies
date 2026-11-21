@@ -464,3 +464,44 @@ def test_chart_reaches_an_older_memory(tmp_path):
     m.add_fact("Runs warm at night", "comfort", "chart", {"runs_warm": True})
     m.load_chart(DEMO_CHART)
     assert len(m.data["facts"]) == len(DEMO_CHART) and m.learn()["warm_night_above_c"] == 23
+
+
+# ----- habits (memory finds them, the agent offers them at that time) ----------------------------
+def test_memory_finds_bedtime_from_several_nights(tmp_path):
+    m = Memory("h", str(tmp_path))
+    for day, t in (("2026-11-15", "21:55"), ("2026-11-16", "22:10"), ("2026-11-17", "23:55"), ("2026-11-18", "22:00")):
+        m.log("actions", {"device": "lamp", "cmd": "off", "by": "patient"})
+        m.data["actions"][-1]["time"] = f"{day}T{t}:00"
+    m.log("actions", {"device": "lamp", "cmd": "off", "by": "nurse"})        # the nurse's switches don't count
+    m.data["actions"][-1]["time"] = "2026-11-19T22:00:00"
+    (h,) = m.habits()
+    assert h["bedtime"] and h["days"] == 3 and h["usual"] == "22:00" and "Usual bedtime" in h["text"]
+
+
+def test_habit_across_midnight(tmp_path):
+    m = Memory("h", str(tmp_path))
+    for day, t in (("2026-11-15", "23:50"), ("2026-11-16", "00:10"), ("2026-11-17", "23:55")):
+        m.log("actions", {"device": "lamp", "cmd": "off", "by": "patient"})
+        m.data["actions"][-1]["time"] = f"{day}T{t}:00"
+    assert m.habits()[0]["usual"] == "23:55"
+
+
+def test_one_week_later_then_bedtime_offer(tmp_path):
+    agent, live, room, screens = make(tmp_path, answers=["Turn the lamp off"], at="21:55", temp=21.0)
+    assert live.demo_action({"action": "one_week_later"})["ok"]
+    assert any(h["bedtime"] for h in agent.memory.habits())
+    assert live.memory_view["routines"][0]["status"] == "habit"
+    room.execute("lamp", "on", by="nurse")
+    name, why = agent.trigger(agent.perceive())
+    assert name == "habit" and "Usual bedtime" in why
+    agent.episode(name, why)
+    assert not room.state()["lamp_on"] and agent.memory.load_demo_week() == 0     # loaded once
+
+
+def test_no_habit_offer_when_already_done_or_off_hours(tmp_path):
+    agent, live, room, _ = make(tmp_path, at="21:55", temp=21.0)
+    agent.load_demo_week()
+    assert agent.trigger(agent.perceive()) is None          # lamp already off
+    room.execute("lamp", "on", by="nurse")
+    clock.set_time("20:00")
+    assert agent.trigger(agent.perceive()) is None          # too early

@@ -69,6 +69,7 @@ class Live:
         self.awake_state: dict = {"eyes_open": None, "open_ratio": None, "awake": None}   # main.py, from awake.py
         self.memory_view: Optional[dict] = None   # the agent publishes what it learned (panel)
         self.agent_status = "Starting"             # the agent: what it is doing / why it is quiet (panel)
+        self.demo_week: Optional[Callable] = None  # the agent: loads the labelled demo week ("One week later")
         self.quiet_until: Optional[str] = None
         self.web_gaze = {"spot": None, "x": None, "y": None, "at": -1e9,   # from the browser (main.py --gaze web)
                          "face": False, "eyes_open": None, "brow": {"up": False, "held_s": 0.0}}
@@ -328,6 +329,11 @@ class Live:
     # ----- POST /api/demo ---------------------------------------------------
     def demo_action(self, body: dict) -> dict:
         action, value = body.get("action"), body.get("value")
+        if action == "one_week_later":           # outside the lock: the agent writes memory and the panel
+            if self.demo_week is None:
+                return {"ok": False, "error": "the agent is not running"}
+            self.demo_week()
+            return {"ok": True}
         with self.lock:
             if action == "set_time":
                 clock.set_time(str(value))
@@ -343,8 +349,6 @@ class Live:
                 self._reset_state()
                 self.room.set_temp(22.0)
                 log_event("demo_reset")
-            elif action == "one_week_later":
-                return {"ok": False, "error": "one week later comes with the agent (M4-2)"}
             else:
                 return {"ok": False, "error": "unknown action"}
             return {"ok": True}

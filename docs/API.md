@@ -163,7 +163,7 @@ Examples of each screen are in `lookat/fake_api.py` (`SCREENS`).
 | Body | Does |
 |---|---|
 | `{"action": "set_time", "value": "02:00"}` | demo clock to 02:00 (also `"07:30"`, `"21:59"`) |
-| `{"action": "one_week_later"}` | loads the labelled demo week (routine evidence) |
+| `{"action": "one_week_later"}` | loads the labelled demo week (6 nights of lamp off around 22:00, lamp on around 17:30): memory finds the habits, `memory.routines` lists them (`status: "habit"`, `evidence` = the times) and the agent offers them at that time |
 | `{"action": "set_temp", "value": 24.5}` | room temperature |
 | `{"action": "eyes", "value": "auto"\|"open"\|"closed"}` | eyes-open override |
 | `{"action": "reset"}` | reset the demo (page asks "Are you sure?" first) |
