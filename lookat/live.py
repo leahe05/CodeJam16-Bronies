@@ -45,6 +45,7 @@ class Live:
         self.camera_ok = False
         self.calibration: Optional[dict] = None   # {"text", "spot"} while calibrating
         self.announcer = None            # lookat.speech.Announcer: spoken feedback (main.py sets it)
+        self.voice_out = None            # lookat.speech.WebVoice: lines the patient page reads aloud
         self._ids = itertools.count(1)
         self._reset_state()
 
@@ -161,6 +162,7 @@ class Live:
                 "clock": {"time": clock.hhmm(), "demo": clock.demo},
                 "room": {k: r[k] for k in ("temp_c", "setpoint_c", "lamp_on", "fan_on")},
                 "face": self.face, "ask_s": config.ASK_TIMEOUT_S,
+                "voice": self.voice_out.recent() if self.voice_out is not None else [],
                 "brow": {"up": bool(self.brow.get("up")), "held_s": round(float(self.brow.get("held_s", 0.0)), 2),
                          "long_s": config.EMERGENCY_S}}
 

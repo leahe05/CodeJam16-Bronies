@@ -12,6 +12,9 @@
  *   - #browtag: "Eyebrows up" while the eyebrows are raised, with a bar filling to the long raise
  *     (= Call Nurse); the asking option's hint turns into "Raised - lower to choose"
  *   - opts.view(data) can turn the backend data into what the design draws (used for calibration)
+ *   - voice: reads the backend's spoken lines (d.voice) aloud with the browser's best natural voice
+ *     (Edge: "Ava/Emma/Jenny Online (Natural)"); #voicetag asks for one click first, because browsers
+ *     only allow speech after the page was clicked
  *   - body[data-conn="lost"] after 3 failed polls
  * Never crashes on null or unknown fields.
  */
@@ -183,6 +186,63 @@
     demo.classList.toggle("show", isDemo);
   }
 
+  // ---------------- voice ----------------
+  // d.voice = [{id, text, cut}]: cut = stop what is being said first; otherwise it waits its turn.
+  const VOICES = [/Ava.*Natural/i, /Emma.*Natural/i, /Jenny.*Natural/i, /Aria.*Natural/i, /Michelle.*Natural/i,
+    /Natural/i, /Google US English/i, /Zira/i, /Samantha/i];
+  const synth = window.speechSynthesis;
+  let voice = null, voiceOn = false, lastVoiceId = null, onlineFailed = false;
+  function pickVoice() {
+    if (!synth) return null;
+    const en = synth.getVoices().filter((v) => /^en/i.test(v.lang));
+    const ok = onlineFailed ? en.filter((v) => v.localService) : en;
+    for (const re of VOICES) { const v = ok.find((x) => re.test(x.name)); if (v) return v; }
+    return ok[0] || null;
+  }
+  if (synth) synth.onvoiceschanged = () => { voice = pickVoice(); };
+  function speakNow(text) {
+    if (!text) return;
+    const u = new SpeechSynthesisUtterance(text);
+    voice = voice || pickVoice();
+    if (voice) { u.voice = voice; u.lang = voice.lang; }
+    u.onerror = (e) => {   // an online voice without internet: fall back to an installed one
+      if ((e.error === "network" || e.error === "synthesis-failed" || e.error === "synthesis-unavailable")
+          && voice && !voice.localService) { onlineFailed = true; voice = pickVoice(); speakNow(text); }
+    };
+    synth.speak(u);
+  }
+  function applyVoice(lines) {
+    if (!Array.isArray(lines) || !synth) return;
+    const fresh = lines.filter((l) => l && +l.id > (lastVoiceId ?? Infinity));
+    const top = lines.reduce((m, l) => Math.max(m, +l.id || 0), lastVoiceId || 0);
+    if (lastVoiceId === null) { lastVoiceId = top; return; }   // don't replay what was said before the page opened
+    lastVoiceId = top;
+    if (!voiceOn || !fresh.length) return;
+    let from = 0;
+    fresh.forEach((l, i) => { if (l.cut) from = i; });
+    const batch = fresh.slice(from);
+    if (batch[0].cut) {   // stop, then speak (a short gap: speaking right after cancel() can get lost)
+      synth.cancel();
+      setTimeout(() => batch.forEach((l) => speakNow(l.text)), 40);
+    } else batch.forEach((l) => speakNow(l.text));
+  }
+  function voiceTag() {
+    if (!synth) return;
+    const tag = ensure("voicetag", `${icon("chat")}<span>Click anywhere to turn on the voice</span>`);
+    tag.classList.add("show");
+    const on = () => {
+      voiceOn = true;
+      tag.classList.remove("show");
+      voice = pickVoice();
+      synth.cancel();
+      speakNow("Voice on.");
+      document.removeEventListener("pointerdown", on);
+      document.removeEventListener("keydown", on);
+    };
+    document.addEventListener("pointerdown", on);
+    document.addEventListener("keydown", on);
+  }
+
   /** Content that changes the layout (focus/overlay/clock/room/face are applied live instead). */
   function contentKey(d) {
     const { focus, overlay, clock, room, face, brow, ...rest } = d;
@@ -199,6 +259,10 @@
         const r = await fetch(url, { cache: "no-store" });
         const raw = await r.json();
         if (raw && raw.ask_s > 0) askS = raw.ask_s;
+        if (raw && raw.voice) {
+          if (!document.getElementById("voicetag")) voiceTag();
+          try { applyVoice(raw.voice); } catch (e) { console.error(e); }
+        }
         let d = raw;
         if (opts && opts.view) { try { d = opts.view(raw) || raw; } catch (e) { console.error(e); } }
         fails = 0;

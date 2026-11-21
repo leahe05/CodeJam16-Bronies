@@ -1,13 +1,14 @@
 """LookAt: the real program.
 
-    py -3.11 main.py --patient NAME [--recalibrate] [--camera 0] [--no-voice]
+    py -3.11 main.py --patient NAME [--recalibrate] [--camera 0] [--voice page|windows|off]
     py -3.11 main.py --patient NAME --keyboard      (no camera: test with the keyboard)
 
 Starts the web server (Lea's pages + the JSON API, docs/API.md), the plugs (lamp,
 fan), calibrates gaze and eyebrows on the patient screen if needed, then runs the
 camera loop in the main thread: camera -> gaze spot + eyebrow events -> Live.frame()
 (selection engine -> screens -> room / nurse). A voice (lookat/speech.py) says which card
-locked and when to raise the eyebrows, what was chosen, and new screens.
+locked and when to raise the eyebrows, what was chosen, and new screens. Default --voice page:
+the patient page reads it aloud with Edge's natural voice (click the page once to allow sound).
 
 Operator window (team only) keys:  c = recalibrate gaze   g = recalibrate eyebrows   q = quit
 Keyboard mode keys:  a / s / d = look left / center / right   x = look away
@@ -26,7 +27,7 @@ from lookat import config
 from lookat.devices import Room
 from lookat.live import Live
 from lookat.server import PAGES, find_page, make_app
-from lookat.speech import Announcer, Speech
+from lookat.speech import Announcer, Speech, WebVoice
 
 WINDOW = "LookAt operator (team only)"
 
@@ -274,7 +275,9 @@ def main() -> None:
     ap.add_argument("--camera", type=int, default=0)
     ap.add_argument("--keyboard", action="store_true", help="no camera: test with the keyboard")
     ap.add_argument("--port", type=int, default=config.PAGE_PORT)
-    ap.add_argument("--no-voice", action="store_true", help="no spoken feedback (calibration prompts are printed)")
+    ap.add_argument("--voice", choices=("page", "windows", "off"), default="page",
+                    help="page = the patient page speaks (Edge natural voice, click it once); "
+                         "windows = this laptop's built-in voice; off = printed only")
     args = ap.parse_args()
 
     check_wifi()
@@ -283,7 +286,12 @@ def main() -> None:
     server = start_server(live, args.port)
     print_urls(args.port)
     print(f"Lamp: {room.lamp.ip or 'simulated'}   Fan: {room.fan.ip or 'simulated (set FAN_IP for plug 2)'}")
-    args.speech = Speech(enabled=not args.no_voice)
+    if args.voice == "page":
+        args.speech = WebVoice()
+        live.voice_out = args.speech
+        print("Voice: open the patient page in Microsoft Edge and click it once to turn the voice on.")
+    else:
+        args.speech = Speech(enabled=args.voice == "windows")
     # names the card you look at, then "Raise your eyebrows" right after it; the choice; new screens
     live.announcer = Announcer(args.speech.say, queue=args.speech)
     try:

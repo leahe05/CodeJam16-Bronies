@@ -142,3 +142,35 @@ def test_mac_queue_interrupt_drops_waiting_lines():
     assert [s._mac_q.get_nowait() for _ in range(2)] == ["Lamp on.", "Raise your eyebrows."]
     s.say("")                                        # just stop
     assert s._mac_q.empty()
+
+
+def test_web_voice_lines_for_the_page():
+    from lookat.speech import WebVoice
+    v = WebVoice()
+    v.say("Lamp on.")
+    v("Raise your eyebrows.")
+    v.say("The room is 24.5 °C")
+    lines = v.recent()
+    assert [(l["text"], l["cut"]) for l in lines] == [("Lamp on.", True), ("Raise your eyebrows.", False),
+                                                       ("The room is 24.5 degrees", True)]
+    assert lines[0]["id"] < lines[1]["id"] < lines[2]["id"]
+    for i in range(30):
+        v(f"line {i}")
+    assert len(v.recent()) == WebVoice.KEEP
+
+
+def test_live_screen_json_carries_the_voice():
+    from lookat.speech import WebVoice
+    live = Live(Room(lamp_ip="", fan_ip="", plug_factory=SimPlug), now=lambda: 0.0)
+    assert live.screen_json()["voice"] == []
+    live.voice_out = WebVoice()
+    live.announcer = Announcer(live.voice_out.say, queue=live.voice_out)
+    live.frame(0.0, "left", ["confirm", "emergency"])
+    assert live.screen_json()["voice"][-1]["text"].startswith("Calling your nurse")
+
+
+def test_labels_ending_in_a_period_get_no_second_one():
+    a, said = announcer()
+    a.update(screen("checkin", "Pillows?", "Yes, please.", "Return to main menu", "No, thanks."),
+             {"spot": "left", "state": "asking"}, None, now=0.0)
+    assert said[0] == "Yes, please."

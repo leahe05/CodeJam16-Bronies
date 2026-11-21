@@ -24,6 +24,7 @@ installed female voice (usually Zira), Rate -1; a line starting with "!" cancels
 macOS: the `say` command with the best installed female voice (gaze.LocalSpeaker.MAC_VOICES),
 one line at a time from a queue; interrupting kills the current `say`. Elsewhere: print only.
 """
+import itertools
 import queue
 import shutil
 import subprocess
@@ -47,6 +48,12 @@ _SCRIPT = ("[Console]::InputEncoding = [Text.Encoding]::UTF8; Add-Type -Assembly
            "while ($null -ne ($l = [Console]::In.ReadLine())) { "
            "if ($l.StartsWith('!')) { $s.SpeakAsyncCancelAll(); $l = $l.Substring(1) }; "
            "if ($l.Length -gt 0) { [void]$s.SpeakAsync($l) } }")
+
+
+def sentence(label: str) -> str:
+    """'Lamp on' -> 'Lamp on.'; 'No, thanks.' stays as it is."""
+    label = str(label).strip()
+    return label if label[-1:] in ".!?" else label + "."
 
 
 def speakable(text: str) -> str:
@@ -137,6 +144,40 @@ class Speech:
             self.proc = None
 
 
+class WebVoice:
+    """The patient page reads the lines aloud (Edge's natural voices, docs/API.md `voice`).
+    Same API as Speech: voice(text) queues, voice.say(text) interrupts ("" = stop)."""
+
+    KEEP = 20
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.lines: list = []
+        # ids keep growing across restarts, so an open page never mistakes new lines for old ones
+        self._ids = itertools.count(int(time.time() * 10))
+
+    def _add(self, text: str, cut: bool) -> None:
+        with self.lock:
+            self.lines.append({"id": next(self._ids), "text": text, "cut": cut})
+            del self.lines[:-self.KEEP]
+
+    def __call__(self, text: str) -> None:
+        print(f"[say] {text}")
+        self._add(speakable(text), cut=False)
+
+    def say(self, text: str) -> None:
+        if text:
+            print(f"[voice] {text}")
+        self._add(speakable(text), cut=True)
+
+    def recent(self) -> list:
+        with self.lock:
+            return [dict(x) for x in self.lines]
+
+    def close(self) -> None:
+        pass
+
+
 def _label(screen: dict, spot: Optional[str]) -> Optional[str]:
     opt = screen.get(spot) if spot else None
     return opt.get("label") if isinstance(opt, dict) else None
@@ -182,7 +223,7 @@ class Announcer:
         if any(ev and ev[0] == "call_nurse" for ev in events):
             parts.append(NURSE_CALLED)
         elif chosen:
-            parts.append(f"{chosen}.")
+            parts.append(sentence(chosen))
             if changed and screen.get("screen") != "idle":
                 parts.append(screen_line(screen))
         elif changed and not first and screen.get("screen") != "idle":
@@ -196,7 +237,7 @@ class Announcer:
         label = _label(screen, target[1]) if target else None
         if not news and target and label and target != self._named_target(t):
             if state == "asking" or t - self._target_since >= NAME_AFTER_S - 1e-9:
-                parts.append(f"{label}.")           # name the card while the patient looks at it
+                parts.append(sentence(label))           # name the card while the patient looks at it
                 self._named[target] = t
         cue = state == "asking" and target != self._cued
         self._cued = target if state == "asking" else None

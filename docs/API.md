@@ -42,7 +42,8 @@ Rules for both sides:
   "room": {"temp_c": 24.5, "setpoint_c": 22.0, "lamp_on": true, "fan_on": false},
   "face": true,
   "brow": {"up": false, "held_s": 0.0, "long_s": 2.0},
-  "ask_s": 4.0
+  "ask_s": 4.0,
+  "voice": [{"id": 17951234, "text": "Lamp on.", "cut": true}, {"id": 17951235, "text": "Raise your eyebrows.", "cut": false}]
 }
 ```
 
@@ -62,6 +63,7 @@ Rules for both sides:
 | `room` | live room state (for "Lamp is ON", "Room is 24.5 °C") |
 | `face` | false = no face in view: show a subtle "Move into view of the camera" hint |
 | `ask_s` | seconds the patient has to START the eyebrow raise once an option is `asking` (the countdown length). While `brow.up` is true the backend waits for the eyebrows to come down, so pause the countdown |
+| `voice` | the last ~20 lines to say aloud, oldest first; ids only grow. Speak each line with an id you haven't spoken yet (on page load, skip the ones already there). `cut` true = stop what is being said first; false = wait for it to finish. `text` "" with `cut` = just stop. Browsers allow speech only after one click on the page. `web/lookat.js` already does all of this |
 | `brow` | `{"up": true, "held_s": 0.8, "long_s": 2.0}`: the eyebrows are raised right now, for `held_s` seconds. Show it so the patient knows the raise was seen (e.g. a small "Eyebrows up" badge; on the `asking` option a check mark). While held, fill a ring from 0 to `long_s`: at `long_s` the nurse is called. A short raise is counted when the eyebrows come back down |
 
 **Icons** (keywords the backend sends; draw each as an inline SVG): `lamp`, `bulb`, `thermometer`, `fan`, `moon`, `chat`, `sparkle`, `target`, `home`, `back`, `check`, `x`, `bed`, `pillow`, `water`, `grid`, `clock`, `nurse`, `bell`, `more`, `snow`, `sun`, `quiet`, `question`. Unknown keyword → no icon.
