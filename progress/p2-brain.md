@@ -7,3 +7,4 @@
 12:38 M2-1 (code): main.py camera loop + server, live.py backend, plugs.py + devices.py (lamp, fan, temperature model), long raise no longer also chooses; 102 tests; keyboard mode end-to-end OK. Live camera + real lamp check still to do
 12:55 Plug self-test PASS on lea: lamp 99-132 ms per switch
 12:58 Live run 1: gaze calib 95% self-check (separation 4.3-5.6), brow threshold 0.64. Fixed: frozen calibration windows hid the live one; Kasa login read from saved user env
+13:03 Gaze fix: calibrate on the card positions (2 rounds, honest round check), spread floor so small head turns don't beat the eyes; eyebrow feedback (operator window + brow in /api/screen); 104 tests

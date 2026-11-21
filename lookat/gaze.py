@@ -22,10 +22,24 @@ from lookat import config
 K = 7
 VOTE_FRAMES = 10
 MIN_CONF = 0.7
-CALIB_FRAMES = 90
+CALIB_FRAMES = 90          # per spot, split over ROUNDS
+ROUNDS = 2                 # left, middle, right, then again: captures natural variation
 SETTLE_S = 2.0
-SPOKEN_NAMES = {"left": "the LEFT edge of the screen", "middle": "the CENTER of the screen",
-                "right": "the RIGHT edge of the screen"}
+# Calibrate on the CARDS (where the patient will really look), not the screen edges.
+SPOKEN_NAMES = {"left": "the LEFT card", "middle": "the MIDDLE card", "right": "the RIGHT card"}
+
+# Smallest spread per feature (order = vision.GAZE_FEATURES) used when standardising.
+# A patient holds very still during calibration, so e.g. head yaw varies by only ~2°;
+# without a floor, a 3° head turn later counts as a huge change and wins over the eyes.
+MIN_STD = np.array([6.0, 6.0, 6.0]                  # pitch, yaw, roll (degrees)
+                   + [0.05] * 4 + [0.10] * 4        # eyeLookIn/Out, eyeLookUp/Down
+                   + [0.03, 0.04, 0.03, 0.04])      # iris x, y (both eyes)
+
+
+def _spread(X) -> np.ndarray:
+    std = np.asarray(X, dtype=float).std(axis=0)
+    floor = MIN_STD if std.shape == MIN_STD.shape else 1e-6
+    return np.maximum(std, floor)
 
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CALIB_DIR = os.path.join(_REPO, "calib")
@@ -47,7 +61,7 @@ class GazeModel:
         self.X = np.asarray(X, dtype=float)
         self.y = np.asarray(y, dtype=str)
         self.mean = self.X.mean(axis=0)
-        self.std = np.maximum(self.X.std(axis=0), 1e-6)
+        self.std = _spread(self.X)
         self.Xs = (self.X - self.mean) / self.std
         self.reset()
         return self
@@ -95,7 +109,7 @@ def separation_scores(X, y) -> dict:
     """Per spot pair: distance between spot means / average within-spot spread (> 3 good)."""
     X = np.asarray(X, dtype=float)
     y = np.asarray(y, dtype=str)
-    Xs = (X - X.mean(axis=0)) / np.maximum(X.std(axis=0), 1e-6)
+    Xs = (X - X.mean(axis=0)) / _spread(X)
     means, spreads = {}, {}
     for s in dict.fromkeys(y):
         pts = Xs[y == s]
@@ -123,6 +137,17 @@ def self_check(X, y) -> float:
     return hits / max(len(test), 1)
 
 
+def round_check(X, y, rounds) -> float:
+    """Honest accuracy: learn from the first round only, test on the later rounds
+    (different moments, like real use). The per-frame self_check is optimistic."""
+    X, y, rounds = np.asarray(X, dtype=float), np.asarray(y, dtype=str), np.asarray(rounds)
+    train, test = rounds == rounds.min(), rounds != rounds.min()
+    if not test.any() or len(set(y[train])) < 2:
+        return self_check(X, y)
+    model = GazeModel(X[train], y[train])
+    return float(np.mean([model.classify(v)[0] == s for v, s in zip(X[test], y[test])]))
+
+
 def calibrate(tracker, say, patient: str, frames: int = CALIB_FRAMES, show: bool = True) -> GazeModel:
     """Speak each spot, wait SETTLE_S, record `frames` frames with a face, save calib/<patient>.npz."""
     import cv2
@@ -135,19 +160,22 @@ def calibrate(tracker, say, patient: str, frames: int = CALIB_FRAMES, show: bool
             cv2.waitKey(1)
         return f
 
-    X, y = [], []
-    for spot in config.SPOTS:
-        say(f"Look at {SPOKEN_NAMES[spot]}")
-        end = time.monotonic() + SETTLE_S
-        while time.monotonic() < end:
-            pump(f"get ready: {spot}")
-        got = 0
-        while got < frames:
-            f = pump(f"recording {spot} {got}/{frames}")
-            if f is not None:
-                X.append(f["gaze_vector"])
-                y.append(spot)
-                got += 1
+    X, y, rounds = [], [], []
+    per_round = max(1, frames // ROUNDS)
+    for r in range(ROUNDS):
+        for spot in config.SPOTS:
+            say(f"Look at {SPOKEN_NAMES[spot]}")
+            end = time.monotonic() + SETTLE_S
+            while time.monotonic() < end:
+                pump(f"get ready: {spot} (round {r + 1}/{ROUNDS})")
+            got = 0
+            while got < per_round:
+                f = pump(f"recording {spot} {got}/{per_round} (round {r + 1}/{ROUNDS})")
+                if f is not None:
+                    X.append(f["gaze_vector"])
+                    y.append(spot)
+                    rounds.append(r)
+                    got += 1
     say("Thank you")
 
     model = GazeModel(X, y)
@@ -155,6 +183,10 @@ def calibrate(tracker, say, patient: str, frames: int = CALIB_FRAMES, show: bool
     print(f"saved {path}")
     for pair, score in separation_scores(X, y).items():
         print(f"  separation {pair:13s} {score:5.2f}  {'good' if score > 3 else 'LOW'}")
+    if ROUNDS > 1:
+        acc = round_check(X, y, rounds)
+        print(f"  round check (learn round 1, test round 2): {acc:.0%}  "
+              f"{'good' if acc >= 0.9 else 'LOW: recalibrate (light, camera position, keep the head still)'}")
     print(f"  self-check accuracy {self_check(X, y):.0%}")
     return model
 

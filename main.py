@@ -132,20 +132,32 @@ def raise_window() -> None:
         pass
 
 
-def draw_operator(frame, live: Live, gaze_conf: float, det, fps: float, keyboard: bool = False):
+def draw_operator(frame, live: Live, gaze_conf: float, det, fps: float, keyboard: bool = False,
+                  flash: tuple = ("", 0.0)):
     h, w = frame.shape[:2]
     with live.lock:
         m, screen = live.machine, live.sm.kind
-        spot, face = live.spot, live.face
+        spot, face, brow = live.spot, live.face, dict(live.brow)
         focus = m.view()
     color = (0, 200, 0) if spot else (0, 165, 255)
     cv2.putText(frame, (spot or ("no face" if not face else "unsure")).upper(), (30, 90),
                 cv2.FONT_HERSHEY_SIMPLEX, 2.5, color, 6)
+    # eyebrows: big and obvious, so the patient/team can see the raise was seen
+    if brow.get("up"):
+        held = brow.get("held_s", 0.0)
+        text = f"EYEBROWS UP {held:.1f}s" + ("  -> CALL NURSE" if held >= config.EMERGENCY_S else "")
+        cv2.putText(frame, text, (w // 2 - 40, 90), cv2.FONT_HERSHEY_SIMPLEX, 1.6, (0, 255, 255), 5)
+    else:
+        cv2.putText(frame, "eyebrows down", (w // 2 - 40, 90), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (160, 160, 160), 2)
+    text, at = flash
+    if text and time.monotonic() - at < 1.5:
+        cv2.putText(frame, text, (30, h // 2), cv2.FONT_HERSHEY_SIMPLEX, 2.2, (0, 255, 0), 6)
     lines = [f"confidence {gaze_conf:.2f}   machine {m.state}   screen {screen}",
              f"focus {focus}   fps {fps:.0f}"]
     if keyboard:
         lines.append("KEYBOARD MODE: a/s/d look  x away  space raise  e long raise  q quit")
     else:
+        lines.append("Look at a card until it LOCKS (bright), then a short eyebrow raise.")
         lines.append("c = recalibrate gaze   g = eyebrows   q = quit")
     for i, line in enumerate(lines):
         cv2.putText(frame, line, (30, 140 + 40 * i), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2)
@@ -156,6 +168,21 @@ def draw_operator(frame, live: Live, gaze_conf: float, det, fps: float, keyboard
         cv2.rectangle(frame, (x0, y0), (xpos(det.value), y1), (0, 200, 0) if det.above_since else (200, 200, 200), -1)
         cv2.line(frame, (xpos(det.threshold), y0 - 8), (xpos(det.threshold), y1 + 8), (0, 0, 255), 3)
     cv2.imshow(WINDOW, frame)
+
+
+def describe(events, out, chosen, flash: tuple) -> tuple:
+    """What the last raise did, to flash in the operator window (and print)."""
+    text = ""
+    if any(e[0] == "call_nurse" for e in out):
+        text = "CALL NURSE"
+    elif chosen:
+        text = f"CHOSE: {chosen}"
+    elif "confirm" in events:
+        text = "RAISE SEEN - look at a card until it locks first"
+    if not text:
+        return flash
+    print(text)
+    return text, time.monotonic()
 
 
 def run_camera(args, live: Live) -> None:
@@ -175,7 +202,7 @@ def run_camera(args, live: Live) -> None:
         det = GestureDetector(settings, on_release=True)
         print(f"Ready. Eyebrow threshold {det.threshold:.2f} ({settings['gesture']}). "
               f"Watch the '{WINDOW}' window; press q in it to quit.")
-        fps, last, raised = 0.0, time.monotonic(), False
+        fps, last, raised, flash = 0.0, time.monotonic(), False, ("", 0.0)
         while True:
             frame, f = tracker.read()
             if frame is None:
@@ -185,13 +212,15 @@ def run_camera(args, live: Live) -> None:
             now = time.monotonic()
             spot, conf = gaze.predict(f)
             events = det.update(f, now)
-            live.frame(now, spot, events, face=f is not None, confidence=conf)
+            brow = {"up": det.above_since is not None, "held_s": det.held(now)}
+            out = live.frame(now, spot, events, face=f is not None, confidence=conf, brow=brow)
+            flash = describe(events, out, live.chosen, flash)
             fps = 0.9 * fps + 0.1 / max(now - last, 1e-3)
             last = now
             if f is not None and f["face_px"] < config.MIN_FACE_PX:
                 cv2.putText(frame, "FACE TOO SMALL: move the camera closer", (30, frame.shape[0] - 100),
                             cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 3)
-            draw_operator(frame, live, conf, det, fps)
+            draw_operator(frame, live, conf, det, fps, flash=flash)
             if not raised:
                 raise_window()
                 raised = True

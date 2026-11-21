@@ -9,6 +9,8 @@
 <style>
   body { margin: 0; background: #0b1d3f; color: #fff; font: 600 3vh "Segoe UI", system-ui, sans-serif; height: 100vh; display: flex; flex-direction: column; }
   .tag { position: fixed; top: 8px; right: 12px; font-size: 1.6vh; color: #9cc8ff; }
+  .brow { position: fixed; top: 8px; left: 12px; font-size: 2.4vh; padding: .4vh 1.2vh; border-radius: 99px; background: #1d3566; color: #9cc8ff; }
+  .brow.up { background: #ffd34d; color: #0b1d3f; }
   .head { text-align: center; padding: 4vh 2vw 2vh; }
   .badge { color: #9cc8ff; font-size: 2.4vh; letter-spacing: .1em; }
   h1 { font-size: 6vh; margin: 1vh 0; }
@@ -19,13 +21,20 @@
   .opt.empty { border-style: dashed; opacity: .25; }
   .opt.dwell { border-color: #9cc8ff; box-shadow: 0 0 30px #4d9cff; }
   .opt.asking { background: #1f5fb0; border-color: #fff; }
+  .opt.asking small { color: #ffd34d; font-size: 2.6vh; }
   .opt.chosen { background: #fff; color: #0b1d3f; }
   .foot { text-align: center; padding: 1vh 2vw 3vh; color: #ffb38a; }
-  .overlay { position: fixed; inset: 0; background: rgba(200, 60, 30, .9); display: none; align-items: center; justify-content: center; font-size: 8vh; }
-  .warn { color: #ffb38a; }
+  .overlay { position: fixed; inset: 0; display: none; }
+  .overlay.call { background: rgba(200, 60, 30, .92); align-items: center; justify-content: center; font-size: 8vh; }
+  .overlay.cal { background: #0b1d3f; flex-direction: column; }
+  .overlay.cal .ctext { text-align: center; font-size: 5vh; padding: 6vh 2vw 2vh; }
+  .overlay.cal .row .opt { border-style: dashed; opacity: .35; }
+  .overlay.cal .row .opt.target { border-style: solid; opacity: 1; box-shadow: 0 0 40px #4d9cff; }
+  .dot { width: 6vh; height: 6vh; border-radius: 50%; background: #ffd34d; box-shadow: 0 0 30px #ffd34d; }
 </style>
 </head>
 <body>
+<div class="brow" id="brow">eyebrows down</div>
 <div class="tag">TEST PAGE (Lea's design replaces this) · <span id="clock"></span></div>
 <div class="head"><div class="badge" id="badge"></div><h1 id="title">Connecting…</h1><div class="sub" id="sub"></div></div>
 <div class="row"><div class="opt" id="left"></div><div class="opt" id="middle"></div><div class="opt" id="right"></div></div>
@@ -34,26 +43,53 @@
 <script>
 const $ = id => document.getElementById(id);
 const text = (el, v) => { el.textContent = v == null ? "" : v; };
+const SPOTS = ["left", "middle", "right"];
+
+function drawOverlay(o) {
+  const ov = $("overlay");
+  ov.className = "overlay";
+  ov.innerHTML = "";
+  if (!o) { ov.style.display = "none"; return; }
+  ov.style.display = "flex";
+  if (o.kind === "calibrate") {
+    ov.classList.add("cal");
+    const t = document.createElement("div"); t.className = "ctext"; t.textContent = o.text; ov.append(t);
+    const row = document.createElement("div"); row.className = "row";
+    for (const s of SPOTS) {   // same grid as the option cards, so the targets are where the cards are
+      const c = document.createElement("div"); c.className = "opt" + (o.spot === s ? " target" : "");
+      if (o.spot === s) { const d = document.createElement("div"); d.className = "dot"; c.append(d); }
+      row.append(c);
+    }
+    ov.append(row);
+  } else {
+    ov.classList.add("call"); ov.textContent = o.text;
+  }
+}
+
 async function poll() {
   try {
     const d = await (await fetch("/api/screen", {cache: "no-store"})).json();
     text($("badge"), d.badge); text($("title"), d.title); text($("sub"), d.subtitle);
     text($("clock"), d.clock && d.clock.time + (d.clock.demo ? " (demo)" : ""));
-    for (const spot of ["left", "middle", "right"]) {
-      const el = $(spot), o = d[spot];
-      el.className = "opt" + (o ? "" : " empty") + (d.focus && d.focus.spot === spot ? " " + d.focus.state : "");
+    const brow = d.brow || {};
+    $("brow").className = "brow" + (brow.up ? " up" : "");
+    text($("brow"), brow.up ? `Eyebrows up ${brow.held_s.toFixed(1)} s` + (brow.held_s >= brow.long_s ? " → nurse" : "") : "eyebrows down");
+    for (const spot of SPOTS) {
+      const el = $(spot), o = d[spot], state = d.focus && d.focus.spot === spot ? d.focus.state : "";
+      el.className = "opt" + (o ? "" : " empty") + (state ? " " + state : "");
       el.innerHTML = "";
-      if (o) { el.append(o.label); const s = document.createElement("small"); s.textContent = o.hint || ""; el.append(s); }
+      if (o) {
+        el.append(o.label);
+        const s = document.createElement("small");
+        s.textContent = state === "asking" ? (brow.up ? "✓ raised… lower to choose" : "Raise your eyebrows") : (o.hint || "");
+        el.append(s);
+      }
     }
     let foot = d.footer || (d.show_call_nurse ? "Call Nurse · Long eyebrow raise anywhere" : "");
     if (d.page) foot += `  (page ${d.page.index + 1} of ${d.page.count})`;
     if (d.face === false) foot = "Move into view of the camera. " + foot;
     text($("foot"), foot);
-    const ov = $("overlay"), o = d.overlay;
-    ov.style.display = o ? "flex" : "none";
-    ov.style.background = o && o.kind === "calibrate" ? "#0b1d3f" : "rgba(200, 60, 30, .9)";
-    ov.style.justifyContent = o && o.spot === "left" ? "flex-start" : o && o.spot === "right" ? "flex-end" : "center";
-    text(ov, o && (o.kind === "calibrate" && o.spot ? "● " + o.text + " ●" : o.text));
+    drawOverlay(d.overlay);
   } catch (e) {
     text($("title"), "Can't reach the LookAt program");
   }

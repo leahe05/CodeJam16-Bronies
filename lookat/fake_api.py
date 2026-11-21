@@ -149,8 +149,10 @@ class Fake:
         overlay = None
         if time.time() < self.overlay_until:
             overlay = {"kind": "call_nurse", "text": "Your nurse has been called"}
+        up = bool(focus and focus["state"] == "asking")
         return {"v": 1, **base, "focus": focus, "overlay": overlay, "clock": self.clock(),
-                "room": self.room(), "face": True}
+                "room": self.room(), "face": True,
+                "brow": {"up": up, "held_s": 0.6 if up else 0.0, "long_s": 2.0}}
 
     def nurse_json(self):
         return {"v": 1, "patient": {"name": "Demo patient", "room": "Room 12"}, "connected": True,

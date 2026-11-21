@@ -51,6 +51,8 @@ class Live:
         self.sm = ScreenManager(room=self.room.state)
         self.machine = Machine()
         self.face = False
+        self.brow = {"up": False, "held_s": 0.0}
+        self.chosen: Optional[str] = None
         self.spot: Optional[str] = None
         self.confidence = 0.0
         self.alerts: list = []
@@ -64,17 +66,23 @@ class Live:
         self.eyes_override: Optional[str] = None
 
     # ----- camera loop ----------------------------------------------------
-    def frame(self, now: float, spot: Optional[str], events=(), face: bool = True, confidence: float = 0.0) -> list:
-        """One camera frame. Returns the patient events it produced."""
+    def frame(self, now: float, spot: Optional[str], events=(), face: bool = True, confidence: float = 0.0,
+              brow: Optional[dict] = None) -> list:
+        """One camera frame. brow = {"up": bool, "held_s": float} from the gesture detector.
+        Returns the patient events it produced."""
         with self.lock:
             self.face, self.spot, self.confidence = face, spot, confidence
+            self.brow = brow or {"up": False, "held_s": 0.0}
             if self.calibration is not None:
                 return []
             out = list(self.sm.tick(now, busy=self.machine.busy))
+            self.chosen = None                    # label chosen this frame (operator feedback)
             for action in self.machine.step(now, spot, events, face, self.sm.active_spots()):
                 if action[0] == "call_nurse":
                     out += self.sm.call_nurse(now)
                 elif action[0] == "select":
+                    opt = self.sm.view(now).get(action[1])
+                    self.chosen = opt["label"] if opt else action[1]
                     out += self.sm.select(action[1], now)
             self.room.tick(now)
             for ev in out:
@@ -145,7 +153,9 @@ class Live:
         return {"v": 1, **v, "focus": None if self.calibration else self.machine.view(),
                 "clock": {"time": clock.hhmm(), "demo": clock.demo},
                 "room": {k: r[k] for k in ("temp_c", "setpoint_c", "lamp_on", "fan_on")},
-                "face": self.face}
+                "face": self.face,
+                "brow": {"up": bool(self.brow.get("up")), "held_s": round(float(self.brow.get("held_s", 0.0)), 2),
+                         "long_s": config.EMERGENCY_S}}
 
     # ----- GET /api/nurse ---------------------------------------------------
     def nurse_json(self) -> dict:

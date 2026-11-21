@@ -40,7 +40,8 @@ Rules for both sides:
   "overlay": null,
   "clock": {"time": "02:14", "demo": true},
   "room": {"temp_c": 24.5, "setpoint_c": 22.0, "lamp_on": true, "fan_on": false},
-  "face": true
+  "face": true,
+  "brow": {"up": false, "held_s": 0.0, "long_s": 2.0}
 }
 ```
 
@@ -55,10 +56,11 @@ Rules for both sides:
 | `page` | `{"index": 0, "count": 2}` when answers are paged 2 at a time (draw page dots), or null |
 | `show_call_nurse` | draw the bottom "Call Nurse • Long eyebrow raise anywhere" banner (false in nurse mode) |
 | `focus` | where the patient is looking: `state` = `"dwell"` (looking, soft glow), `"asking"` (locked, bright fill + "Raise your eyebrows"), `"chosen"` (flash, ~0.5 s). null = nothing |
-| `overlay` | `{"kind": "call_nurse", "text": "Your nurse has been called"}` for ~6 s after a long raise (full-screen red-orange glow). `{"kind": "calibrate", "text": "Look at the LEFT edge of the screen", "spot": "left"}` during calibration: full screen, show the text and a big glowing dot at that edge (`spot` "left"/"middle"/"right", or null = just the text, e.g. "Raise your eyebrows"). Otherwise null |
+| `overlay` | `{"kind": "call_nurse", "text": "Your nurse has been called"}` for ~6 s after a long raise (full-screen red-orange glow). `{"kind": "calibrate", "text": "Look at the LEFT card", "spot": "left"}` during calibration: draw the 3 option cards **in exactly the same places as on the check-in screen** (empty), and make the `spot` card glow with a big dot in its centre and the text. The patient is calibrated on those positions, so they must match the real cards. `spot` null = just the text (e.g. "Raise your eyebrows"). Otherwise null |
 | `clock` | current (demo) time; `demo` true = show a small "DEMO TIME" tag |
 | `room` | live room state (for "Lamp is ON", "Room is 24.5 °C") |
 | `face` | false = no face in view: show a subtle "Move into view of the camera" hint |
+| `brow` | `{"up": true, "held_s": 0.8, "long_s": 2.0}`: the eyebrows are raised right now, for `held_s` seconds. Show it so the patient knows the raise was seen (e.g. a small "Eyebrows up" badge; on the `asking` option a check mark). While held, fill a ring from 0 to `long_s`: at `long_s` the nurse is called. A short raise is counted when the eyebrows come back down |
 
 **Icons** (keywords the backend sends; draw each as an inline SVG): `lamp`, `bulb`, `thermometer`, `fan`, `moon`, `chat`, `sparkle`, `target`, `home`, `back`, `check`, `x`, `bed`, `pillow`, `water`, `grid`, `clock`, `nurse`, `bell`, `more`, `snow`, `sun`, `quiet`, `question`. Unknown keyword → no icon.
 
