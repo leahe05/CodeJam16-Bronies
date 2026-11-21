@@ -24,6 +24,8 @@ import threading
 import time
 from typing import Callable, Optional
 
+from pydantic import BaseModel
+
 from lookat import config
 from lookat.clock import clock
 from lookat.memory import DEMO_CHART, Memory
@@ -38,6 +40,9 @@ COOLDOWN_MIN = 20            # a trigger stays quiet this long after it ran (dem
 SETTLE_S = 10                # wait this long after the patient's last choice before speaking first
 YES_WORDS = ("yes", "ok", "please", "sure")
 COMFORT_OPTIONS = ["Adjust pillows", "Change position", "Water", "Too warm", "Too cold", "Something else"]
+CHECKIN_EVERY_S = 180        # AI check-in: Claude looks at the situation this often (awake + idle) and may stay quiet
+MENU_EVERY_S = 600           # the Talk to AI menu is rewritten by Claude this often (and after each episode)
+MENU_MAX = 4                 # options Claude writes; "Something else" is always added last
 
 SYSTEM = """You are LookAt, an assistant for a patient who cannot speak or move and answers only by \
 looking left/center/right at a screen and raising their eyebrows. You speak first so they need fewer \
@@ -58,8 +63,18 @@ explanation the nurse can act on, e.g. "Wants repositioning. Not temperature-rel
 Use defer only for things that can wait for the next visit.
 - If a question is ignored or dismissed, stop: respect silence. Do not repeat it.
 - remember() durable preferences you learn (e.g. "Prefers the fan at night").
+- Write every suggestion text as a short question the patient can answer with their eyes, e.g. \
+"Feeling cold? Turn the fan off?" - never a bare statement.
+- If memory holds few facts, you do not know this patient yet: say so in your "why", offer the common needs \
+of a bedbound patient (comfort, position, water, temperature, light, rest, company), and remember() what they pick.
 - End with finish(): one sentence on what happened. Every tool takes a short "why" for the reasoning panel.
 """
+
+MENU_SYSTEM = """You write the "Talk to AI" menu for a patient who cannot speak or move and picks options by \
+looking at a screen. Give 3 or 4 options, each 2 to 4 words, the most likely need first, that fit the moment \
+(time of day, room, what they picked before, what was just offered). If you know little about the patient, \
+offer common needs of a bedbound patient. Do not include "Something else" (it is always added). Do not repeat \
+an option the patient just declined. Plain words, no emojis."""
 
 
 def _tool(name: str, description: str, props: dict, required: list) -> dict:
@@ -97,6 +112,11 @@ TOOLS = [
           {"fact": {"type": "string"}}, ["fact"]),
     _tool("finish", "End this episode.", {"summary": {"type": "string"}}, ["summary"]),
 ]
+
+
+class Menu(BaseModel):
+    options: list[str]
+    why: str
 
 
 def is_yes(answer: str) -> bool:
@@ -155,6 +175,9 @@ class Agent:
         self.last_run: dict = {}          # trigger -> clock datetime
         self.last_choice = -1e9           # monotonic time of the patient's last choice
         self.quiet_until = None           # clock datetime
+        self.last_checkin = time.monotonic()
+        self.last_menu = -1e9
+        self.choice: Optional[str] = None
         self._stop = False
         self.memory.load_chart(DEMO_CHART)
         live.listeners.append(self.events.put)
@@ -192,6 +215,8 @@ class Agent:
         if ev is not None:
             self._on_patient_event(ev)
             return
+        if self.client is not None and time.monotonic() - self.last_menu >= MENU_EVERY_S and self.can_speak():
+            self.refresh_menu()
         trig = self.trigger(self.perceive())
         if trig:
             self.episode(*trig)
@@ -210,12 +235,13 @@ class Agent:
         if ev[0] != "assistant_choice":
             return
         choice = ev[1]
-        if choice.startswith("Quiet"):
+        self.choice = choice
+        if choice.lower().startswith("quiet"):
             self.quiet_until = clock.now().timestamp() + config.QUIET_S
             self.feed("decided", "Quiet for 2 hours: no suggestions until " +
                       time.strftime("%H:%M", time.localtime(self.quiet_until)), "the patient asked for quiet")
-        elif choice in ("Get more comfortable", "Something else"):
-            self.episode("patient", f'The patient opened Talk to AI and chose "{choice}".')
+        else:   # any option, including the ones Claude wrote: Claude decides what to do with it
+            self.episode("patient", f'The patient opened Talk to AI and chose "{choice}". Act on it.')
         self._publish()
 
     # ----- perception + triggers ---------------------------------------------------------------
@@ -254,6 +280,12 @@ class Agent:
         cold = comfort.get("cold_below_c")
         if cold is not None and p["temp_c"] <= cold and self._cooled_down("cold"):
             return "cold", f"Room {p['temp_c']} °C <= {cold} °C, memory: feels cold below {cold} °C"
+        if (self.client is not None and time.monotonic() - self.last_checkin >= CHECKIN_EVERY_S
+                and (L["night_checkins_enabled"] or not p["night"])):
+            self.last_checkin = time.monotonic()
+            return "checkin", ("Routine look-in: the patient is awake and idle. Nothing specific happened. "
+                               "If something is worth offering right now, make ONE suggestion (a short question); "
+                               "otherwise call finish without asking. Don't repeat recent questions.")
         return None
 
     # ----- one episode -------------------------------------------------------------------------
@@ -272,8 +304,10 @@ class Agent:
             except Exception as e:   # noqa: BLE001 - any AI failure -> rules
                 log_event("agent_ai_error", error=repr(e))
                 self.feed("decided", "AI unavailable, using rules", type(e).__name__, fallback=True)
-        if not done and self.questions == 0:
+        if not done and self.questions == 0 and name != "checkin":
             self._rules(name)
+        if self.client is not None:
+            self.refresh_menu()
         self._publish()
 
     def _claude(self, reason: str) -> bool:
@@ -335,7 +369,14 @@ class Agent:
                                      "reason": f"Room {self.live.room.state()['temp_c']} °C, below their cold threshold.",
                                      "urgency": "normal", "why": "only a nurse can fix this"})
             c("finish", {"summary": f"Cold check-in: {ans}", "why": "done"})
-        else:   # patient-initiated
+        elif self.choice and self.choice not in ("Get more comfortable",):   # a menu choice, no AI
+            visit = self.memory.learn()["last_nurse_visit"]
+            what = "something not on the list" if self.choice == "Something else" else self.choice.lower()
+            c("page_nurse", {"message": f"Patient asks: {what}.",
+                             "reason": f"Chosen in Talk to AI. Last visit {visit[11:16] if visit else 'unknown'}.",
+                             "urgency": "normal", "why": "needs a person"})
+            c("finish", {"summary": f"Patient request: {self.choice}", "why": "done"})
+        else:   # patient-initiated "Get more comfortable"
             opts = self.memory.ranked("comfort", COMFORT_OPTIONS[:-1]) + ["Something else"]
             ans = c("ask", {"question": "What would help most?", "options": opts, "if_yes": None,
                             "why": "the patient asked for help; options in the order they usually pick"})
@@ -440,6 +481,31 @@ class Agent:
             self.feed("outcome", a.get("summary", "done"), why)
             return "finished"
         return f"Error: unknown tool {name}"
+
+    # ----- the Talk to AI menu, written by Claude ------------------------------------------------
+    def refresh_menu(self) -> None:
+        """Claude writes the menu options for this moment; the screen shows them when the patient opens it.
+        Any failure keeps the current menu (the default list until Claude has written one)."""
+        self.last_menu = time.monotonic()
+        try:
+            resp = self.client.messages.parse(
+                model=MODEL, max_tokens=2048, system=MENU_SYSTEM, output_format=Menu,
+                messages=[{"role": "user", "content": self.memory.context_text(self.perceive())}])
+            menu = resp.parsed_output
+        except Exception as e:   # noqa: BLE001 - keep the current menu
+            log_event("agent_menu_error", error=repr(e))
+            return
+        opts = []
+        for o in menu.options:
+            o = " ".join(str(o).split()[:5]).strip(" .")
+            if o and o.lower() != "something else" and o not in opts:
+                opts.append(o)
+        if len(opts) < 2:
+            return
+        opts = opts[:MENU_MAX] + ["Something else"]
+        with self.live.lock:
+            self.live.sm.show_assistant(opts)
+        self.feed("decided", "Talk to AI menu: " + " · ".join(opts), menu.why, fallback=False)
 
     # ----- learning + reporting ------------------------------------------------------------------
     def _log_question(self, kind: str, question: str, options: list, answer: Optional[str]) -> None:

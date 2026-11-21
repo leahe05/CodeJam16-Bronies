@@ -216,3 +216,51 @@ def test_live_screens_suggestion_answered(tmp_path):
             agent.events.put(ev)
     th.join(3)
     assert out["a"] == "Yes, please." and live.sm.kind == "idle"
+
+
+# ----- AI-written menu + AI check-ins ----------------------------------------------------------
+class MenuClient(FakeClient):
+    def __init__(self, options, turns=None):
+        super().__init__(turns)
+        self.messages = NS(parse=lambda **kw: NS(parsed_output=NS(options=options, why="night, room warm")))
+
+
+def test_claude_writes_the_talk_to_ai_menu(tmp_path):
+    client = MenuClient(["Cool the room down", "Something else", "Dim the lamp please now ok", "Water"])
+    agent, live, *_ = make(tmp_path, client=client)
+    agent.refresh_menu()
+    assert live.sm.assistant["options"] == ["Cool the room down", "Dim the lamp please now", "Water", "Something else"]
+    assert any(t.startswith("Talk to AI menu") for _, t in stages(live))
+
+
+def test_menu_failure_keeps_the_default(tmp_path):
+    agent, live, *_ = make(tmp_path, client=FakeClient())
+    before = list(live.sm.assistant["options"])
+    agent.refresh_menu()
+    assert live.sm.assistant["options"] == before
+
+
+def test_any_menu_choice_goes_to_claude(tmp_path):
+    client = MenuClient(["Water", "Rest"], turns=[[tool("finish", summary="Paged for water")]])
+    agent, live, *_ = make(tmp_path, client=client, at="10:00", temp=22.0)
+    agent._on_patient_event(("assistant_choice", "Water"))
+    assert "Water" in client.calls[0]["messages"][0]["content"]
+
+
+def test_any_menu_choice_without_ai_pages_the_nurse(tmp_path):
+    agent, live, *_ = make(tmp_path, at="10:00", temp=22.0)
+    agent._on_patient_event(("assistant_choice", "Read me the news"))
+    assert live.alerts[0]["text"] == "Patient asks: read me the news."
+
+
+def test_ai_checkin_only_with_claude_and_it_may_stay_quiet(tmp_path):
+    agent, *_ = make(tmp_path, at="10:00", temp=22.0)
+    agent.last_checkin = -1e9
+    assert agent.trigger(agent.perceive()) is None          # no AI: no routine check-ins
+    client = MenuClient(["Water", "Rest"], turns=[[tool("finish", summary="Nothing needed right now")]])
+    agent, live, *_ = make(tmp_path, at="10:00", temp=22.0, client=client)
+    agent.last_checkin = -1e9
+    name, _ = agent.trigger(agent.perceive())
+    assert name == "checkin"
+    agent.episode(name, "look-in")
+    assert agent.questions == 0 and not live.alerts         # it chose silence, and no rules ran
