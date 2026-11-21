@@ -2,19 +2,27 @@
 import os
 
 # Interaction timing (seconds)
-DWELL_S = 1.0          # look at a spot this long -> it is spoken and locked
-CONFIRM_S = 0.3        # eyebrow raise held this long = confirm
-ASK_TIMEOUT_S = 3.0    # confirm must come within this time after the spot is spoken
-COOLDOWN_S = 2.0       # pause after an action
-EMERGENCY_S = 2.0      # eyebrow held this long = emergency, in any mode
-MENU_STEP_S = 1.5      # middle spot menu: time between items
+DWELL_S = 1.0          # look at a spot this long -> it is highlighted and locked
+CONFIRM_S = 0.3        # eyebrow raise held this long = choose
+ASK_TIMEOUT_S = 3.0    # the raise must come within this time after the spot locks
+COOLDOWN_S = 1.0       # pause after a choice (then the patient must look away before choosing again)
+EMERGENCY_S = 2.0      # eyebrow held this long = Call Nurse, on any screen
 MOUTH_CONFIRM_S = 0.7  # backup confirm: jaw open held this long
-QUESTION_TIMEOUT_S = 30
+CHOSEN_FLASH_S = 0.5   # the chosen option flashes this long on the patient screen
 
-# Spots and meanings
+# Patient screens (seconds)
+SUGGESTION_FADE_S = 20  # an ignored AI suggestion fades back to idle
+CHECKIN_TIMEOUT_S = 30  # an unanswered check-in closes as "ignored"
+ROOM_TIMEOUT_S = 30     # room-control screens go back to idle with no choice
+OVERLAY_S = 6           # "Your nurse has been called" stays this long
+QUIET_S = 7200          # "Quiet for 2 hours"
+
+# Time of day (demo clock, lookat/clock.py)
+NIGHT_START = "22:00"
+NIGHT_END = "07:00"
+
+# Spots (the patient's left / center / right)
 SPOTS = ["left", "middle", "right"]
-ROOM_MEANING = {"left": "yes", "middle": "lamp", "right": "no"}
-MENU_ITEMS = ["Help", "Water", "Pain"]
 
 # Camera and vision
 CAMERA = (1280, 720)
@@ -24,3 +32,4 @@ MODEL_PATH = "models/face_landmarker.task"
 # Network
 PAGE_PORT = 8000
 LAMP_IP = os.environ.get("LAMP_IP", "172.20.10.2")
+FAN_IP = os.environ.get("FAN_IP", "")  # empty = simulated fan
