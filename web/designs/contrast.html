@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LookAt · High contrast</title>
+<!-- Alternative design "High contrast": black / white / yellow, the largest text and thick outlines,
+     nothing decorative. For low vision, glare, or a confused / delirious patient.
+     Same data (/api/screen) and logic (/web/lookat.js). -->
+<style>
+  :root { --u: min(1vh, 0.5625vw); --bg: #000; --text: #fff; --dim: #c9c9c9; --focus: #ffd60a; --alert: #ff6a3d; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    overflow: hidden; background: var(--bg); color: var(--text); cursor: none; -webkit-font-smoothing: antialiased;
+    font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+    display: grid; grid-template-rows: auto 1fr auto; gap: calc(var(--u) * 2.4);
+    padding: calc(var(--u) * 3) calc(var(--u) * 4);
+  }
+  svg.i { width: 1em; height: 1em; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+
+  header { display: flex; align-items: center; justify-content: space-between; font-size: calc(var(--u) * 2.4); font-weight: 700; min-height: calc(var(--u) * 5); }
+  .tag { padding: calc(var(--u) * .5) calc(var(--u) * 1.8); border: 3px solid var(--text); border-radius: calc(var(--u) * 1); letter-spacing: .1em; text-transform: uppercase; font-size: calc(var(--u) * 2); }
+  .corner { position: relative; overflow: hidden; display: flex; align-items: center; gap: calc(var(--u) * 1.2);
+    padding: calc(var(--u) * 1) calc(var(--u) * 2.2); border: 4px solid var(--text); border-radius: calc(var(--u) * 1.6); }
+  .corner svg { font-size: calc(var(--u) * 3.6); }
+  .corner b { font-size: calc(var(--u) * 2.8); }
+  .corner small { display: none; }
+
+  main { display: flex; flex-direction: column; justify-content: center; gap: calc(var(--u) * 3); min-height: 0; text-align: center; }
+  h1 { margin: 0; font-size: calc(var(--u) * 8.5); line-height: 1.08; font-weight: 800; text-wrap: balance; }
+  .sub { margin: 0; font-size: calc(var(--u) * 3.6); color: var(--dim); }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: calc(var(--u) * 3); }
+  .row.one { grid-template-columns: minmax(0, 60%); justify-content: center; }
+  .opt, .center {
+    position: relative; overflow: hidden; display: flex; align-items: center; justify-content: center; gap: calc(var(--u) * 2.4);
+    border: calc(var(--u) * .6) solid var(--text); border-radius: calc(var(--u) * 2); background: var(--bg);
+  }
+  .opt { min-height: calc(var(--u) * 22); padding: calc(var(--u) * 2) calc(var(--u) * 3); }
+  .opt > svg { font-size: calc(var(--u) * 8); }
+  .opt b { font-size: calc(var(--u) * 6.4); font-weight: 800; line-height: 1.05; text-align: left; }
+  .opt small, .center small { display: none; }
+  .center { align-self: center; min-width: 50%; padding: calc(var(--u) * 1.6) calc(var(--u) * 4); }
+  .center > svg { font-size: calc(var(--u) * 5); }
+  .center b { font-size: calc(var(--u) * 4.2); font-weight: 800; }
+  .arrow { font-size: calc(var(--u) * 5); font-weight: 800; }
+  .dots { display: flex; justify-content: center; gap: calc(var(--u) * 1.6); }
+  .dots i { width: calc(var(--u) * 2); height: calc(var(--u) * 2); border-radius: 50%; border: 3px solid var(--text); }
+  .dots i.on { background: var(--text); }
+  [data-spot].asking small { display: block; position: absolute; top: calc(var(--u) * 1); left: 0; right: 0; text-align: center;
+    font-size: calc(var(--u) * 2.6); font-weight: 800; }
+
+  /* gaze feedback: yellow outline when looking, solid yellow when "raise now" */
+  [data-spot] { transition: border-color .15s, background .15s, color .15s; }
+  [data-spot].dwell { border-color: var(--focus); color: var(--focus); }
+  [data-spot].asking { border-color: var(--focus); background: var(--focus); color: #000; }
+  [data-spot].chosen { border-color: #fff; background: #fff; color: #000; }
+  [data-spot] .bar { position: absolute; left: 0; bottom: 0; height: calc(var(--u) * 1.4); width: 0; background: #000; opacity: 0; }
+  [data-spot].asking .bar { opacity: 1; animation: shrink 3s linear forwards; }
+  @keyframes shrink { from { width: 100%; } to { width: 0; } }
+
+  footer { display: flex; align-items: center; justify-content: center; gap: calc(var(--u) * 1.6); font-size: calc(var(--u) * 3); font-weight: 700;
+    padding: calc(var(--u) * 1.2); border: 4px solid var(--alert); border-radius: calc(var(--u) * 1.6); color: var(--alert); }
+  footer svg { font-size: calc(var(--u) * 4); }
+  .gone { visibility: hidden; }
+
+  #overlay { position: fixed; inset: 0; z-index: 5; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: calc(var(--u) * 2);
+    background: var(--alert); color: #000; text-align: center; opacity: 0; pointer-events: none; }
+  #overlay.show { opacity: 1; }
+  #overlay .ov-icon { font-size: calc(var(--u) * 18); }
+  #overlay h1 { font-size: calc(var(--u) * 10); }
+  #overlay p { margin: 0; font-size: calc(var(--u) * 4); font-weight: 700; }
+  #facehint { position: fixed; top: calc(var(--u) * 3); left: 50%; transform: translateX(-50%); z-index: 4; display: none; align-items: center; gap: calc(var(--u) * 1);
+    padding: calc(var(--u) * 1) calc(var(--u) * 2.6); background: var(--focus); color: #000; font-size: calc(var(--u) * 2.6); font-weight: 800; border-radius: calc(var(--u) * 1); }
+  #facehint.show { display: flex; }
+  #demotag { position: fixed; right: calc(var(--u) * 1.6); bottom: calc(var(--u) * .6); display: none; font-size: calc(var(--u) * 1.4); color: #777; }
+  #demotag.show { display: block; }
+</style>
+</head>
+<body>
+<header id="head"></header>
+<main id="stage"></main>
+<footer id="bar"></footer>
+
+<script src="/web/lookat.js"></script>
+<script>
+const { icon, optIcon, esc, hintTag, bar, dots } = LookAt;
+const $ = (id) => document.getElementById(id);
+const ARROW = { left: "◀", right: "▶" };
+
+function card(d, spot) {
+  const o = d[spot];
+  if (!o) return "";
+  const a = `<span class="arrow">${ARROW[spot]}</span>`;
+  const inner = `${icon(optIcon(o))}<b>${esc(o.label)}</b>${hintTag(o, spot)}${bar}`;
+  return `<div class="opt" data-spot="${spot}">${spot === "left" ? a + inner : inner + a}</div>`;
+}
+
+function head(d) {
+  const left = (d.screen === "idle" || d.screen === "suggestion") && d.left
+    ? `<div class="corner" data-spot="left">◀ ${icon(optIcon(d.left) || "lamp")}<b>${esc(d.left.label)}</b>${hintTag(d.left, "left")}${bar}</div>`
+    : `<div>LookAt</div>`;
+  return `${left}${d.badge ? `<div class="tag">${esc(d.badge)}</div>` : "<div></div>"}<div></div>`;
+}
+
+function body(d) {
+  const sub = d.subtitle ? `<p class="sub">${esc(d.subtitle)}</p>` : "";
+  const sideOpts = d.screen === "idle" || d.screen === "suggestion" ? "" :
+    `<div class="row ${d.left && d.right ? "" : "one"}">${card(d, "left")}${card(d, "right")}</div>`;
+  const mid = d.middle
+    ? `<div class="center" data-spot="middle">${icon(optIcon(d.middle) || "home")}<b>${esc(d.middle.label)}</b>${hintTag(d.middle, "middle")}${bar}</div>` : "";
+  return `<h1>${esc(d.title)}</h1>${sub}${sideOpts}${mid}${dots(d.page)}`;
+}
+
+$("bar").innerHTML = `${icon("bell")}<span>Call Nurse · Long eyebrow raise anywhere</span>`;
+LookAt.start((d) => {
+  $("head").innerHTML = head(d);
+  $("stage").innerHTML = body(d);
+  $("bar").classList.toggle("gone", d.show_call_nurse === false);
+});
+</script>
+</body>
+</html>

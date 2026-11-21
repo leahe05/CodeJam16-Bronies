@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Patient Screen Designs</title>
+<!-- Team-only page: the 4 patient-screen designs side by side, all live on the same /api/screen data.
+     Open http://localhost:8000/web/designs/index.html while lookat.fake_api (or main.py) runs. -->
+<style>
+  :root { --bg: #f6f7f9; --card: #fff; --text: #1a2030; --muted: #5d6678; --line: #e3e6ec; --accent: #2f6fec; }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { --bg: #0f1420; --card: #171e2d; --text: #eef2fa; --muted: #98a3b8; --line: #263045; --accent: #7aa7ff; }
+  }
+  :root[data-theme="dark"] { --bg: #0f1420; --card: #171e2d; --text: #eef2fa; --muted: #98a3b8; --line: #263045; --accent: #7aa7ff; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font-family: "Segoe UI", system-ui, -apple-system, sans-serif; padding: 24px 16px 40px; }
+  header { max-width: 1500px; margin: 0 auto 20px; }
+  h1 { margin: 0 0 6px; font-size: 26px; }
+  header p { margin: 0; color: var(--muted); line-height: 1.5; max-width: 70ch; }
+  code { background: var(--line); padding: 1px 6px; border-radius: 5px; font-size: .9em; }
+  .grid { max-width: 1500px; margin: 0 auto; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 560px), 1fr)); gap: 20px; }
+  figure { margin: 0; background: var(--card); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+  .frame { position: relative; aspect-ratio: 16 / 9; overflow: hidden; background: #000; }
+  .frame iframe { position: absolute; top: 0; left: 0; width: 1600px; height: 900px; border: 0; transform-origin: 0 0; pointer-events: none; }
+  figcaption { padding: 14px 16px 16px; }
+  figcaption b { font-size: 17px; }
+  figcaption p { margin: 4px 0 8px; color: var(--muted); font-size: 14px; line-height: 1.45; }
+  figcaption a { color: var(--accent); font-size: 14px; text-decoration: none; font-weight: 600; }
+  figcaption a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Patient screen designs</h1>
+  <p>All four read the same live data (<code>/api/screen</code>) and share the same behaviour (<code>/web/lookat.js</code>), so the team can pick a look without changing any backend code. Tip: run <code>py -3.11 -m lookat.fake_api --still checkin</code> to compare one screen.</p>
+</header>
+<div class="grid">
+  <figure>
+    <div class="frame"><iframe src="/patient" title="Glow design" loading="lazy"></iframe></div>
+    <figcaption><b>Glow</b> (default, <code>web/patient.html</code>)
+      <p>Matches the LookAt mockups: deep navy, glassy glowing cards, light-blue hints.</p>
+      <a href="/patient" target="_blank">Open full screen →</a></figcaption>
+  </figure>
+  <figure>
+    <div class="frame"><iframe src="/web/designs/directions.html" title="Directions design" loading="lazy"></iframe></div>
+    <figcaption><b>Directions</b>
+      <p>Three equal columns placed exactly where the patient looks. Biggest targets for coarse gaze, flat and calm.</p>
+      <a href="/web/designs/directions.html" target="_blank">Open full screen →</a></figcaption>
+  </figure>
+  <figure>
+    <div class="frame"><iframe src="/web/designs/daylight.html" title="Daylight design" loading="lazy"></iframe></div>
+    <figcaption><b>Daylight</b>
+      <p>Warm light theme for daytime: projects cleanly when the room lights are on.</p>
+      <a href="/web/designs/daylight.html" target="_blank">Open full screen →</a></figcaption>
+  </figure>
+  <figure>
+    <div class="frame"><iframe src="/web/designs/contrast.html" title="High contrast design" loading="lazy"></iframe></div>
+    <figcaption><b>High contrast</b>
+      <p>Black, white and yellow with the largest text. For low vision, glare or a confused patient.</p>
+      <a href="/web/designs/contrast.html" target="_blank">Open full screen →</a></figcaption>
+  </figure>
+</div>
+<script>
+  // scale each 1600x900 page down to fit its card
+  function fit() {
+    document.querySelectorAll(".frame").forEach((f) => {
+      const s = f.clientWidth / 1600;
+      f.querySelector("iframe").style.transform = `scale(${s})`;
+    });
+  }
+  addEventListener("resize", fit);
+  fit();
+</script>
+</body>
+</html>

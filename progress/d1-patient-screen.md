@@ -1,1 +1,2 @@
 12:21 D1: lookat/display.py patient screen (all 6 mockup screens + live gaze feedback + call-nurse overlay), --demo PASS with 17 frames, 55 tests pass
+12:33 D1: patient screen moved to web/patient.html on the docs/API.md contract (shared web/lookat.js), + 3 alternative designs (Directions, Daylight, High contrast) and a side-by-side gallery at /web/designs/index.html; all checked against lookat.fake_api
