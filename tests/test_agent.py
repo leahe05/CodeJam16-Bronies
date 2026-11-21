@@ -50,6 +50,15 @@ def real_clock_after():
     clock.reset()
 
 
+@pytest.fixture
+def calm(monkeypatch):
+    """Real-life pacing (LOOKAT_CALM=1): the backoff tests check those numbers, not the fast demo ones."""
+    for k, v in {"COOLDOWN_MIN": 20, "SETTLE_S": 10, "TEMP_CHANGE_C": 1.0, "CHANGE_GAP_S": 60, "AFTER_EPISODE_MIN": 3,
+                 "IGNORED_HUSH_MIN": 10, "IGNORED_BACKOFF_MIN": 30, "DECLINED_BACKOFF_MIN": 60,
+                 "OWN_CHOICE_MIN": 30}.items():
+        monkeypatch.setattr(f"lookat.agent.{k}", v)
+
+
 def stages(live):
     return [(f["stage"], f["text"]) for f in live.feed]
 
@@ -327,7 +336,7 @@ def test_own_fix_is_not_a_room_change(tmp_path):
 
 
 # ----- respecting silence -------------------------------------------------------------------
-def test_ignored_suggestion_backs_off_and_hushes(tmp_path):
+def test_ignored_suggestion_backs_off_and_hushes(tmp_path, calm):
     agent, live, *_ = make(tmp_path, answers=["ignored"])
     agent.episode(*agent.trigger(agent.perceive()))
     agent.last_run.clear()                          # even without the usual cooldown...
@@ -337,7 +346,7 @@ def test_ignored_suggestion_backs_off_and_hushes(tmp_path):
     assert any("Ignored: no 'warm_night' suggestions for 30 min" in t for _, t in stages(live))
 
 
-def test_second_ignore_doubles_the_backoff(tmp_path):
+def test_second_ignore_doubles_the_backoff(tmp_path, calm):
     agent, live, *_ = make(tmp_path, answers=["ignored", "ignored"])
     for _ in range(2):
         agent.last_run.clear(); agent.backoff.clear(); agent.hush_until = 0
@@ -345,7 +354,7 @@ def test_second_ignore_doubles_the_backoff(tmp_path):
     assert any("for 60 min" in t for _, t in stages(live))
 
 
-def test_declined_suggestion_waits_an_hour(tmp_path):
+def test_declined_suggestion_waits_an_hour(tmp_path, calm):
     agent, live, *_ = make(tmp_path, answers=["No, thanks."])
     agent.episode(*agent.trigger(agent.perceive()))
     assert any("Declined: no 'warm_night' suggestions for 60 min" in t for _, t in stages(live))

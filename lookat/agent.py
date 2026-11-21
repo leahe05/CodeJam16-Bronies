@@ -9,6 +9,8 @@ WHEN is decided by deterministic triggers (cheap, explainable, demo-safe):
                  decides whether it is worth a suggestion
     habit        it is about the time of a habit memory found (e.g. usual bedtime: lamp off ~22:00) and the
                  switch isn't in that state yet: offer it (from 15 min before to 30 min after)
+    bedtime      about the patient's bedtime (a learned habit, else the chart, else 22:00), once a night:
+                 Claude checks in for the night in its own words (lamp, fan, anything for the nurse)
     extreme      room >= 30 or <= 16 °C: page the nurse at once (awake or not)
 A suggestion shows its 2 concrete choices on the notification ("Turn the fan off" / "Ask nurse for a blanket"),
 "Not now" in the center; ignoring it fades it. Ignored / declined topics back off (respecting silence).
@@ -31,6 +33,7 @@ import re
 import queue
 import threading
 import time
+from datetime import timedelta
 from typing import Callable, Optional
 
 from pydantic import BaseModel
@@ -45,23 +48,29 @@ CALL_TIMEOUT_S = 15
 MAX_TURNS = 8
 MAX_QUESTIONS = 3
 TICK_S = 1.0
-COOLDOWN_MIN = 20            # a trigger stays quiet this long after it ran (demo clock minutes)
-SETTLE_S = 10                # wait this long after the patient's last choice before speaking first
+# Pacing. The default is DEMO pacing: the agent reacts within seconds to every change the team makes on the
+# panel (temperature, clock), because the demo must show what it can do. LOOKAT_CALM=1 gives the real-life
+# pacing (the first value of each pair), which waits much longer before speaking again.
+CALM = os.environ.get("LOOKAT_CALM") == "1"
+COOLDOWN_MIN = 20 if CALM else 2   # a trigger stays quiet this long after it ran (demo clock minutes)
+SETTLE_S = 10 if CALM else 3       # wait this long after the patient's last choice before speaking first
 YES_WORDS = ("yes", "ok", "please", "sure")
 COMFORT_OPTIONS = ["Adjust pillows", "Change position", "Water", "Too warm", "Too cold", "Something else"]
-TEMP_CHANGE_C = 1.0          # a room change worth a look: the temperature moved this much since Claude last looked
-CHANGE_GAP_S = 60            # at most one room-change look per minute
+TEMP_CHANGE_C = 1.0 if CALM else 0.5   # a room change worth a look: the temperature moved this much since Claude last looked
+CHANGE_GAP_S = 60 if CALM else 5       # at most one room-change look per minute (demo: every 5 s)
 PERIODS = [(7, "morning"), (12, "afternoon"), (17, "evening"), (22, "night")]
 MENU_MAX = 3                 # options Claude writes; "Quiet for 2 hours" and "Something else" are always added
 QUIET_OPTION = "Quiet for 2 hours"
 # Respecting silence (all on the demo clock):
-AFTER_EPISODE_MIN = 3        # after any episode, wait this long before speaking first again
-IGNORED_HUSH_MIN = 10        # a suggestion the patient ignored: nothing new for this long
-IGNORED_BACKOFF_MIN = 30     # ...and that topic waits 30, then 60, 120, 240 min after each ignore in a row
-DECLINED_BACKOFF_MIN = 60    # "No, thanks." / Return to main menu: that topic waits an hour
-OWN_CHOICE_MIN = 30          # don't offer to undo a switch the patient chose themselves this recently...
+AFTER_EPISODE_MIN = 3 if CALM else 0.25    # after any episode, wait this long before speaking first again
+IGNORED_HUSH_MIN = 10 if CALM else 0.5     # a suggestion the patient ignored: nothing new for this long
+IGNORED_BACKOFF_MIN = 30 if CALM else 2    # ...and that topic waits 30, then 60, 120, 240 min after each ignore in a row
+DECLINED_BACKOFF_MIN = 60 if CALM else 2   # "No, thanks." / Return to main menu: that topic waits an hour
+OWN_CHOICE_MIN = 30 if CALM else 2         # don't offer to undo a switch the patient chose themselves this recently...
 CLEARLY_C = 1.5              # ...unless the room is now clearly past their threshold (e.g. 18 °C for "cold below 20")
 HABIT_BEFORE_MIN, HABIT_AFTER_MIN = 15, 30   # offer a habit from 15 min before its usual time to 30 min after
+BEDTIME_DEFAULT = "22:00"    # when neither a learned habit nor the chart says when the patient goes to bed
+BEDTIME_BEFORE_MIN, BEDTIME_AFTER_MIN = 15, 60   # the bedtime check-in runs once a night, in this window
 EXTREME_HIGH_C = 30.0        # outside these the room is unsafe (or the sensor is wrong): page the nurse at once,
 EXTREME_LOW_C = 16.0         # awake or not, screen or not
 
@@ -93,6 +102,11 @@ pillows, pain or anything else needs the nurse.
 - HABIT lines in get_context are habits memory found in the patient's own switches over several days (e.g. \
 "Usual bedtime: lamp off around 22:02"). Use them: around that time, offer it ("It's about your usual \
 bedtime." -> "Turn the lamp off" / "Not yet"); at other times, let them shape what you offer.
+- BEDTIME trigger: it is about the patient's bedtime. Check in for the night with ONE suggestion in your own \
+words, built from the room right now and memory (lamp still on -> offer to turn it off; warm -> the fan; or \
+what the nurse can do before sleep: water, position).
+- A TEMPERATURE change the room just went through is new information: look at it even if you asked about \
+temperature before, and say what you noticed in the suggestion. If nothing would help, finish without asking.
 - remember() only a durable preference the patient has shown at least twice, on different occasions, or \
 chose to tell you. One or two switches are not a preference (the team also tests the room).
 - A suggestion shows its 2 options right on the notification ("Not now" is always in the center). \
@@ -234,6 +248,7 @@ class Agent:
         self.quiet_until = None           # clock datetime
         self.last_change_look = -1e9
         self.seen: Optional[dict] = None   # the room as Claude last looked at it (room-change triggers)
+        self.bedtime_night = None          # the night (date it started) the bedtime check-in already ran
         self.menu_sig = None              # the situation the Talk to AI menu was written for
         self.hush_until = 0.0             # clock timestamp: no speaking first before this
         self.backoff: dict = {}           # trigger -> clock timestamp it may run again
@@ -392,6 +407,36 @@ class Agent:
             self.seen = now                         # the patient's own switches update quietly
         return out
 
+    def bedtime(self, L: dict) -> tuple:
+        """("HH:MM", where it comes from): a learned bedtime habit, else the chart, else BEDTIME_DEFAULT."""
+        for h in L["habits"]:
+            if h.get("bedtime"):
+                return h["usual"], f"learned: {h['text']}"
+        for f in reversed(self.memory.data["facts"]):
+            bt = (f.get("data") or {}).get("bedtime")
+            if bt:
+                return str(bt), f"{f.get('source', 'memory')}: {f['text']}"
+        return BEDTIME_DEFAULT, "default"
+
+    def bedtime_due(self, p: dict, L: dict) -> Optional[tuple]:
+        """("bedtime", reason) once a night, from BEDTIME_BEFORE_MIN before the bedtime to BEDTIME_AFTER_MIN after."""
+        from lookat.memory import _diff, _mins
+        if any(h.get("bedtime") for h in L["habits"]):
+            return None              # a learned bedtime habit: habit_due offers it (the "One week later" story)
+        bt, source = self.bedtime(L)
+        d = _diff(_mins(p["time"]), _mins(bt))
+        if not -BEDTIME_BEFORE_MIN <= d <= BEDTIME_AFTER_MIN:
+            return None
+        night = (clock.now() - timedelta(hours=12)).date()    # 21:50 and 00:30 belong to the same night
+        if self.bedtime_night == night or self._backed_off("bedtime"):
+            return None
+        self.bedtime_night = night
+        return "bedtime", (f"BEDTIME: it is {p['time']}, about the patient's usual bedtime {bt} ({source}). "
+                           f"Room {p['temp_c']} °C, lamp {'on' if p['lamp_on'] else 'off'}, "
+                           f"fan {'on' if p['fan_on'] else 'off'}. Check in for the night now with one suggestion "
+                           "in your own words: 2 options that would help them settle, from the room and memory "
+                           "('Not now' is always added). If they choose a switch, act() it, then finish.")
+
     def habit_due(self, p: dict, L: dict) -> Optional[tuple]:
         """("habit", reason) when it is about the time of a habit and its switch isn't in that state yet."""
         from lookat.memory import _diff, _mins
@@ -484,12 +529,14 @@ class Agent:
             return "cold", (f"Room {p['temp_c']} °C <= {cold} °C, memory: feels cold below {cold} °C"
                             + (f"; they turned the fan on themselves at {own}, so ask kindly, don't assume" if own else "")
                             + ". Make one suggestion now.")
-        habit = self.habit_due(p, L)
+        habit = self.habit_due(p, L) or self.bedtime_due(p, L)
         if habit:
             return habit
         changes = self.room_changes(p)
+        temp_moved = any(c.startswith("temperature") for c in changes)   # new information: look even if on hold
         if changes and self.client is not None and time.monotonic() - self.last_change_look >= CHANGE_GAP_S \
-                and not self._backed_off("room_change") and (L["night_checkins_enabled"] or not p["night"]):
+                and (temp_moved or not self._backed_off("room_change")) \
+                and (L["night_checkins_enabled"] or not p["night"]):
             self.last_change_look = time.monotonic()
             return "room_change", ("The room changed: " + "; ".join(changes) + ". If that is worth offering the "
                                    "patient something right now, make ONE suggestion (a short question); otherwise "
@@ -584,6 +631,19 @@ class Agent:
             if action_in(ans) == (dev, cmd):
                 c("act", {"device": dev, "cmd": cmd, "why": "the patient chose it"})
             c("finish", {"summary": f"Habit ({h.get('text', '')}): {ans}", "why": "done"})
+        elif name == "bedtime":
+            lamp = self.live.room.state()["lamp_on"]
+            first = "Turn the lamp off" if lamp else "Ask nurse to settle me"
+            ans = c("suggest", {"text": "It's about your bedtime.", "question": "Ready for the night?",
+                                "options": [first, "Not yet"], "if_yes": None,
+                                "why": "usual bedtime" + (", lamp still on" if lamp else "")})
+            if action_in(ans) == ("lamp", "off"):
+                c("act", {"device": "lamp", "cmd": "off", "why": "the patient chose it"})
+            elif ans == "Ask nurse to settle me":
+                c("page_nurse", {"message": "Ready for the night; would like to be settled.",
+                                 "reason": "Chosen at the bedtime check-in.", "urgency": "normal",
+                                 "why": "needs a person"})
+            c("finish", {"summary": f"Bedtime check-in: {ans}", "why": "done"})
         elif name == "cold":
             fan = self.live.room.state()["fan_on"]
             opts = ["Turn the fan off", "Ask nurse for a blanket"] if fan else ["Ask nurse for a blanket", "No, thanks."]
