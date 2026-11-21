@@ -1,7 +1,8 @@
 """The fake API must return the shapes promised in docs/API.md."""
 import time
 
-from lookat.fake_api import SCREENS, Fake, _public
+from lookat.fake_api import SCREENS, Fake
+from lookat.server import public as _public, safe as _safe
 
 SCREEN_KEYS = {"v", "screen", "badge", "title", "subtitle", "icon", "left", "middle", "right", "footer",
                "page", "show_call_nurse", "focus", "overlay", "clock", "room", "face"}
@@ -45,7 +46,6 @@ def test_cold_setpoint_creates_flag():
 
 
 def test_bad_numbers_fail_cleanly():
-    from lookat.fake_api import _safe
     f = Fake()
     assert _safe(lambda: f.nurse_action("room", {"setpoint_c": "abc"}))["ok"] is False
     assert _safe(lambda: f.demo_action({"action": "set_temp", "value": None}))["ok"] is False

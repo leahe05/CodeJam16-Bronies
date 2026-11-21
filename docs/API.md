@@ -8,7 +8,7 @@ The Python program serves everything on one port (`config.PAGE_PORT`, 8000):
 | Nurse app (phone) | `/nurse` | `web/nurse.html` | `GET /api/nurse` every 1 s |
 | Reasoning + demo panel (judges/operator) | `/panel` | `web/panel.html` | `GET /api/panel` every 500 ms |
 
-Anything else in `web/` (css, js, svg, images) is served at `/web/<file>`. Pages use **relative URLs** (`fetch("/api/screen")`), no external files (no CDN: the hotspot may have no internet).
+Anything else in `web/` (css, js, svg, images) is served at `/web/<file>`. Other page layouts (folders, a build tool's `web/dist`) also work: see `docs/FRONTEND.md`. Pages use **relative URLs** (`fetch("/api/screen")`), no external files (no CDN: the hotspot may have no internet). Check with `py -3.11 -m lookat.check_frontend`.
 
 **Develop without the camera:** `py -3.11 -m lookat.fake_api` serves your pages with fake data that changes every few seconds (all screens, highlights, nurse alerts, panel feed) and accepts every POST below. Open `http://localhost:8000/patient`. The real program (`main.py`) serves the exact same URLs and JSON.
 
