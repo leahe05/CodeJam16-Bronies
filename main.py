@@ -1,12 +1,13 @@
 """LookAt: the real program.
 
-    py -3.11 main.py --patient NAME [--recalibrate] [--camera 0]
+    py -3.11 main.py --patient NAME [--recalibrate] [--camera 0] [--no-voice]
     py -3.11 main.py --patient NAME --keyboard      (no camera: test with the keyboard)
 
 Starts the web server (Lea's pages + the JSON API, docs/API.md), the plugs (lamp,
 fan), calibrates gaze and eyebrows on the patient screen if needed, then runs the
 camera loop in the main thread: camera -> gaze spot + eyebrow events -> Live.frame()
-(selection engine -> screens -> room / nurse).
+(selection engine -> screens -> room / nurse). A voice (lookat/speech.py) says which card
+locked and when to raise the eyebrows, what was chosen, and new screens.
 
 Operator window (team only) keys:  c = recalibrate gaze   g = recalibrate eyebrows   q = quit
 Keyboard mode keys:  a / s / d = look left / center / right   x = look away
@@ -25,6 +26,7 @@ from lookat import config
 from lookat.devices import Room
 from lookat.live import Live
 from lookat.server import PAGES, find_page, make_app
+from lookat.speech import Announcer, Speech
 
 WINDOW = "LookAt operator (team only)"
 
@@ -187,11 +189,11 @@ def describe(events, out, chosen, flash: tuple) -> tuple:
 
 
 def run_camera(args, live: Live) -> None:
-    from lookat.gaze import GazeModel, LocalSpeaker
+    from lookat.gaze import GazeModel
     from lookat.gestures import GestureDetector, load_settings
     from lookat.vision import FaceTracker
 
-    speaker = LocalSpeaker()
+    speaker = args.speech          # the same voice as the announcements (lookat/speech.py)
     tracker = FaceTracker(args.camera)
     live.camera_ok = True
     try:
@@ -239,7 +241,6 @@ def run_camera(args, live: Live) -> None:
     finally:
         live.camera_ok = False
         tracker.close()
-        speaker.close()
 
 
 def run_keyboard(args, live: Live) -> None:
@@ -273,6 +274,7 @@ def main() -> None:
     ap.add_argument("--camera", type=int, default=0)
     ap.add_argument("--keyboard", action="store_true", help="no camera: test with the keyboard")
     ap.add_argument("--port", type=int, default=config.PAGE_PORT)
+    ap.add_argument("--no-voice", action="store_true", help="no spoken feedback (calibration prompts are printed)")
     args = ap.parse_args()
 
     check_wifi()
@@ -281,6 +283,8 @@ def main() -> None:
     server = start_server(live, args.port)
     print_urls(args.port)
     print(f"Lamp: {room.lamp.ip or 'simulated'}   Fan: {room.fan.ip or 'simulated (set FAN_IP for plug 2)'}")
+    args.speech = Speech(enabled=not args.no_voice)
+    live.announcer = Announcer(args.speech.say)   # says the locked card, the choice, new screens
     try:
         (run_keyboard if args.keyboard else run_camera)(args, live)
     except KeyboardInterrupt:
@@ -289,6 +293,7 @@ def main() -> None:
         cv2.destroyAllWindows()
         server.should_exit = True
         room.close()
+        args.speech.close()
         print("LookAt stopped.", flush=True)
         # end the process for sure: a stuck camera/voice/web thread kept it alive before, holding
         # port 8000 and the camera, so the next start failed with "port already in use"

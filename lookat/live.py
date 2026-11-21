@@ -44,6 +44,7 @@ class Live:
         self.listeners: list = []        # callbacks(event_tuple) - the agent subscribes here
         self.camera_ok = False
         self.calibration: Optional[dict] = None   # {"text", "spot"} while calibrating
+        self.announcer = None            # lookat.speech.Announcer: spoken feedback (main.py sets it)
         self._ids = itertools.count(1)
         self._reset_state()
 
@@ -87,6 +88,11 @@ class Live:
             self.room.tick(now)
             for ev in out:
                 self._handle(ev, now)
+            if self.announcer is not None:
+                try:
+                    self.announcer.update(self.sm.view(now), self.machine.view(), self.chosen, out)
+                except Exception as e:   # noqa: BLE001 - the voice must never stop the camera loop
+                    log_event("voice_error", error=repr(e))
         for ev in out:
             self._notify(ev)
         return out
