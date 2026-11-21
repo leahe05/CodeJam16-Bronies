@@ -22,6 +22,10 @@ from lookat.machine import Machine
 from lookat.screens import ScreenManager
 from lookat.state import log_event
 
+# A face missing for less than this (a dropped frame, a blink, a hand passing) keeps the look, so
+# the highlight doesn't reset; no choice is ever made on a frame without a face.
+FACE_GRACE_S = 0.4
+
 YES_NO_START = ("is", "are", "do", "did", "does", "would", "will", "can", "could", "should", "have", "has")
 
 
@@ -53,6 +57,8 @@ class Live:
         self.sm = ScreenManager(room=self.room.state)
         self.machine = Machine()
         self.face = False
+        self._face_seen: Optional[float] = None   # when a face was last in view
+        self._last_spot: Optional[str] = None     # where it was looking then
         self.brow = {"up": False, "held_s": 0.0}
         self.chosen: Optional[str] = None
         self.spot: Optional[str] = None
@@ -73,6 +79,12 @@ class Live:
         """One camera frame. brow = {"up": bool, "held_s": float} from the gesture detector.
         Returns the patient events it produced."""
         with self.lock:
+            if face:
+                self._face_seen, self._last_spot = now, spot
+            else:
+                events = [e for e in (events or ()) if e != "confirm"]   # never choose without a face
+                if self._face_seen is not None and now - self._face_seen < FACE_GRACE_S:
+                    face, spot = True, self._last_spot                     # a blip: keep the look
             self.face, self.spot, self.confidence = face, spot, confidence
             self.brow = brow or {"up": False, "held_s": 0.0}
             if self.calibration is not None:

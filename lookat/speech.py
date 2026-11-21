@@ -69,20 +69,34 @@ class Speech:
         self.proc = None                 # Windows: the voice process
         self._mac_q = None               # macOS: lines waiting for `say`
         self._mac_now = None             # macOS: the `say` process speaking now
+        self.enabled = enabled
+        self._retry_at = 0.0             # Windows: when to restart a voice process that died
         if not enabled:
             return
         if sys.platform == "win32":
-            try:
-                self.proc = subprocess.Popen(["powershell", "-NoProfile", "-Command", _SCRIPT],
-                                             stdin=subprocess.PIPE, text=True, encoding="utf-8")
-            except OSError as e:
-                print(f"[voice off: {e}]")
+            self._start()
         elif sys.platform == "darwin" and shutil.which("say"):
             from lookat.gaze import SystemVoice
             self._mac_voice = SystemVoice._pick_mac_voice()
             self._mac_rate = SystemVoice.MAC_RATE
             self._mac_q = queue.Queue()
             threading.Thread(target=self._mac_run, name="voice", daemon=True).start()
+
+    RESTART_S = 30.0
+
+    def _start(self) -> None:
+        self._retry_at = time.monotonic() + self.RESTART_S
+        try:
+            self.proc = subprocess.Popen(["powershell", "-NoProfile", "-Command", _SCRIPT],
+                                         stdin=subprocess.PIPE, text=True, encoding="utf-8")
+        except OSError as e:
+            print(f"[voice off: {e}]")
+            self.proc = None
+
+    def status(self) -> str:
+        if not self.enabled:
+            return "off"
+        return "laptop voice" if (self.proc is not None or self._mac_q is not None) else "laptop voice DOWN"
 
     def __call__(self, text: str) -> None:
         """Queued after anything already being said (calibration prompts)."""
@@ -102,8 +116,14 @@ class Speech:
             if line:
                 self._mac_q.put(line)
             return
+        if self.proc is not None and self.proc.poll() is not None:
+            self.proc = None                 # the voice process exited by itself
         if self.proc is None:
-            return
+            if not (self.enabled and sys.platform == "win32" and time.monotonic() >= self._retry_at):
+                return
+            self._start()                    # died earlier: try once more (at most every 30 s)
+            if self.proc is None:
+                return
         try:
             self.proc.stdin.write(("!" if interrupt else "") + line + "\n")
             self.proc.stdin.flush()
@@ -153,6 +173,9 @@ class WebVoice:
 
     KEEP = 20
 
+    def status(self) -> str:
+        return "patient page"
+
     def __init__(self):
         self.lock = threading.Lock()
         self.lines: list = []
@@ -201,6 +224,8 @@ class EdgeVoice:
         self._q: "queue.Queue" = queue.Queue()
         self._gen = 0                    # bumped by say(): anything older is dropped / stopped
         self._fallback = None
+        self._offline_until = 0.0        # after a failed fetch: don't wait on the network again yet
+        self.failures = 0
         os.makedirs(self.CACHE, exist_ok=True)
         threading.Thread(target=self._run, name="edge-voice", daemon=True).start()
 
@@ -227,6 +252,11 @@ class EdgeVoice:
             print(f"Voice: {got} lines ready ({self.voice})")
         threading.Thread(target=run, name="edge-prewarm", daemon=True).start()
 
+    OFFLINE_S = 60.0                     # after a failed fetch, new lines use the laptop voice this long
+
+    def status(self) -> str:
+        return "Ava" if time.monotonic() >= self._offline_until else "laptop voice (Ava offline)"
+
     def close(self) -> None:
         self.say("")
         self._q.put(None)
@@ -238,6 +268,8 @@ class EdgeVoice:
         path = os.path.join(self.CACHE, key + ".mp3")
         if os.path.isfile(path) and os.path.getsize(path) > 0:
             return path
+        if time.monotonic() < self._offline_until:
+            return None                    # offline: don't make the patient wait 8 s per line
         try:
             import asyncio
             import edge_tts
@@ -248,6 +280,7 @@ class EdgeVoice:
             return path
         except Exception as e:   # noqa: BLE001 - offline, blocked, or edge-tts missing
             log_event("voice_offline", error=type(e).__name__)
+            self._offline_until = time.monotonic() + self.OFFLINE_S
             return None
 
     def _run(self) -> None:
@@ -256,28 +289,44 @@ class EdgeVoice:
             if item is None:
                 return
             gen, text = item
-            if gen != self._gen:
-                continue
-            path = self._file(text)
-            if gen != self._gen:
-                continue                  # interrupted while fetching
-            if path is None:
-                if self._fallback is None:
-                    self._fallback = Speech()
-                self._fallback(text)
-                continue
-            self._play(path, gen)
+            try:
+                self._speak(gen, text)
+            except Exception as e:   # noqa: BLE001 - one bad line must never silence the voice
+                self.failures += 1
+                log_event("voice_error", error=repr(e))
 
-    def _play(self, path: str, gen: int) -> None:
-        """Windows MCI (winmm): play the mp3, stop at once if say() was called meanwhile."""
-        if sys.platform != "win32":
-            subprocess.run(["afplay", path]) if shutil.which("afplay") else None
+    def _speak(self, gen: int, text: str) -> None:
+        if gen != self._gen:
             return
+        path = self._file(text)
+        if gen != self._gen:
+            return                        # interrupted while fetching
+        if path is None or not self._play(path, gen):
+            if path is not None:          # a broken mp3: fetch it again next time
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+            if self._fallback is None:
+                self._fallback = Speech()
+            self._fallback(text)
+
+    def _play(self, path: str, gen: int) -> bool:
+        """Windows MCI (winmm): play the mp3, stop at once if say() was called meanwhile.
+        False = it could not be played (the caller says the line with the laptop voice)."""
+        if sys.platform != "win32":
+            if not shutil.which("afplay"):
+                return False
+            return subprocess.run(["afplay", path]).returncode == 0
         import ctypes
         mci = ctypes.windll.winmm.mciSendStringW
         buf = ctypes.create_unicode_buffer(32)
-        mci(f'open "{path}" type mpegvideo alias lookat_voice', None, 0, None)
-        mci("play lookat_voice", None, 0, None)
+        mci("close lookat_voice", None, 0, None)          # in case an earlier line left it open
+        if mci(f'open "{path}" type mpegvideo alias lookat_voice', None, 0, None) != 0:
+            return False
+        if mci("play lookat_voice", None, 0, None) != 0:
+            mci("close lookat_voice", None, 0, None)
+            return False
         try:
             while gen == self._gen:
                 mci("status lookat_voice mode", buf, 32, None)
@@ -287,6 +336,7 @@ class EdgeVoice:
         finally:
             mci("stop lookat_voice", None, 0, None)
             mci("close lookat_voice", None, 0, None)
+        return True
 
 
 def known_lines() -> list:

@@ -45,11 +45,43 @@ def public(data):
 
 
 def safe(handler):
-    """Bad input (e.g. "setpoint_c": "abc") -> {"ok": false}, never a server error."""
+    """Bad input (e.g. "setpoint_c": "abc") -> {"ok": false}, never a server error. Any other
+    failure (a bug behind a button) is logged and also answered {"ok": false}: the server and
+    the other pages keep working."""
     try:
         return handler()
     except (TypeError, ValueError, KeyError) as e:
         return {"ok": False, "error": f"bad value: {e}"}
+    except Exception as e:   # noqa: BLE001
+        _log("api_error", error=repr(e))
+        return {"ok": False, "error": "server error (logged)"}
+
+
+def _log(kind: str, **details) -> None:
+    try:
+        from lookat.state import log_event
+        log_event(kind, **details)
+    except Exception:   # noqa: BLE001 - logging must never break a request
+        pass
+
+
+class LastGood:
+    """GET data that never fails: if building it throws, answer with the last good copy (the
+    page keeps showing the screen instead of freezing on an error) and log it."""
+
+    def __init__(self, backend):
+        self.backend = backend
+        self.last: dict = {}
+
+    def get(self, name: str, build):
+        try:
+            with self.backend.lock:
+                data = public(build())
+        except Exception as e:   # noqa: BLE001
+            _log("api_error", api=name, error=repr(e))
+            return self.last.get(name, {"ok": False, "error": "not ready"})
+        self.last[name] = data
+        return data
 
 
 def make_app(backend, title: str = "LookAt", web_dir: str = WEB_DIR):
@@ -85,20 +117,19 @@ def make_app(backend, title: str = "LookAt", web_dir: str = WEB_DIR):
                         for n in PAGES)
         return HTMLResponse(f"<h1>LookAt</h1><ul>{links}</ul>")
 
+    good = LastGood(backend)
+
     @app.get("/api/screen")
     def api_screen():
-        with backend.lock:
-            return public(backend.screen_json())
+        return good.get("screen", backend.screen_json)
 
     @app.get("/api/nurse")
     def api_nurse():
-        with backend.lock:
-            return public(backend.nurse_json())
+        return good.get("nurse", backend.nurse_json)
 
     @app.get("/api/panel")
     def api_panel():
-        with backend.lock:
-            return public(backend.panel_json())
+        return good.get("panel", backend.panel_json)
 
     @app.post("/api/nurse/{path:path}")
     async def api_nurse_post(path: str, request: Request):
