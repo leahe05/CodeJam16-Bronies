@@ -34,7 +34,7 @@
     #wg-start, #wg-cal { position: fixed; inset: 0; z-index: 20; display: flex; flex-direction: column; align-items: center;
       justify-content: center; gap: 2vh; text-align: center; color: var(--text, #fff); background: var(--bg, #050a22); cursor: pointer; }
     #wg-start h1 { font-size: 6vh; margin: 0; } #wg-start p, #wg-cal p { font-size: 2.6vh; opacity: .8; margin: 0; }
-    #wg-cal { cursor: none; background: rgba(5, 10, 34, .96); }
+    #wg-cal { cursor: none; background: var(--bg, #050a22); }
     #wg-cal .msg { position: absolute; top: 44%; left: 0; right: 0; }
     #wg-cal .msg b { display: block; font-size: 4.5vh; margin-bottom: 1vh; }
     #wg-target { position: fixed; width: 5vh; height: 5vh; margin: -2.5vh 0 0 -2.5vh; border-radius: 50%; z-index: 21;
@@ -69,15 +69,26 @@
   // ---------------- start (one click) ----------------
   function startScreen() {
     const s = el("wg-start", `<h1>Eye tracking on this screen</h1><p>Click once to start the camera, then follow the dot with your eyes.</p>`);
-    s.onclick = async () => {
-      s.remove();
+    s.onclick = () => { s.remove(); run(); };
+  }
+
+  async function run() {
+    const st = el("wg-cal", `<div class="msg"><b>Starting the camera…</b><p>Loading eye tracking (a few seconds).</p></div>`);
+    try {
       await begin();
       await calibrate();
-    };
+    } catch (e) {
+      console.error("WG", e);
+      st.innerHTML = `<div class="msg"><b>Eye tracking could not start</b><p>${String(e && e.message || e)}</p>`
+        + `<p>Allow the camera for this page. If another app is using it, start main.py with the other camera (--camera 0 / 1). Click to retry.</p></div>`;
+      st.style.cursor = "pointer";
+      st.onclick = () => location.reload();
+    }
   }
 
   async function begin() {
     if (running) return;
+    console.log("WG begin");
     const wg = window.webgazer;
     wg.params.faceMeshSolutionPath = "/web/vendor/webgazer/mediapipe/face_mesh";   // offline
     wg.params.showVideoPreview = false;
@@ -89,7 +100,10 @@
       if (xs.length > SMOOTH) { xs.shift(); ys.shift(); }
       lastPred = performance.now();
     });
-    await wg.begin();
+    const started = wg.begin();
+    const timeout = new Promise((_, no) => setTimeout(() => no(new Error("the camera or the face model did not start within 25 s")), 25000));
+    await Promise.race([started, timeout]);
+    console.log("WG started");
     wg.showVideoPreview(false).showPredictionPoints(false).showFaceOverlay(false).showFaceFeedbackBox(false);
     wg.removeMouseEventListeners();                  // never learn from the mouse: only from our dots
     running = true;
@@ -162,7 +176,7 @@
 
   const s = document.createElement("script");
   s.src = "/web/vendor/webgazer/webgazer.js";
-  s.onload = startScreen;
+  s.onload = params.get("autostart") === "1" ? run : startScreen;   // autostart: testing only (no click)
   s.onerror = () => el("wg-start", "<h1>WebGazer did not load</h1><p>web/vendor/webgazer/webgazer.js is missing.</p>");
   document.head.appendChild(s);
 })();
