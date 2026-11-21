@@ -4,3 +4,5 @@ calib/
 __pycache__/
 .pytest_cache/
 memory/
+cache/
+*.mp3
