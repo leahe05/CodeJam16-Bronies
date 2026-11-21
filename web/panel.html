@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LookAt Agent</title>
+<!-- Reasoning + demo panel (operator / judges). Data: GET /api/panel every 500 ms, POST /api/demo (docs/API.md §3).
+     Middle: the agent's episodes as cards (Noticed → Decided → Did → Checked → Outcome, with each step's "why").
+     Left: what it perceives now + demo controls. Right: what it remembers about the patient. -->
+<style>
+  :root {
+    --bg: #050a22; --b1: #1d4ed8; --b2: #0891b2; --b3: #3730a3;
+    --text: #f4f8ff; --hint: #9fb8e6; --muted: #6f86b5;
+    --glass: rgba(255, 255, 255, .055); --line: rgba(190, 225, 255, .18); --line2: rgba(190, 225, 255, .3);
+    --cyan: #67e8f9; --ok: #4ade80; --warn: #fbbf24; --bad: #f87171;
+    --s-noticed: #93c5fd; --s-decided: #c4b5fd; --s-did: #67e8f9; --s-checked: #86efac; --s-outcome: #fde68a;
+    --s-learned: #f9a8d4; --s-error: #fca5a5;
+    --font: "Segoe UI Variable Display", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body { background: var(--bg); color: var(--text); font: 15px/1.45 var(--font); -webkit-font-smoothing: antialiased;
+    display: grid; grid-template-rows: auto 1fr; overflow: hidden; }
+  .aurora { position: fixed; inset: 0; z-index: -1; overflow: hidden; pointer-events: none; }
+  .aurora i { position: absolute; border-radius: 50%; filter: blur(9vw); opacity: .4; }
+  .aurora .b1 { width: 60vw; height: 60vw; left: -20vw; top: -25vw; background: var(--b1); }
+  .aurora .b2 { width: 45vw; height: 45vw; right: -15vw; top: 10vh; background: var(--b2); }
+  .aurora .b3 { width: 55vw; height: 35vw; left: 20vw; bottom: -25vw; background: var(--b3); }
+
+  header { display: flex; align-items: center; gap: 18px; padding: 14px 22px; border-bottom: 1px solid var(--line);
+    backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); flex-wrap: wrap; }
+  .brand { display: flex; align-items: center; gap: 9px; font-weight: 650; font-size: 19px; }
+  .brand svg { width: 26px; height: 26px; color: var(--cyan); }
+  .brand small { font-weight: 500; color: var(--hint); font-size: 14px; }
+  .clock { font-size: 22px; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .clock small { font-size: 12px; font-weight: 600; letter-spacing: .1em; color: var(--warn); margin-left: 8px; }
+  .status { display: flex; gap: 8px; margin-left: auto; flex-wrap: wrap; }
+  .pill { display: inline-flex; align-items: center; gap: 7px; padding: 5px 12px; border-radius: 99px; font-size: 13px;
+    border: 1px solid var(--line2); background: var(--glass); color: var(--hint); }
+  .pill::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .pill.on::before { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+  .pill.sim::before { background: var(--warn); }
+  .pill.off::before { background: var(--bad); }
+  body[data-conn="lost"] header::after { content: "Backend not reachable"; color: var(--bad); font-weight: 600; }
+
+  main { display: grid; grid-template-columns: 300px minmax(0, 1fr) 320px; gap: 18px; padding: 18px 22px; min-height: 0; }
+  .col { display: flex; flex-direction: column; gap: 14px; min-height: 0; overflow: auto; scrollbar-width: thin; }
+  .card { border: 1px solid var(--line); border-radius: 16px; background: var(--glass); padding: 14px 16px;
+    backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); }
+  h2 { margin: 0 0 10px; font-size: 12px; font-weight: 650; letter-spacing: .12em; text-transform: uppercase; color: var(--hint); }
+
+  /* perception */
+  .big { display: flex; align-items: baseline; gap: 10px; }
+  .big b { font-size: 40px; font-weight: 650; font-variant-numeric: tabular-nums; line-height: 1; }
+  .big span { color: var(--hint); }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; margin-top: 12px; font-size: 14px; }
+  .kv dt { color: var(--muted); } .kv dd { margin: 0; text-align: right; }
+  .yes { color: var(--ok); } .no { color: var(--muted); }
+  .agent { display: flex; gap: 10px; align-items: flex-start; margin-top: 14px; padding: 10px 12px; border-radius: 12px;
+    font-size: 14px; background: rgba(103, 232, 249, .08); border: 1px solid rgba(103, 232, 249, .3); }
+  .agent::before { content: ""; flex: none; width: 9px; height: 9px; margin-top: 6px; border-radius: 50%;
+    background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+  .agent.quiet { background: rgba(251, 191, 36, .08); border-color: rgba(251, 191, 36, .35); }
+  .agent.quiet::before { background: var(--warn); box-shadow: 0 0 8px var(--warn); }
+
+  /* demo controls */
+  .ctl { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+  .ctl label { width: 100%; font-size: 12px; color: var(--muted); }
+  button { font: inherit; font-size: 13px; color: var(--text); background: rgba(103, 232, 249, .08); cursor: pointer;
+    border: 1px solid var(--line2); border-radius: 9px; padding: 6px 11px; }
+  button:hover { border-color: var(--cyan); background: rgba(103, 232, 249, .16); }
+  button.on { border-color: var(--cyan); background: rgba(103, 232, 249, .22); }
+  button.danger:hover { border-color: var(--bad); background: rgba(248, 113, 113, .15); }
+  input { font: inherit; font-size: 13px; width: 70px; color: var(--text); background: rgba(0, 0, 0, .25);
+    border: 1px solid var(--line2); border-radius: 9px; padding: 6px 9px; }
+  #toast { min-height: 18px; font-size: 12px; color: var(--hint); }
+
+  /* reasoning feed */
+  .feedhead { display: flex; align-items: baseline; justify-content: space-between; }
+  .feedhead p { margin: 0 0 10px; color: var(--muted); font-size: 13px; }
+  .ep { border: 1px solid var(--line); border-radius: 16px; background: var(--glass); padding: 12px 16px 6px;
+    backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); }
+  .ep.new { animation: pop .6s ease-out; }
+  @keyframes pop { from { border-color: var(--cyan); box-shadow: 0 0 24px rgba(103, 232, 249, .35); } }
+  .ep-top { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; font-size: 13px; color: var(--muted); }
+  .ep-top b { color: var(--text); font-size: 14px; font-weight: 600; }
+  .ep-top .rb { margin-left: auto; color: var(--warn); font-size: 12px; }
+  .step { display: grid; grid-template-columns: 78px 1fr auto; gap: 12px; padding: 8px 0; border-top: 1px solid rgba(190, 225, 255, .08); }
+  .step:first-of-type { border-top: 0; }
+  .stage { font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; padding-top: 2px; }
+  .step .t { font-size: 15px; }
+  .step .w { color: var(--hint); font-size: 13px; margin-top: 2px; }
+  .step .w::before { content: "why · "; color: var(--muted); }
+  .step time { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .step.fb .t::after { content: " (rule-based)"; color: var(--warn); font-size: 12px; }
+  .noticed { color: var(--s-noticed); } .decided { color: var(--s-decided); } .did { color: var(--s-did); }
+  .checked { color: var(--s-checked); } .outcome { color: var(--s-outcome); } .learned { color: var(--s-learned); }
+  .error { color: var(--s-error); }
+  .empty { color: var(--muted); text-align: center; padding: 40px 10px; }
+
+  /* memory */
+  ul { list-style: none; margin: 0; padding: 0; }
+  .facts li { padding: 7px 0; border-top: 1px solid rgba(190, 225, 255, .08); font-size: 14px; }
+  .facts li:first-child { border-top: 0; }
+  .src { display: inline-block; margin-left: 6px; padding: 0 7px; border-radius: 99px; font-size: 11px;
+    border: 1px solid var(--line2); color: var(--hint); vertical-align: 1px; }
+  .src.agent { border-color: rgba(249, 168, 212, .5); color: var(--s-learned); }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { padding: 3px 10px; border-radius: 99px; font-size: 13px; border: 1px solid var(--line2); background: var(--glass); }
+  .chip.hid { color: var(--muted); text-decoration: line-through; }
+  .sub { font-size: 12px; color: var(--muted); margin: 12px 0 6px; }
+
+  @media (max-width: 1100px) {
+    body { overflow: auto; } main { grid-template-columns: 1fr; } .col { overflow: visible; }
+  }
+</style>
+</head>
+<body>
+<div class="aurora" aria-hidden="true"><i class="b1"></i><i class="b2"></i><i class="b3"></i></div>
+<header>
+  <div class="brand">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
+    LookAt <small>agent reasoning</small>
+  </div>
+  <div class="clock" id="clock">--:--</div>
+  <div class="status" id="status"></div>
+</header>
+<main>
+  <section class="col">
+    <div class="card" id="room"></div>
+    <div class="card">
+      <h2>Demo controls</h2>
+      <div class="ctl"><label>Demo clock</label>
+        <button data-a="set_time" data-v="02:00">02:00</button>
+        <button data-a="set_time" data-v="07:30">07:30</button>
+        <button data-a="set_time" data-v="14:00">14:00</button>
+        <button data-a="set_time" data-v="21:59">21:59</button>
+      </div>
+      <div class="ctl"><label>Room temperature (°C)</label>
+        <button data-a="set_temp" data-v="19">19</button>
+        <button data-a="set_temp" data-v="22">22</button>
+        <button data-a="set_temp" data-v="24.5">24.5</button>
+        <input id="temp" type="number" step="0.5" min="10" max="35" placeholder="°C"><button id="settemp">Set</button>
+      </div>
+      <div class="ctl" id="eyes"><label>Eyes</label>
+        <button data-a="eyes" data-v="auto">Camera</button>
+        <button data-a="eyes" data-v="open">Open</button>
+        <button data-a="eyes" data-v="closed">Closed</button>
+      </div>
+      <div class="ctl"><label>Memory</label>
+        <button data-a="one_week_later">One week later</button>
+      </div>
+      <div class="ctl"><button class="danger" id="reset">Reset demo</button></div>
+      <div id="toast"></div>
+    </div>
+  </section>
+
+  <section class="col">
+    <div class="feedhead"><h2>What the agent is thinking</h2><p>newest first</p></div>
+    <div id="feed"><div class="empty">Waiting for the agent…</div></div>
+  </section>
+
+  <section class="col">
+    <div class="card"><h2>What it remembers</h2><ul class="facts" id="facts"></ul></div>
+    <div class="card" id="learned"></div>
+  </section>
+</main>
+
+<script>
+(function () {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const yn = (v, a, b) => v == null ? '<span class="no">unknown</span>' : v ? `<span class="yes">${a}</span>` : `<span class="no">${b}</span>`;
+  const SCREEN = { idle: "Home", suggestion: "AI suggestion", checkin: "AI check-in", assistant: "Talk to AI",
+                   room: "Room controls", lights: "Lights", temperature: "Temperature", nurse: "Nurse session" };
+  let lastFeed = "", seenEp = new Set(), first = true;
+
+  // An episode starts at a "noticed" step that names its trigger (or any step after a long gap).
+  function episodes(feed) {
+    const eps = [];
+    for (const f of feed) {
+      const starts = f.stage === "noticed" && /^trigger:/.test(f.why || "");
+      if (starts || !eps.length) eps.push({ steps: [], trigger: starts ? f.why.replace(/^trigger:\s*/, "") : null });
+      eps[eps.length - 1].steps.push(f);
+    }
+    return eps.reverse();
+  }
+  const TRIGGER = { warm_night: "Warm at night", warm: "Room is warm", cold: "Room is cold", habit: "Usual time", patient: "Patient asked", extreme: "Unsafe temperature",
+                    room_change: "Room changed", checkin: "Check-in" };
+
+  function renderFeed(feed) {
+    const key = feed.map((f) => f.id).join(",");
+    if (key === lastFeed) return;
+    lastFeed = key;
+    if (!feed.length) { $("feed").innerHTML = '<div class="empty">Waiting for the agent…</div>'; return; }
+    $("feed").innerHTML = episodes(feed).map((ep) => {
+      const id = ep.steps[0].id, fresh = !first && !seenEp.has(id);
+      seenEp.add(id);
+      const fb = ep.steps.some((s) => s.fallback);
+      const title = ep.trigger ? (TRIGGER[ep.trigger] || ep.trigger) : "Activity";
+      return `<article class="ep${fresh ? " new" : ""}"><div class="ep-top"><b>${esc(title)}</b>${esc(ep.steps[0].time)}`
+        + `${fb ? '<span class="rb">rule-based fallback</span>' : ""}</div>`
+        + ep.steps.map((s) => `<div class="step${s.fallback ? " fb" : ""}"><div class="stage ${esc(s.stage)}">${esc(s.stage)}</div>`
+          + `<div><div class="t">${esc(s.text)}</div>${s.why && !/^trigger:/.test(s.why) ? `<div class="w">${esc(s.why)}</div>` : ""}</div>`
+          + `<time>${esc(s.time)}</time></div>`).join("")
+        + `</article>`;
+    }).join("");
+    first = false;
+  }
+
+  function render(d) {
+    const c = d.clock || {}, p = d.perception || {}, m = d.memory || {}, st = d.status || {};
+    $("clock").innerHTML = esc(c.time || "--:--") + (c.demo ? "<small>DEMO TIME</small>" : "");
+    const pill = (label, v) => `<span class="pill ${v === true ? "on" : v === "simulated" ? "sim" : "off"}">${label}${v === "simulated" ? " (simulated)" : ""}</span>`;
+    $("status").innerHTML = pill("Camera", st.camera) + pill("Lamp", st.lamp) + pill("Fan", st.fan)
+      + `<span class="pill ${st.ai ? "on" : "sim"}">${st.ai ? "Claude on" : "Rules only (no API key)"}</span>`;
+    $("room").innerHTML = `<h2>Right now</h2><div class="big"><b>${esc(p.temp_c)}°</b><span>room · set ${esc(p.setpoint_c)}°</span></div>`
+      + `<dl class="kv"><dt>Lamp</dt><dd>${yn(p.lamp_on, "on", "off")}</dd><dt>Fan</dt><dd>${yn(p.fan_on, "on", "off")}</dd>`
+      + `<dt>Face</dt><dd>${yn(p.face, "seen", "not seen")}</dd>`
+      + `<dt>Awake</dt><dd>${yn(p.awake, "awake" + (p.open_ratio != null ? ` · eyes ${Math.round(p.open_ratio * 100)}%` : ""), "asleep")}</dd>`
+      + `<dt>Screen</dt><dd>${esc(SCREEN[p.screen] || p.screen || "")}</dd>`
+      + `<dt>Quiet until</dt><dd>${p.quiet_until ? esc(p.quiet_until) : '<span class="no">not quiet</span>'}</dd>`
+      + `<dt>Last nurse visit</dt><dd>${p.last_visit ? esc(p.last_visit) : '<span class="no">unknown</span>'}</dd></dl>`
+      + (p.agent ? `<div class="agent${/^Watching/.test(p.agent) ? "" : " quiet"}"><div><b>AI agent</b><br>${esc(p.agent)}</div></div>` : "");
+    const facts = m.facts || [];
+    $("facts").innerHTML = facts.length ? facts.map((f) => `<li>${esc(f.text)}<span class="src ${f.source === "agent" ? "agent" : ""}">${f.source === "agent" ? "learned" : esc(f.source)}</span></li>`).join("")
+      : '<li class="no">Nothing yet: it is getting to know the patient.</li>';
+    const chips = (a, cls = "") => a && a.length ? `<div class="chips">${a.map((o) => `<span class="chip ${cls}">${esc(o)}</span>`).join("")}</div>` : '<div class="no">none yet</div>';
+    $("learned").innerHTML = `<h2>Learned from choices</h2><div class="sub">Picked most</div>${chips(m.top_options)}`
+      + `<div class="sub">Never picked (hidden)</div>${chips(m.hidden_options, "hid")}`
+      + `<div class="sub">Habits it noticed</div>` + (m.routines && m.routines.length
+        ? `<ul class="facts">${m.routines.map((r) => `<li>${esc(r.text)} <span class="src agent">${esc(r.status)}</span>`
+          + (r.evidence ? `<div class="sub" style="margin:4px 0 0">${esc(r.evidence)}</div>` : "") + `</li>`).join("")}</ul>`
+        : '<div class="no">none yet (same switch at about the same time on 3+ days)</div>')
+      + `<div class="sub">Night check-ins</div><div>${m.night_checkins === false ? '<span class="no">off (ignored 3× in a row)</span>' : '<span class="yes">on</span>'}</div>`;
+    renderFeed(d.feed || []);
+  }
+
+  let fails = 0;
+  async function poll() {
+    const t0 = performance.now();
+    try {
+      const r = await fetch("/api/panel", { cache: "no-store" });
+      render(await r.json());
+      fails = 0; document.body.dataset.conn = "ok";
+    } catch (e) {
+      if (++fails >= 3) document.body.dataset.conn = "lost";
+    }
+    setTimeout(poll, Math.max(0, 500 - (performance.now() - t0)));
+  }
+
+  async function demo(action, value) {
+    try {
+      const r = await fetch("/api/demo", { method: "POST", headers: { "Content-Type": "application/json" },
+                                           body: JSON.stringify(value === undefined ? { action } : { action, value }) });
+      const j = await r.json();
+      $("toast").textContent = j.ok ? "Done." : (j.error || "Not done.");
+    } catch (e) { $("toast").textContent = "Backend not reachable."; }
+    setTimeout(() => { $("toast").textContent = ""; }, 2500);
+  }
+  document.querySelectorAll("button[data-a]").forEach((b) => b.addEventListener("click", () => {
+    const v = b.dataset.a === "set_temp" ? parseFloat(b.dataset.v) : b.dataset.v;
+    demo(b.dataset.a, v);
+    if (b.dataset.a === "eyes") document.querySelectorAll("#eyes button").forEach((x) => x.classList.toggle("on", x === b));
+  }));
+  $("settemp").addEventListener("click", () => { const v = parseFloat($("temp").value); if (!isNaN(v)) demo("set_temp", v); });
+  $("reset").addEventListener("click", () => { if (confirm("Reset the demo? Clock, room and screens go back to the start.")) demo("reset"); });
+  poll();
+})();
+</script>
+</body>
+</html>

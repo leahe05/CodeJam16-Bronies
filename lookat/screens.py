@@ -37,6 +37,7 @@ MORE_SUGGESTIONS = "More suggestions"
 SOMETHING_ELSE = "Something else"
 YES_NO = ["Yes, please.", "No, thanks."]
 ASSISTANT_DEFAULT = ["Get more comfortable", "Quiet for 2 hours", "Adjust the room", SOMETHING_ELSE]
+NOT_NOW = "Not now"
 NURSE_FOOTER = ("Look left or right and raise your eyebrows to choose, "
                 "or look center and raise your eyebrows to see more options.")
 
@@ -45,7 +46,7 @@ HINT = {"left": "Look left + raise eyebrows", "middle": "Look center + raise eye
 
 # keyword in a label -> icon keyword (docs/API.md lists the icons)
 ICON_WORDS = [("pillow", "pillow"), ("position", "bed"), ("comfortable", "bed"), ("sleep", "bed"),
-              ("water", "water"), ("drink", "water"), ("light", "bulb"), ("lamp", "lamp"),
+              ("water", "water"), ("drink", "water"), ("fan", "fan"), ("light", "bulb"), ("lamp", "lamp"),
               ("temperature", "thermometer"), ("warm", "thermometer"), ("cold", "snow"), ("cool", "snow"),
               ("quiet", "quiet"), ("something else", "question"), ("more", "more"), ("room", "lamp"),
               ("nurse", "nurse"), ("yes", "check"), ("no", "x"), ("fine", "check")]
@@ -118,7 +119,16 @@ class ScreenManager:
         if k == "idle":
             s.update(title="You're all set.", subtitle="I'm here if you need anything.", icon="moon",
                      left=room_card, middle=Option("talk", TALK, "Look center + short eyebrow raise", "chat"))
-        elif k == "suggestion":
+        elif k == "suggestion" and len(self.suggestion["options"]) == 2:
+            # the two real choices right on the notification (e.g. "Turn the fan off" / "Ask nurse for a blanket");
+            # center = "Not now"; ignoring it fades it
+            sug = self.suggestion
+            a, b = sug["options"]
+            s.update(badge="AI SUGGESTION", title=sug["text"], icon="sparkle",
+                     subtitle=sug["question"] if sug["question"] != sug["text"] else None,
+                     left=_opt("a", a, "left"), right=_opt("b", b, "right"),
+                     middle=_opt("dismiss", NOT_NOW, "middle", icon="x"))
+        elif k == "suggestion":     # an open question (more answers): engage first, then the paged check-in
             s.update(badge="AI SUGGESTION", title=self.suggestion["text"], icon="sparkle", left=room_card,
                      middle=Option("engage", "Look center + raise eyebrows to engage", None, "target"))
         elif k == "checkin":
@@ -143,9 +153,13 @@ class ScreenManager:
             s.update(badge="AI ASSISTANT", title="How can I help you?", icon="sparkle",
                      left=_opt("a", opts[i], "left"), right=right, middle=_opt("home", RETURN, "middle", icon="home"))
         elif k == "room":
+            # one switch per device: the label says what choosing it will do, and flips after
+            r = self.room()
+            lamp, fan = bool(r.get("lamp_on")), bool(r.get("fan_on"))
             s.update(badge="ROOM CONTROLS", title="What would you like to adjust?", icon="sparkle",
-                     left=_opt("lights", "Adjust the lights", "left", icon="bulb"),
-                     right=_opt("temperature", "Adjust the temperature", "right", icon="thermometer"),
+                     subtitle=f"Lamp {'on' if lamp else 'off'} · Fan {'on' if fan else 'off'}",
+                     left=_opt("lamp", "Turn the lamp off" if lamp else "Turn the lamp on", "left", icon="bulb"),
+                     right=_opt("fan", "Turn the fan off" if fan else "Turn the fan on", "right", icon="fan"),
                      middle=_opt("home", RETURN, "middle", icon="home"))
         elif k == "lights":
             on = self.room().get("lamp_on")
@@ -185,6 +199,10 @@ class ScreenManager:
         if opt is None:
             return []
         k, oid, label = self.kind, opt.id, opt.label
+        if k == "suggestion" and oid in ("a", "b", "dismiss"):
+            sid = self.suggestion["sid"]
+            self._go("idle", now)
+            return [("dismissed", sid)] if oid == "dismiss" else [("engaged", sid), ("answer", sid, label)]
         if k in ("idle", "suggestion"):
             if oid == "room":
                 # choosing Room Controls is an active "not now", not silence
@@ -223,7 +241,14 @@ class ScreenManager:
             self._go("idle", now)
             return [("assistant_choice", label)]
         if k == "room":
-            self._go({"lights": "lights", "temperature": "temperature", "home": "idle"}[oid], now)
+            if oid in ("lamp", "fan"):           # a switch: stay here, the label flips to the new state
+                self.since = now
+                on = bool(self.room().get(f"{oid}_on"))
+                return [("device", oid, "off" if on else "on")]
+            if oid in ("lights", "temperature"):   # old submenus (still reachable from older clients)
+                self._go(oid, now)
+                return []
+            self._go("idle", now)
             return []
         if k in ("lights", "temperature"):
             self.since = now
@@ -273,8 +298,8 @@ class ScreenManager:
 
     def show_suggestion(self, sid: str, text: str, now: float, question: Optional[str] = None,
                         options: Optional[list] = None, icon: Optional[str] = None) -> bool:
-        """Pending AI notification. Engaging opens a check-in with question/options
-        (default: the same text with Yes, please. / No, thanks.)."""
+        """Pending AI notification. With 2 options (default Yes, please. / No, thanks.) they are on the
+        notification itself, with "Not now" in the center; with more, engaging opens a paged check-in."""
         if self.kind not in ("idle", "suggestion"):
             return False
         self.suggestion = {"sid": sid, "text": text, "question": question or text,

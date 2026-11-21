@@ -53,7 +53,7 @@ Rules for both sides:
 | `badge` | small label above the title: `"AI SUGGESTION"`, `"AI CHECK-IN"`, `"AI ASSISTANT"`, `"ROOM CONTROLS"`, `"From your nurse"`, or null |
 | `title`, `subtitle` | the big text and the smaller line under it |
 | `icon` | picture for the title card (keyword, see icons below) or null |
-| `left`, `middle`, `right` | the selectable options at each spot, or null when that spot has nothing. On `idle` and `suggestion`, **`left` is the small "Room Controls" card in the top-left corner** and `middle` is the big pill ("Talk to AI" / "Look center + raise eyebrows to engage") |
+| `left`, `middle`, `right` | the selectable options at each spot, or null when that spot has nothing. On `idle`, **`left` is the small "Room Controls" card in the top-left corner** and `middle` is the big pill ("Talk to AI"). On `suggestion` with two answers, `left` / `right` are those answers right on the notification (e.g. "Turn the fan off" / "Ask nurse for a blanket"), `middle` is "Not now" (id `dismiss`) and `subtitle` the question; an open suggestion (more answers) keeps `left` = Room Controls (id `room`) and `middle` = "Look center + raise eyebrows to engage" |
 | `footer` | instruction line under the options (nurse mode), or null |
 | `page` | `{"index": 0, "count": 2}` when answers are paged 2 at a time (draw page dots), or null |
 | `show_call_nurse` | draw the bottom "Call Nurse • Long eyebrow raise anywhere" banner (false in nurse mode) |
@@ -139,7 +139,8 @@ Examples of each screen are in `lookat/fake_api.py` (`SCREENS`).
   "clock": {"time": "02:14", "day": "Night 1", "demo": true},
   "perception": {"temp_c": 24.5, "setpoint_c": 22.0, "lamp_on": true, "fan_on": false,
                  "eyes_open": true, "awake": true, "open_ratio": 0.92, "face": true,
-                 "last_visit": "23:40", "screen": "idle", "quiet_until": null},
+                 "last_visit": "23:40", "screen": "idle", "quiet_until": null,
+                 "agent": "Watching the room"},
   "memory": {
     "facts": [{"text": "Runs warm at night", "source": "chart"}, {"text": "Feels cold below 20 °C", "source": "chart"}],
     "routines": [{"text": "Lamp off at 22:00", "status": "candidate", "evidence": "patient turned it off 21:55, 22:05, 22:00 on Nov 14-16"}],
@@ -155,13 +156,26 @@ Examples of each screen are in `lookat/fake_api.py` (`SCREENS`).
   "status": {"camera": true, "lamp": true, "fan": "simulated", "ai": true}
 }
 ```
+- `perception.agent`: one line on what the agent is doing or why it is quiet right now (e.g. "Quiet: the patient's face is not seen", "Waiting until 17:12 after the last question", "Watching the room"). Show it near the room state so the operator knows why nothing pops up.
 - `feed`: newest **last**; `stage` is `noticed`, `decided`, `did`, `checked`, `outcome`, `learned` or `error`. Show each agent episode as a card going Noticed → Decided → Did → Checked → Outcome; mark `fallback: true` steps "(rule-based)".
 
 ### Demo controls (POST `/api/demo`, operator only)
 | Body | Does |
 |---|---|
 | `{"action": "set_time", "value": "02:00"}` | demo clock to 02:00 (also `"07:30"`, `"21:59"`) |
-| `{"action": "one_week_later"}` | loads the labelled demo week (routine evidence) |
+| `{"action": "one_week_later"}` | loads the labelled demo week (6 nights of lamp off around 22:00, lamp on around 17:30): memory finds the habits, `memory.routines` lists them (`status: "habit"`, `evidence` = the times) and the agent offers them at that time |
 | `{"action": "set_temp", "value": 24.5}` | room temperature |
 | `{"action": "eyes", "value": "auto"\|"open"\|"closed"}` | eyes-open override |
 | `{"action": "reset"}` | reset the demo (page asks "Are you sure?" first) |
+
+---
+
+## 4. `POST /api/gaze`: browser eye tracking (`main.py`, default `--gaze web`)
+
+With `main.py --gaze web` (the default) `/patient` redirects to `/patient?gaze=web`, which runs WebGazer (`web/webgaze.js`, vendored in `web/vendor/webgazer/`, offline) and sends the zone the patient looks at ~10x a second:
+
+```json
+{"spot": "middle", "x": 0.81, "y": 0.44, "face": true, "eyes_open": true,
+ "brow": {"up": false, "held_s": 0.0}, "events": ["confirm"]}
+```
+`spot` = the option the patient looks at (the page maps the screen third to the option drawn there, e.g. Talk to AI = `"middle"` sits in the right column on the home screen) or `null`; `x`, `y` = the smoothed gaze point as a share of the screen (logs only); `face`, `eyes_open`, `brow` = from the same WebGazer face points; `events` = eyebrow events since the last message (`"confirm"` = short raise released, `"emergency"` = long raise). Returns `{"ok": true}`. With `--gaze web`, `main.py` does NOT open a camera: gaze, eyebrows and eyes all come from the page (stale after 0.6 s = no face). `?gaze=web` (or `?big=1`) also switches the page to the big three-column layout.

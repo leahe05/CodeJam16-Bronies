@@ -28,18 +28,23 @@ def test_room_controls_navigation_and_devices():
     m = sm()
     assert m.select("left", 1) == []
     assert m.view(1)["badge"] == "ROOM CONTROLS"
-    assert labels(m) == ["Adjust the lights", RETURN, "Adjust the temperature"]
-    m.select("right", 2)
-    assert m.view(2)["title"] == "The room is 24.5 °C"
-    assert m.select("left", 3) == [("device", "fan", "on")]
-    assert m.select("right", 4) == [("device", "fan", "off")]
-    m.select("middle", 5)                        # Back
-    m.select("left", 6)                          # Adjust the lights
-    assert labels(m) == ["Lamp on", "Back", "Lamp off"] and m.view(6)["title"] == "The lamp is OFF"
-    assert m.select("left", 7) == [("device", "lamp", "on")]
-    m.select("middle", 8)
-    m.select("middle", 9)
+    # one switch per device; the label says what choosing it will do (the room fixture: lamp off, fan off)
+    assert labels(m) == ["Turn the lamp on", RETURN, "Turn the fan on"]
+    assert m.view(1)["subtitle"] == "Lamp off · Fan off"
+    assert m.select("left", 2) == [("device", "lamp", "on")] and m.kind == "room"
+    assert m.select("right", 3) == [("device", "fan", "on")] and m.kind == "room"
+    m.select("middle", 4)                        # Return to main menu
     assert m.kind == "idle"
+
+
+def test_room_switch_labels_follow_the_room():
+    state = {"lamp_on": False, "fan_on": True}
+    m = ScreenManager(room=lambda: state)
+    m.select("left", 0)
+    assert labels(m) == ["Turn the lamp on", RETURN, "Turn the fan off"]
+    assert m.select("right", 1) == [("device", "fan", "off")]
+    state["fan_on"] = False
+    assert labels(m)[2] == "Turn the fan on"
 
 
 def test_talk_to_ai_assistant():
@@ -73,23 +78,34 @@ def test_assistant_with_two_options_shows_both():
     assert labels(m) == ["Water", RETURN, "Adjust pillows"]
 
 
-def test_suggestion_engage_opens_checkin():
+def test_suggestion_shows_its_two_choices_directly():
     m = sm()
-    assert m.show_suggestion("s1", "You seem to be awake. Too warm?", 0)
+    assert m.show_suggestion("s1", "It's getting cold in here.", 0, question="What would help?",
+                             options=["Turn the fan off", "Ask nurse for a blanket"])
     v = m.view(0)
-    assert v["badge"] == "AI SUGGESTION" and v["title"] == "You seem to be awake. Too warm?"
-    assert labels(m) == ["Room Controls", "Look center + raise eyebrows to engage", None]
-    assert m.select("middle", 1) == [("engaged", "s1")]
-    v = m.view(1)
-    assert v["badge"] == "AI CHECK-IN" and labels(m) == ["Yes, please.", RETURN, "No, thanks."]
-    assert m.select("left", 2) == [("answer", "s1", "Yes, please.")]
+    assert v["badge"] == "AI SUGGESTION" and v["title"] == "It's getting cold in here."
+    assert v["subtitle"] == "What would help?"
+    assert labels(m) == ["Turn the fan off", "Not now", "Ask nurse for a blanket"]
+    assert m.select("right", 1) == [("engaged", "s1"), ("answer", "s1", "Ask nurse for a blanket")]
     assert m.kind == "idle"
 
 
-def test_room_controls_from_suggestion_dismisses_it():
+def test_not_now_dismisses_the_suggestion():
     m = sm()
     m.show_suggestion("s1", "Too warm?", 0)
-    assert m.select("left", 1) == [("dismissed", "s1")] and m.kind == "room"
+    assert labels(m) == ["Yes, please.", "Not now", "No, thanks."]
+    assert m.select("middle", 1) == [("dismissed", "s1")] and m.kind == "idle"
+
+
+def test_open_suggestion_engage_opens_paged_checkin():
+    m = sm()
+    m.show_suggestion("s1", "Anything I can do?", 0, options=["Water", "Pillows", "Position"])
+    assert labels(m) == ["Room Controls", "Look center + raise eyebrows to engage", None]
+    assert m.select("middle", 1) == [("engaged", "s1")]
+    assert m.view(1)["badge"] == "AI CHECK-IN"
+    m2 = sm()
+    m2.show_suggestion("s2", "Anything I can do?", 0, options=["Water", "Pillows", "Position"])
+    assert m2.select("left", 1) == [("dismissed", "s2")] and m2.kind == "room"
 
 
 def test_suggestion_fades():

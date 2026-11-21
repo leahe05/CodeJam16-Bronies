@@ -294,8 +294,9 @@ def known_lines() -> list:
     card names and screen titles; each is said as its own line, so each can be fetched ahead."""
     from lookat.screens import ScreenManager
     lines = [RAISE, NURSE_CALLED]
-    for lamp_on in (False, True):
-        sm = ScreenManager(room=lambda lamp_on=lamp_on: {"lamp_on": lamp_on, "temp_c": None})
+    for lamp_on, fan_on in ((False, False), (True, False), (False, True), (True, True)):
+        sm = ScreenManager(room=lambda lamp_on=lamp_on, fan_on=fan_on: {"lamp_on": lamp_on, "fan_on": fan_on,
+                                                                         "temp_c": None})
         for kind in ("idle", "room", "lights", "temperature", "assistant"):
             sm._go(kind, 0.0)
             v = sm.view(0.0)

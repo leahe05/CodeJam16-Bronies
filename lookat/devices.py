@@ -9,8 +9,8 @@ simulated), and a demo temperature sensor.
 
 Temperature (honest wording for judges: a demo sensor value; an ESP32 + DHT22
 would replace it): the demo panel sets the room temperature ("ambient"). While the
-fan runs the room cools (COOL_RATE per second, down to FLOOR_C, or to the setpoint
-when the nurse applied one); with the fan off it drifts back toward ambient.
+fan runs the room cools (COOL_RATE per second, by at most FAN_DROP_C below the set temperature,
+never under FLOOR_C, like a real fan; or to the setpoint when the nurse applied one); with the fan off it drifts back toward ambient.
 Every action from anyone goes through execute(..., by=...) and is logged.
 """
 import threading
@@ -21,7 +21,8 @@ from lookat import config
 from lookat.state import log_event
 
 DEVICES = ("lamp", "fan")
-COOL_RATE = 0.15     # °C per second while the fan runs (fast, so the demo shows it)
+COOL_RATE = 0.05     # °C per second while the fan runs (fast enough for the demo to show it)
+FAN_DROP_C = 1.8     # a fan cools a room by a degree or two, not to the floor (22 -> 20.2, 24.5 -> 22.7)
 WARM_RATE = 0.03     # °C per second back toward ambient with the fan off
 FLOOR_C = 19.0
 START_C = 22.0
@@ -86,7 +87,7 @@ class Room:
             self._last_tick = now
             fan_on = self.fan.is_on
             if fan_on:
-                target = max(FLOOR_C, self.setpoint_c) if self.thermostat else FLOOR_C
+                target = max(FLOOR_C, self.setpoint_c) if self.thermostat else max(FLOOR_C, self.ambient_c - FAN_DROP_C)
                 self.temp_c = max(target, self.temp_c - COOL_RATE * dt) if self.temp_c > target else self.temp_c
             elif self.temp_c < self.ambient_c:
                 self.temp_c = min(self.ambient_c, self.temp_c + WARM_RATE * dt)

@@ -76,8 +76,20 @@ def make_app(backend, title: str = "LookAt", web_dir: str = WEB_DIR):
         api = API_FOR_PAGE[name]
         return HTMLResponse(f"<h1>No {name} page yet</h1><p>Data: <a href='{api}'>{api}</a> (docs/API.md)</p>")
 
+    from fastapi.responses import RedirectResponse
+
+    @app.get("/patient")
+    def patient(request: Request):
+        # main.py --gaze web (the default): /patient opens with the page's own eye tracking (WebGazer)
+        if getattr(backend, "gaze_mode", None) == "web" and "gaze" not in request.query_params:
+            from urllib.parse import urlencode
+            q = urlencode(request.query_params.multi_items())
+            return RedirectResponse("/patient?gaze=web" + ("&" + q if q else ""))
+        return page("patient")
+
     for name in PAGES:
-        app.add_api_route(f"/{name}", (lambda n: lambda: page(n))(name), methods=["GET"])
+        if name != "patient":
+            app.add_api_route(f"/{name}", (lambda n: lambda: page(n))(name), methods=["GET"])
 
     @app.get("/")
     def index():
@@ -111,6 +123,14 @@ def make_app(backend, title: str = "LookAt", web_dir: str = WEB_DIR):
     async def api_demo(request: Request):
         body = await _json(request)
         return public(await run_in_threadpool(safe, lambda: backend.demo_action(body)))
+
+    @app.post("/api/gaze")
+    async def api_gaze(request: Request):
+        """Browser eye tracking (web/webgaze.js, /patient?gaze=web): {"spot": "left"|"middle"|"right"|null}."""
+        body = await _json(request)
+        if not hasattr(backend, "gaze_action"):
+            return {"ok": False, "error": "this backend has no browser gaze"}
+        return public(safe(lambda: backend.gaze_action(body)))
 
     return app
 

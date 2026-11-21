@@ -52,9 +52,10 @@ def test_every_real_screen_has_something_to_say():
     said = []
     said += n.update(sm.view(t))                        # idle
     sm.select("left", t); said += n.update(sm.view(t))  # room
-    sm.select("left", t); said += n.update(sm.view(t))  # lights
+    room["lamp_on"] = True; said += n.update(sm.view(t))   # the lamp switch flipped: the room screen changed
     sm.nurse_question("q1", "Did you sleep okay?", ["Yes", "No"], t); said += n.update(sm.view(t))
     texts = [s for s, _ in said]
     assert len(texts) == 4 and all(texts)
     assert texts[0].startswith("You're all set.") and "Left: Room Controls." in texts[0]
+    assert "Left: Turn the lamp off." in texts[2]
     assert texts[3].startswith("Did you sleep okay?") and "Left: Yes." in texts[3]
