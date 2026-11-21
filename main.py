@@ -298,7 +298,9 @@ def main() -> None:
     live = Live(room, patient=args.patient)
     from lookat.agent import MODEL, Agent
     from lookat.memory import Memory
-    agent = Agent(live, Memory(args.patient))
+    memory = Memory(args.patient)
+    live.memory = memory          # the shift summary reads it (lookat/summary.py)
+    agent = Agent(live, memory)
     agent.start()
     print(f"Agent: {'Claude ' + MODEL if agent.client else 'rules only (no ANTHROPIC_API_KEY)'}")
     server = start_server(live, args.port)

@@ -1,0 +1,1 @@
+Sat 17:38 C4c shift summary: summary.py (12 h of logged events -> Claude 8 s, rejected if it names a time not in the log -> template), /api/nurse/summary without holding the lock, source ai|template; 173 tests pass

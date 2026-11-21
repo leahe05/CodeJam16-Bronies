@@ -262,7 +262,7 @@ class Fake:
             elif path == "summary":
                 self.summary = ("Woke at 2:14 AM feeling warm; fan on, 24.5 -> 22.8 °C; no nurse needed. "
                                 "Requested repositioning at 5:02 AM. Felt too cold when the AC was set to 18 °C.")
-                return {"ok": True, "text": self.summary}
+                return {"ok": True, "text": self.summary, "source": "ai"}
             else:
                 return {"ok": False, "error": "unknown action"}
             return {"ok": True}
