@@ -1,6 +1,8 @@
 """LookAt: the real program.
 
-    py -3.11 main.py --patient NAME [--recalibrate] [--camera 0] [--voice edge|page|windows|off]
+    py -3.11 main.py --patient NAME [--voice edge|page|windows|off]
+        default --gaze web: the patient page (/patient) tracks gaze AND eyebrows itself (WebGazer, big layout)
+    py -3.11 main.py --patient NAME --gaze camera [--recalibrate] [--camera 0]   (the old Python gaze)
     py -3.11 main.py --patient NAME --keyboard      (no camera: test with the keyboard)
 
 Starts the web server (Lea's pages + the JSON API, docs/API.md), the plugs (lamp,
@@ -29,8 +31,12 @@ from lookat.devices import Room
 from lookat.live import Live
 from lookat.server import PAGES, find_page, make_app
 from lookat.speech import Announcer, EdgeVoice, Speech, WebVoice, known_lines
+from lookat.state import log_event
 
 WINDOW = "LookAt operator (team only)"
+STATUS_EVERY_S = 30.0      # the one-line status print
+CAMERA_RETRY_S = 2.0       # camera stopped giving frames: try to reopen it this often
+CAMERA_RESTART_S = 5.0     # the camera loop crashed: restart it after this long
 
 
 def local_ip() -> str:
@@ -190,7 +196,24 @@ def describe(events, out, chosen, flash: tuple) -> tuple:
     return text, time.monotonic()
 
 
+def reopen_camera(tracker, index: int) -> bool:
+    """Release the camera and open it again (unplugged and plugged back in). True = it works."""
+    from lookat.vision import _open_camera
+    try:
+        tracker.cap.release()
+    except Exception:   # noqa: BLE001
+        pass
+    try:
+        tracker.cap = _open_camera(index)
+        return True
+    except Exception:   # noqa: BLE001 - still gone: the caller tries again later
+        return False
+
+
 def run_camera(args, live: Live) -> None:
+    """The camera loop. Returns only when q is pressed. A camera that stops giving frames is
+    reopened every CAMERA_RETRY_S (selection cancelled meanwhile, the pages keep running); a
+    frame that throws is logged and skipped."""
     from lookat.gaze import GazeModel
     from lookat.gestures import GestureDetector, load_settings
     from lookat.vision import FaceTracker
@@ -209,34 +232,60 @@ def run_camera(args, live: Live) -> None:
         settings = None if args.recalibrate else load_settings(args.patient)
         if settings is None:
             settings = calibrate(tracker, live, speaker, args.patient, "gestures")
+        args.recalibrate = False   # a camera-loop restart (supervise) must not recalibrate again
         det = GestureDetector(settings, on_release=True)
         print(f"Ready. Eyebrow threshold {det.threshold:.2f} ({settings['gesture']}). "
               f"Watch the '{WINDOW}' window; press q in it to quit.")
         fps, last, raised, flash = 0.0, time.monotonic(), False, ("", 0.0)
+        next_reopen, errors = 0.0, 0
         while True:
-            frame, f = tracker.read()
-            if frame is None:
-                live.camera_ok = False
-                print("Stopped: the camera stopped giving frames (unplugged, or used by another app?).")
-                break
-            now = time.monotonic()
-            spot, conf = gaze.predict(f)
-            events = det.update(f, now)
-            brow = {"up": det.above_since is not None, "held_s": det.held(now)}
-            awake.set_override(live.eyes_override)
-            live.awake_state = awake.update(f, now)
-            out = live.frame(now, spot, events, face=f is not None, confidence=conf, brow=brow)
-            flash = describe(events, out, live.chosen, flash)
-            fps = 0.9 * fps + 0.1 / max(now - last, 1e-3)
-            last = now
-            if f is not None and f["face_px"] < config.MIN_FACE_PX:
-                cv2.putText(frame, "FACE TOO SMALL: move the camera closer", (30, frame.shape[0] - 100),
-                            cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 3)
-            draw_operator(frame, live, conf, det, fps, flash=flash)
-            if not raised:
-                raise_window()
-                raised = True
-            key = cv2.waitKey(1) & 0xFF
+            key = 255
+            try:
+                frame, f = tracker.read()
+                now = time.monotonic()
+                if frame is None:
+                    if live.camera_ok:
+                        print(f"CAMERA LOST - reconnecting every {CAMERA_RETRY_S:.0f} s "
+                              "(pages, plugs and voice keep running)")
+                        log_event("camera_lost")
+                    live.camera_ok = False
+                    live.frame(now, None, [], face=False)   # cancels a selection in progress
+                    blank = np.zeros((480, 1000, 3), np.uint8)
+                    cv2.putText(blank, "CAMERA LOST - reconnecting...", (30, 240),
+                                cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 3)
+                    draw_operator(blank, live, 0.0, det, fps, flash=flash)
+                    if now >= next_reopen:
+                        next_reopen = now + CAMERA_RETRY_S
+                        reopen_camera(tracker, args.camera)
+                    key = cv2.waitKey(30) & 0xFF
+                else:
+                    if not live.camera_ok:
+                        print("Camera back.")
+                        log_event("camera_back")
+                        live.camera_ok = True
+                    spot, conf = gaze.predict(f)
+                    events = det.update(f, now)
+                    brow = {"up": det.above_since is not None, "held_s": det.held(now)}
+                    awake.set_override(live.eyes_override)
+                    live.awake_state = awake.update(f, now)
+                    out = live.frame(now, spot, events, face=f is not None, confidence=conf, brow=brow)
+                    flash = describe(events, out, live.chosen, flash)
+                    fps = 0.9 * fps + 0.1 / max(now - last, 1e-3)
+                    last = now
+                    if f is not None and f["face_px"] < config.MIN_FACE_PX:
+                        cv2.putText(frame, "FACE TOO SMALL: move the camera closer", (30, frame.shape[0] - 100),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 3)
+                    draw_operator(frame, live, conf, det, fps, flash=flash)
+                    if not raised:
+                        raise_window()
+                        raised = True
+                    key = cv2.waitKey(1) & 0xFF
+            except Exception as e:   # noqa: BLE001 - one bad frame must never stop LookAt
+                errors += 1
+                log_event("frame_error", error=repr(e))
+                if errors == 1 or errors % 100 == 0:
+                    print(f"[frame error x{errors}: {type(e).__name__}: {e}] (logged, carrying on)")
+                key = cv2.waitKey(30) & 0xFF
             if key == ord("q"):
                 print("Stopped: q pressed.")
                 break
@@ -252,6 +301,99 @@ def run_camera(args, live: Live) -> None:
         tracker.close()
         if speaker is not args.speech:
             speaker.close()
+
+
+def supervise(run, args, live: Live, retry_s: float = None, sleep=time.sleep) -> None:
+    """Run the camera loop (run = run_camera or run_web). If it crashes, or there is no camera at the start,
+    the web server, plugs, voice and screen timers keep going and the loop is restarted every
+    retry_s. Returns when run returns by itself (q pressed)."""
+    retry_s = CAMERA_RESTART_S if retry_s is None else retry_s
+    while True:
+        try:
+            run(args, live)
+            return
+        except Exception as e:   # noqa: BLE001
+            live.camera_ok = False
+            print(f"CAMERA LOOP STOPPED ({type(e).__name__}: {e}) - the pages are still served; "
+                  f"trying again in {retry_s:.0f} s (Ctrl+C quits)")
+            log_event("camera_loop_crash", error=repr(e))
+            end = time.monotonic() + retry_s
+            while time.monotonic() < end:     # keep the screens' timers and the room ticking
+                try:
+                    live.frame(time.monotonic(), None, [], face=False)
+                except Exception:   # noqa: BLE001
+                    pass
+                sleep(0.1)
+
+
+def status_line(live: Live, speech) -> str:
+    """One line for the operator: camera, face, lamp, fan, voice."""
+    with live.lock:
+        cam, face = live.camera_ok, live.face
+        r = live.room.state()
+
+    def plug(name: str) -> str:
+        p = r[name]
+        if p.get("simulated"):
+            return f"{name} simulated"
+        if not p.get("online"):
+            return f"{name} OFFLINE"
+        return f"{name} {'on' if p.get('on') else 'off'}"
+
+    try:
+        voice = speech.status()
+    except Exception:   # noqa: BLE001
+        voice = "?"
+    return (f"[status {time.strftime('%H:%M:%S')}] camera {'ok' if cam else 'LOST'} | "
+            f"face {'yes' if face else 'no'} | {plug('lamp')} | {plug('fan')} | voice {voice}")
+
+
+def start_status(live: Live, speech, every: float = None, out=print) -> threading.Event:
+    """Print status_line every `every` seconds from its own thread (works even if the camera
+    loop is down). Set the returned Event to stop it."""
+    every = STATUS_EVERY_S if every is None else every
+    stop = threading.Event()
+
+    def run() -> None:
+        while not stop.wait(every):
+            try:
+                out(status_line(live, speech))
+            except Exception as e:   # noqa: BLE001
+                log_event("status_error", error=repr(e))
+
+    threading.Thread(target=run, name="status", daemon=True).start()
+    return stop
+
+
+def web_step(live: Live, awake, now: float):
+    """One tick of --gaze web: the browser's latest gaze zone, face, eyes and eyebrow events -> Live.frame."""
+    g = live.web_gaze
+    face = live.web_fresh(now) and g["face"]
+    spot = live.web_spot(now) if face else None
+    awake.set_override(live.eyes_override)
+    blink = None if not face or g["eyes_open"] is None else (0.0 if g["eyes_open"] else 1.0)
+    live.awake_state = awake.update(None if blink is None else {"eyeBlinkLeft": blink, "eyeBlinkRight": blink}, now)
+    brow = g["brow"] if face else {"up": False, "held_s": 0.0}
+    live.frame(now, spot, live.pop_web_events(), face=face, confidence=1.0 if spot else 0.0, brow=brow)
+    return spot
+
+
+def run_web(args, live: Live) -> None:
+    """--gaze web: no Python camera. The patient page (web/webgaze.js) tracks gaze AND eyebrows with
+    WebGazer and sends them to POST /api/gaze; this loop feeds them to the same selection engine."""
+    from lookat.awake import AwakeDetector
+    awake = AwakeDetector()
+    fps, last = 0.0, time.monotonic()
+    print("Web gaze: waiting for the patient page (calibrate there: the dot, then the eyebrows).")
+    while True:
+        key = cv2.waitKey(30) & 0xFF
+        if key == ord("q"):
+            break
+        now = time.monotonic()
+        spot = web_step(live, awake, now)
+        fps = 0.9 * fps + 0.1 / max(now - last, 1e-3)
+        last = now
+        draw_operator(np.zeros((480, 1000, 3), np.uint8), live, 1.0 if spot else 0.0, None, fps, keyboard=False)
 
 
 def run_keyboard(args, live: Live) -> None:
@@ -283,10 +425,15 @@ def run_keyboard(args, live: Live) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description="LookAt")
     ap.add_argument("--patient", default="demo")
+    ap.add_argument("--profile", default="margaret", choices=("margaret", "james"),
+                    help="the demo patient whose memory the agent uses (switch on the panel)")
     ap.add_argument("--recalibrate", action="store_true")
     ap.add_argument("--camera", type=int, default=0)
     ap.add_argument("--keyboard", action="store_true", help="no camera: test with the keyboard")
     ap.add_argument("--port", type=int, default=config.PAGE_PORT)
+    ap.add_argument("--gaze", choices=("camera", "web"), default="web",
+                    help="camera = Python gaze + eyebrows (left/center/right calibration); "
+                         "web = the patient page tracks gaze AND eyebrows with WebGazer (no Python camera, big layout)")
     ap.add_argument("--voice", choices=("edge", "page", "windows", "off"), default="edge",
                     help="edge = Microsoft natural voice from this laptop (internet); "
                          "page = the patient page speaks (Edge natural voice, click it once); "
@@ -296,13 +443,21 @@ def main() -> None:
     check_wifi()
     room = Room()
     live = Live(room, patient=args.patient)
+    live.gaze_mode = "camera" if args.keyboard else args.gaze   # web: /patient opens with WebGazer
     from lookat.agent import MODEL, Agent
-    from lookat.memory import Memory
-    agent = Agent(live, Memory(args.patient))
+    from lookat.memory import PROFILES, profile_memory
+    memory = profile_memory(args.profile)   # the demo patient (switch on the panel); --patient = calibration only
+    live.memory = memory          # the shift summary reads it (lookat/summary.py)
+    agent = Agent(live, memory, profile=args.profile)
+    print(f"Patient profile: {PROFILES[args.profile]['name']} ({len(memory.data['facts'])} facts in memory)")
     agent.start()
     print(f"Agent: {'Claude ' + MODEL if agent.client else 'rules only (no ANTHROPIC_API_KEY)'}")
     server = start_server(live, args.port)
     print_urls(args.port)
+    if live.gaze_mode == "web":
+        print(f"  WEB GAZE: open http://localhost:{args.port}/patient on the patient screen, click once,\n"
+              f"  follow the dot, then raise your eyebrows when asked (R = redo gaze, B = redo eyebrows,\n"
+              f"  D = hide the gaze ring). Python does not use the camera in this mode.\n")
     print(f"Lamp: {room.lamp.ip or 'simulated'}   Fan: {room.fan.ip or 'simulated (set FAN_IP for plug 2)'}")
     if args.voice == "edge":
         args.speech = EdgeVoice()
@@ -315,8 +470,13 @@ def main() -> None:
         args.speech = Speech(enabled=args.voice == "windows")
     # names the card you look at, then "Raise your eyebrows" right after it; the choice; new screens
     live.announcer = Announcer(args.speech.say, queue=args.speech)
+    start_status(live, args.speech)
+    print(status_line(live, args.speech))
     try:
-        (run_keyboard if args.keyboard else run_camera)(args, live)
+        if args.keyboard:
+            run_keyboard(args, live)
+        else:   # restart the gaze loop (camera or web) if it crashes; the pages keep being served
+            supervise(run_web if args.gaze == "web" else run_camera, args, live)
     except KeyboardInterrupt:
         pass
     finally:

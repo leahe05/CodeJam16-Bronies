@@ -39,8 +39,10 @@ def screen(screen_id, title, badge=None, subtitle=None, icon=None, left=None, mi
 SCREENS = [
     screen("idle", "You're all set.", subtitle="I'm here if you need anything.", icon="moon",
            left=ROOM_CARD, middle=opt("talk", "Talk to AI", "Look center + short eyebrow raise", "chat")),
-    screen("suggestion", "Would you like help getting comfortable?", badge="AI SUGGESTION", icon="sparkle",
-           left=ROOM_CARD, middle=opt("engage", "Look center + raise eyebrows to engage", None, "target")),
+    screen("suggestion", "It's getting cold in here.", subtitle="What would help?", badge="AI SUGGESTION", icon="sparkle",
+           left=opt("a", "Turn the fan off", "Look left + raise eyebrows", None),
+           middle=opt("dismiss", "Not now", "Look center + raise eyebrows", "x"),
+           right=opt("b", "Ask nurse for a blanket", "Look right + raise eyebrows", "nurse")),
     screen("checkin", "Would you like help adjusting your pillows?", badge="AI CHECK-IN", icon="pillow",
            left=opt("yes", "Yes, please.", "Look left + raise eyebrows", "check"), middle=HOME,
            right=opt("no", "No, thanks.", "Look right + raise eyebrows", "x")),
@@ -48,8 +50,9 @@ SCREENS = [
            left=opt("comfort", "Get more comfortable", "Look left + raise eyebrows", "bed"), middle=HOME,
            right=opt("more", "More suggestions", "Look right + raise eyebrows", "grid")),
     screen("room", "What would you like to adjust?", badge="ROOM CONTROLS", icon="sparkle",
-           left=opt("lights", "Adjust the lights", "Look left + raise eyebrows", "bulb"), middle=HOME,
-           right=opt("temperature", "Adjust the temperature", "Look right + raise eyebrows", "thermometer")),
+           subtitle="Lamp on · Fan off",
+           left=opt("lamp", "Turn the lamp off", "Look left + raise eyebrows", "bulb"), middle=HOME,
+           right=opt("fan", "Turn the fan on", "Look right + raise eyebrows", "fan")),
     screen("lights", "The lamp is ON", badge="ROOM CONTROLS", icon="lamp",
            left=opt("lamp_on", "Lamp on", "Look left + raise eyebrows", "sun"), middle=BACK,
            right=opt("lamp_off", "Lamp off", "Look right + raise eyebrows", "moon")),
@@ -262,7 +265,7 @@ class Fake:
             elif path == "summary":
                 self.summary = ("Woke at 2:14 AM feeling warm; fan on, 24.5 -> 22.8 °C; no nurse needed. "
                                 "Requested repositioning at 5:02 AM. Felt too cold when the AC was set to 18 °C.")
-                return {"ok": True, "text": self.summary}
+                return {"ok": True, "text": self.summary, "source": "ai"}
             else:
                 return {"ok": False, "error": "unknown action"}
             return {"ok": True}

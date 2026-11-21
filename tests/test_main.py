@@ -41,8 +41,7 @@ def test_lamp_on_by_gaze_and_eyebrows():
     b = make_live()
     _, t = choose(b, "left", 0.0)           # Room Controls
     assert b.sm.kind == "room"
-    _, t = choose(b, "left", t)             # Adjust the lights
-    ev, t = choose(b, "left", t)            # Lamp on
+    ev, t = choose(b, "left", t)            # Turn the lamp on (one switch)
     assert ("device", "lamp", "on") in ev and b.room.state()["lamp_on"]
 
 
@@ -66,5 +65,6 @@ def test_no_face_cancels():
         b.frame(t, "left", [], True)
         t += 0.4
     b.frame(t, None, [], False)
+    b.frame(t + 0.5, None, [], False)      # gone longer than live.FACE_GRACE_S
     s = b.screen_json()
     assert s["focus"] is None and s["face"] is False

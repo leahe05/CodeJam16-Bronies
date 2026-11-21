@@ -22,6 +22,10 @@ from lookat.machine import Machine
 from lookat.screens import ScreenManager
 from lookat.state import log_event
 
+# A face missing for less than this (a dropped frame, a blink, a hand passing) keeps the look, so
+# the highlight doesn't reset; no choice is ever made on a frame without a face.
+FACE_GRACE_S = 0.4
+
 YES_NO_START = ("is", "are", "do", "did", "does", "would", "will", "can", "could", "should", "have", "has")
 
 
@@ -47,12 +51,20 @@ class Live:
         self.announcer = None            # lookat.speech.Announcer: spoken feedback (main.py sets it)
         self.voice_out = None            # lookat.speech.WebVoice: lines the patient page reads aloud
         self._ids = itertools.count(1)
+        # set once by main.py / the agent; "Reset demo" keeps them (it used to drop them, which broke the buttons)
+        self.gaze_mode = "camera"                  # "web": the patient page tracks gaze itself (main.py --gaze web)
+        self.demo_week: Optional[Callable] = None  # the agent: loads the labelled demo week ("One week later")
+        self.switch_profile: Optional[Callable] = None   # the agent: switch to another demo patient
+        self.reset_memory: Optional[Callable] = None     # the agent: every profile back to its chart
+        self.profile: Optional[str] = None         # the demo patient the agent cares for (memory.PROFILES)
         self._reset_state()
 
     def _reset_state(self) -> None:
         self.sm = ScreenManager(room=self.room.state)
         self.machine = Machine()
         self.face = False
+        self._face_seen: Optional[float] = None   # when a face was last in view
+        self._last_spot: Optional[str] = None     # where it was looking then
         self.brow = {"up": False, "held_s": 0.0}
         self.chosen: Optional[str] = None
         self.spot: Optional[str] = None
@@ -68,7 +80,12 @@ class Live:
         self.eyes_override: Optional[str] = None
         self.awake_state: dict = {"eyes_open": None, "open_ratio": None, "awake": None}   # main.py, from awake.py
         self.memory_view: Optional[dict] = None   # the agent publishes what it learned (panel)
+        self._say_nurse_called = False   # nurse_called(): the voice says it on the next frame
+        self.agent_status = "Starting"             # the agent: what it is doing / why it is quiet (panel)
         self.quiet_until: Optional[str] = None
+        self.web_gaze = {"spot": None, "x": None, "y": None, "at": -1e9,   # from the browser (main.py --gaze web)
+                         "face": False, "eyes_open": None, "brow": {"up": False, "held_s": 0.0}}
+        self.web_events: list = []      # eyebrow events from the browser, taken by main.py's web loop
 
     # ----- camera loop ----------------------------------------------------
     def frame(self, now: float, spot: Optional[str], events=(), face: bool = True, confidence: float = 0.0,
@@ -76,6 +93,12 @@ class Live:
         """One camera frame. brow = {"up": bool, "held_s": float} from the gesture detector.
         Returns the patient events it produced."""
         with self.lock:
+            if face:
+                self._face_seen, self._last_spot = now, spot
+            else:
+                events = [e for e in (events or ()) if e != "confirm"]   # never choose without a face
+                if self._face_seen is not None and now - self._face_seen < FACE_GRACE_S:
+                    face, spot = True, self._last_spot                     # a blip: keep the look
             self.face, self.spot, self.confidence = face, spot, confidence
             self.brow = brow or {"up": False, "held_s": 0.0}
             if self.calibration is not None:
@@ -95,7 +118,9 @@ class Live:
                 self._handle(ev, now)
             if self.announcer is not None:
                 try:
-                    self.announcer.update(self.sm.view(now), self.machine.view(), self.chosen, out, now=now)
+                    spoken = out + ([("call_nurse",)] if self._say_nurse_called else [])
+                    self._say_nurse_called = False
+                    self.announcer.update(self.sm.view(now), self.machine.view(), self.chosen, spoken, now=now)
                 except Exception as e:   # noqa: BLE001 - the voice must never stop the camera loop
                     log_event("voice_error", error=repr(e))
         for ev in out:
@@ -139,6 +164,13 @@ class Live:
             self.alerts.insert(0, a)
             log_event("nurse_alert", kind=kind, text=text, urgency=urgency, reason=reason)
             return a
+
+    def nurse_called(self) -> None:
+        """Show the patient the "Your nurse has been called" screen, the same one as a long eyebrow raise
+        (and the voice says it), when someone else already paged the nurse: no second alert."""
+        with self.lock:
+            self.sm.call_nurse(self.now())
+            self._say_nurse_called = True
 
     def add_feed(self, stage: str, text: str, why: Optional[str] = None, fallback: bool = False) -> None:
         with self.lock:
@@ -188,13 +220,25 @@ class Live:
                                "fan_on": r["fan_on"], "eyes_open": self.awake_state.get("eyes_open"),
                                "awake": self.awake_state.get("awake"), "open_ratio": self.awake_state.get("open_ratio"),
                                "face": self.face, "last_visit": self.last_visit, "screen": self.sm.kind,
-                               "quiet_until": self.quiet_until},
+                               "quiet_until": self.quiet_until, "agent": self.agent_status},
                 "memory": self.memory_view or {"facts": self.facts, "routines": [], "top_options": [],
                                                "hidden_options": [], "night_checkins": True},
                 "feed": self.feed[-30:],
+                "profile": self._profile_json(),
                 "status": {"camera": self.camera_ok, "lamp": r["lamp"]["online"],
                            "fan": "simulated" if fan["simulated"] else fan["online"],
                            "ai": bool(os.environ.get("ANTHROPIC_API_KEY"))}}
+
+    def _profile_json(self) -> Optional[dict]:
+        """The demo patients for the panel: who is selected, and each one's bedtime and wake-up time."""
+        from lookat.memory import PROFILES
+        if self.profile is None:
+            return None
+        out = []
+        for pid, p in PROFILES.items():
+            times = {k: v for f in p["chart"] for k, v in (f.get("data") or {}).items() if k in ("bedtime", "wake")}
+            out.append({"id": pid, "name": p["name"], "about": p["about"], **times})
+        return {"current": self.profile, "all": out}
 
     # ----- POST /api/nurse/... ---------------------------------------------
     def nurse_action(self, path: str, body: dict) -> dict:
@@ -203,6 +247,8 @@ class Live:
             if not q:
                 return {"ok": False, "error": "empty question"}
             return {"ok": True, **self._suggest(q)}
+        if path == "summary":            # may call the AI (up to 8 s): never hold the lock here
+            return self._shift_summary()
         now = self.now()
         with self.lock:
             if path == "session/start":
@@ -248,9 +294,6 @@ class Live:
                 if not text:
                     return {"ok": False, "error": "empty fact"}
                 self.facts.append({"text": text, "source": "nurse"})
-            elif path == "summary":
-                self.summary = self._summary()
-                return {"ok": True, "text": self.summary}
             else:
                 return {"ok": False, "error": "unknown action"}
             return {"ok": True}
@@ -285,14 +328,77 @@ class Live:
         except Exception:   # noqa: BLE001 - no ask.py yet, no key, or an AI error
             return {"options": fallback_options(question), "source": "fallback"}
 
-    def _summary(self) -> str:
-        if not self.recent:
-            return "Nothing to report yet."
-        return " ".join(f"{r['time']} {r['text']}." for r in reversed(self.recent[:10]))
+    def _shift_summary(self) -> dict:
+        """lookat/summary.py from the patient's memory (main.py sets live.memory) + the agent's checks.
+        Without a memory (tests, fake data): the recent events, as before."""
+        memory = getattr(self, "memory", None)
+        with self.lock:
+            feed, recent = list(self.feed), list(self.recent)
+        if memory is None:
+            text = (" ".join(f"{r['time']} {r['text']}." for r in reversed(recent[:10]))
+                    or "Nothing to report yet.")
+            source = "template"
+        else:
+            from lookat.summary import shift_summary
+            s = shift_summary(memory, feed)
+            text, source = s["text"], s["source"]
+        with self.lock:
+            self.summary = text
+        return {"ok": True, "text": text, "source": source}
+
+    # ----- POST /api/gaze (browser eye tracking) ------------------------------
+    WEB_GAZE_FRESH_S = 0.6
+
+    def gaze_action(self, body: dict) -> dict:
+        """The browser's gaze zone + face + eyebrows (web/webgaze.js). events: ["confirm"] / ["emergency"]."""
+        spot = body.get("spot")
+        if spot not in (None, "left", "middle", "right"):
+            return {"ok": False, "error": "spot must be left, middle, right or null"}
+        events = [e for e in (body.get("events") or []) if e in ("confirm", "emergency")]
+        brow = body.get("brow") or {}
+        with self.lock:
+            self.web_gaze = {"spot": spot, "x": body.get("x"), "y": body.get("y"), "at": self.now(),
+                             "face": bool(body.get("face", spot is not None)),
+                             "eyes_open": body.get("eyes_open"),
+                             "brow": {"up": bool(brow.get("up")), "held_s": float(brow.get("held_s") or 0.0)}}
+            self.web_events += events
+        return {"ok": True}
+
+    def pop_web_events(self) -> list:
+        with self.lock:
+            out, self.web_events = self.web_events, []
+        return out
+
+    def web_fresh(self, now: float) -> bool:
+        return now - self.web_gaze["at"] <= self.WEB_GAZE_FRESH_S
+
+    def web_spot(self, now: float) -> Optional[str]:
+        """The browser's latest gaze zone, or None when it is stale (page closed, face lost)."""
+        g = self.web_gaze
+        return g["spot"] if now - g["at"] <= self.WEB_GAZE_FRESH_S else None
 
     # ----- POST /api/demo ---------------------------------------------------
     def demo_action(self, body: dict) -> dict:
         action, value = body.get("action"), body.get("value")
+        if action == "one_week_later":           # outside the lock: the agent writes memory and the panel
+            if self.demo_week is None:
+                return {"ok": False, "error": "the agent is not running"}
+            self.demo_week()
+            return {"ok": True}
+        if action == "profile":                  # outside the lock: the agent loads memory and writes the panel
+            if self.switch_profile is None:
+                return {"ok": False, "error": "the agent is not running"}
+            res = self.switch_profile(str(value))
+            return {"ok": True} if res == "ok" else {"ok": False, "error": res}
+        if action == "reset":
+            with self.lock:
+                clock.reset()
+                self._reset_state()
+                self.room.set_temp(22.0)
+                log_event("demo_reset")
+            if self.reset_memory is not None:    # outside the lock: the agent rewrites the memory files
+                self.reset_memory()              # every profile back to its chart; the AI's history is deleted
+            return {"ok": True}
         with self.lock:
             if action == "set_time":
                 clock.set_time(str(value))
@@ -303,13 +409,6 @@ class Live:
                 if value not in ("auto", "open", "closed"):
                     return {"ok": False, "error": "eyes must be auto, open or closed"}
                 self.eyes_override = None if value == "auto" else value
-            elif action == "reset":
-                clock.reset()
-                self._reset_state()
-                self.room.set_temp(22.0)
-                log_event("demo_reset")
-            elif action == "one_week_later":
-                return {"ok": False, "error": "one week later comes with the agent (M4-2)"}
             else:
                 return {"ok": False, "error": "unknown action"}
             return {"ok": True}
