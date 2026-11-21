@@ -280,6 +280,31 @@ def run_keyboard(args, live: Live) -> None:
         draw_operator(np.zeros((480, 1000, 3), np.uint8), live, 1.0 if spot else 0.0, None, fps, keyboard=True)
 
 
+def wire_routines(live: Live, memory):
+    """Approved routines run at their time (lookat/routines.py); the panel shows them with their
+    evidence; the "One week later" demo button loads the labelled demo week (lookat/demo_week.py)."""
+    from lookat import demo_week
+    from lookat.routines import RoutineScheduler
+    sched = RoutineScheduler(live, memory)
+
+    def on_demo(action: str) -> dict:
+        if action != "one_week_later":
+            return {"ok": False, "error": "unknown action"}
+        # a FRESH demo patient: from now on this memory writes to <patient>-demo-week.json, so the
+        # real patient's file is never overwritten by sample data
+        if not memory.path.endswith("-demo-week.json"):
+            memory.path = memory.path[:-len(".json")] + "-demo-week.json"
+        info = demo_week.load(memory)
+        live.add_feed("learned", f"One week later: the labelled demo week is loaded ({info['from']} to {info['to']})",
+                      "demo control: sample data, the real routine code runs on it")
+        return {"ok": True, **info}
+
+    live.on_demo = on_demo
+    live.panel_hooks.append(lambda panel: panel.__setitem__("memory", {**panel["memory"], "routines": sched.view()}))
+    sched.start()
+    return sched
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="LookAt")
     ap.add_argument("--patient", default="demo")
@@ -298,8 +323,10 @@ def main() -> None:
     live = Live(room, patient=args.patient)
     from lookat.agent import MODEL, Agent
     from lookat.memory import Memory
-    agent = Agent(live, Memory(args.patient))
+    memory = Memory(args.patient)
+    agent = Agent(live, memory)
     agent.start()
+    wire_routines(live, memory)
     print(f"Agent: {'Claude ' + MODEL if agent.client else 'rules only (no ANTHROPIC_API_KEY)'}")
     server = start_server(live, args.port)
     print_urls(args.port)

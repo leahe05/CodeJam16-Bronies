@@ -1,0 +1,1 @@
+Sat 17:32 M4-2 (routines + one week later): routines.py finds routines (>=3 nights within 60 min) and runs approved ones at their time once per night (not during check-ins, nurse sessions, choosing), banner + Keep it on; demo_week.py labelled week; One week later button + panel routines with evidence; 176 tests pass

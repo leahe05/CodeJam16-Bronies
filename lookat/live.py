@@ -46,6 +46,8 @@ class Live:
         self.calibration: Optional[dict] = None   # {"text", "spot"} while calibrating
         self.announcer = None            # lookat.speech.Announcer: spoken feedback (main.py sets it)
         self.voice_out = None            # lookat.speech.WebVoice: lines the patient page reads aloud
+        self.on_demo: Optional[Callable[[str], dict]] = None   # main.py: demo buttons that need the memory
+        self.panel_hooks: list = []      # callables(panel dict) adding to /api/panel (e.g. routines)
         self._ids = itertools.count(1)
         self._reset_state()
 
@@ -183,7 +185,7 @@ class Live:
     def panel_json(self) -> dict:
         r = self.room.state()
         fan = r["fan"]
-        return {"v": 1, "clock": {"time": clock.hhmm(), "day": clock.now().strftime("%a %b %d"), "demo": clock.demo},
+        out = {"v": 1, "clock": {"time": clock.hhmm(), "day": clock.now().strftime("%a %b %d"), "demo": clock.demo},
                 "perception": {"temp_c": r["temp_c"], "setpoint_c": r["setpoint_c"], "lamp_on": r["lamp_on"],
                                "fan_on": r["fan_on"], "eyes_open": self.awake_state.get("eyes_open"),
                                "awake": self.awake_state.get("awake"), "open_ratio": self.awake_state.get("open_ratio"),
@@ -195,6 +197,12 @@ class Live:
                 "status": {"camera": self.camera_ok, "lamp": r["lamp"]["online"],
                            "fan": "simulated" if fan["simulated"] else fan["online"],
                            "ai": bool(os.environ.get("ANTHROPIC_API_KEY"))}}
+        for hook in self.panel_hooks:
+            try:
+                hook(out)
+            except Exception as e:   # noqa: BLE001 - one broken add-on must not break the panel
+                log_event("panel_hook_error", error=repr(e))
+        return out
 
     # ----- POST /api/nurse/... ---------------------------------------------
     def nurse_action(self, path: str, body: dict) -> dict:
@@ -309,7 +317,9 @@ class Live:
                 self.room.set_temp(22.0)
                 log_event("demo_reset")
             elif action == "one_week_later":
-                return {"ok": False, "error": "one week later comes with the agent (M4-2)"}
+                if self.on_demo is None:
+                    return {"ok": False, "error": "one week later needs main.py (the patient's memory)"}
+                return self.on_demo(action)
             else:
                 return {"ok": False, "error": "unknown action"}
             return {"ok": True}

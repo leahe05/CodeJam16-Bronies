@@ -22,7 +22,8 @@ from typing import Optional
 from lookat.clock import clock
 
 DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "memory")
-LISTS = ("facts", "actions", "questions", "suggestions", "checkins", "pages", "deferred", "nurse_visits")
+LISTS = ("facts", "actions", "questions", "suggestions", "checkins", "pages", "deferred", "nurse_visits",
+         "routines")   # routines: approved by the patient (lookat/routines.py)
 NIGHT_SILENCE = 3
 HIDE_AFTER = 5
 NEVER_HIDE = ("Something else", "Return to main menu", "Nurse")

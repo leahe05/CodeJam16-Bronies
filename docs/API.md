@@ -161,7 +161,7 @@ Examples of each screen are in `lookat/fake_api.py` (`SCREENS`).
 | Body | Does |
 |---|---|
 | `{"action": "set_time", "value": "02:00"}` | demo clock to 02:00 (also `"07:30"`, `"21:59"`) |
-| `{"action": "one_week_later"}` | loads the labelled demo week (routine evidence) |
+| `{"action": "one_week_later"}` | loads the labelled demo week (routine evidence) into a fresh demo patient (`memory/<patient>-demo-week.json`); answers `{"ok": true, "nights": 7, "from", "to"}`. Then **Skip to 21:59**: at 22:00 the approved routine "Lamp off at 22:00" runs (banner "It's 10 PM. Turning off your lamp, as usual.", OK / Keep it on). `memory.routines` in `/api/panel` lists approved routines and candidates with their evidence. |
 | `{"action": "set_temp", "value": 24.5}` | room temperature |
 | `{"action": "eyes", "value": "auto"\|"open"\|"closed"}` | eyes-open override |
 | `{"action": "reset"}` | reset the demo (page asks "Are you sure?" first) |
