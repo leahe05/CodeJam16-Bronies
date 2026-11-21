@@ -31,5 +31,6 @@ MODEL_PATH = "models/face_landmarker.task"
 
 # Network
 PAGE_PORT = 8000
+WIFI_NAME = os.environ.get("LOOKAT_WIFI", "lea")   # the plugs only work on this network
 LAMP_IP = os.environ.get("LAMP_IP", "172.20.10.2")
 FAN_IP = os.environ.get("FAN_IP", "")  # empty = simulated fan

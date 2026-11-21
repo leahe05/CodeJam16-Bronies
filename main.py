@@ -38,6 +38,33 @@ def local_ip() -> str:
         return "localhost"
 
 
+def current_wifi():
+    """Name of the Wi-Fi the laptop is on (Windows), or None if unknown."""
+    import subprocess
+    import sys
+    if sys.platform != "win32":
+        return None
+    try:
+        out = subprocess.run(["netsh", "wlan", "show", "interfaces"], capture_output=True, text=True,
+                             timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    for line in out.splitlines():
+        name, _, value = line.partition(":")
+        if name.strip() == "SSID":
+            return value.strip()
+    return ""
+
+
+def check_wifi() -> None:
+    wifi = current_wifi()
+    if wifi is not None and wifi != config.WIFI_NAME:
+        print("\n" + "!" * 64)
+        print(f"  WRONG WI-FI: the laptop is on '{wifi or 'nothing'}', the plugs are on '{config.WIFI_NAME}'.")
+        print(f"  Connect to '{config.WIFI_NAME}' (and turn off auto-connect for other networks).")
+        print("!" * 64 + "\n")
+
+
 def start_server(live: Live, port: int):
     import uvicorn
     server = uvicorn.Server(uvicorn.Config(make_app(live), host="0.0.0.0", port=port, log_level="warning"))
@@ -194,6 +221,7 @@ def main() -> None:
     ap.add_argument("--port", type=int, default=config.PAGE_PORT)
     args = ap.parse_args()
 
+    check_wifi()
     room = Room()
     live = Live(room, patient=args.patient)
     server = start_server(live, args.port)
