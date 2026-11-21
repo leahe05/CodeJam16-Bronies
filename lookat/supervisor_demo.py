@@ -609,10 +609,16 @@ def main():
     parser.add_argument("--port", type=int, default=8768)
     parser.add_argument("--companion-port", type=int, help="Morgan's port (defaults to --port + 1)")
     parser.add_argument("--shift-demo", action="store_true", help="enable the two live simulated shift feeds")
+    parser.add_argument("--prompt-claude-key", action="store_true", help="enter a hidden Claude key for this process")
     parser.add_argument("--check-in-seconds", type=float,
                         help="fixed interval between check-ins (default: 30, or 10 in the shift demo)")
     parser.add_argument("--seed", type=int, help="repeat a random request stream for testing")
     args = parser.parse_args()
+    if args.prompt_claude_key:
+        try:
+            nurse_ai.prompt_for_key()
+        except ValueError as error:
+            parser.error(str(error))
     interval_s = args.check_in_seconds if args.check_in_seconds is not None else (10 if args.shift_demo else DEFAULT_INTERVAL_S)
     playback = ShiftPlayback(seed=args.seed) if args.shift_demo else None
     with socket.create_server((args.host, args.port)) as primary:

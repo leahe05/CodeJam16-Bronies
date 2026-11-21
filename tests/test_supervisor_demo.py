@@ -344,3 +344,14 @@ def test_request_question_uses_claude_when_available_and_falls_back_for_invalid_
     assert draft["branches"][1]["next_step"] == "Ask what the patient would like instead."
     monkeypatch.setattr(nurse_ai, "_request_json", lambda *_: [{"label": "Only one answer", "next_step": "Review."}])
     assert nurse_ai.draft_request_branches("Would you like water?", "", {})["source"] == "fallback"
+
+
+def test_claude_key_prompt_requires_a_terminal_and_loads_only_into_the_process(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr(nurse_ai.sys.stdin, "isatty", lambda: False)
+    with pytest.raises(ValueError, match="interactive terminal"):
+        nurse_ai.prompt_for_key()
+    monkeypatch.setattr(nurse_ai.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(nurse_ai.getpass, "getpass", lambda prompt: "  test-fixture-value  ")
+    nurse_ai.prompt_for_key()
+    assert nurse_ai.os.environ["ANTHROPIC_API_KEY"] == "test-fixture-value"

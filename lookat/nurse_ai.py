@@ -1,7 +1,10 @@
 """Draft reviewable nurse communication with the configured Claude API."""
+import getpass
 import json
 import os
 import re
+import sys
+import warnings
 
 from lookat.nurse_patient_profile import CARE_CHOICES
 
@@ -10,12 +13,28 @@ def available():
     return bool(os.environ.get("ANTHROPIC_API_KEY"))
 
 
+def prompt_for_key():
+    if not sys.stdin.isatty():
+        raise ValueError("Enter the Claude key in an interactive terminal.")
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", getpass.GetPassWarning)
+            key = getpass.getpass("Claude API key: ").strip()
+    except (EOFError, getpass.GetPassWarning) as error:
+        raise ValueError("The terminal could not accept a hidden API key.") from error
+    if not key:
+        raise ValueError("Enter a Claude API key or start without --prompt-claude-key.")
+    os.environ["ANTHROPIC_API_KEY"] = key
+
+
 def _request_json(instruction, payload):
     if not available():
         raise ValueError("Claude API is not configured")
     from anthropic import Anthropic
 
-    with Anthropic(timeout=8.0, max_retries=0) as client:
+    workspace = os.environ.get("ANTHROPIC_WORKSPACE_ID")
+    headers = {"anthropic-workspace-id": workspace} if workspace else None
+    with Anthropic(timeout=8.0, max_retries=0, default_headers=headers) as client:
         message = client.messages.create(
             model=os.environ.get("LOOKAT_AI_MODEL") or "claude-haiku-5-5",
             max_tokens=400,
