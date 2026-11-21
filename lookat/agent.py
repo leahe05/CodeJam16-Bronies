@@ -822,7 +822,7 @@ if __name__ == "__main__":
         live.awake_state = {"awake": True, "open_ratio": 0.92}
         room.set_temp(24.5)
         clock.set_time("02:00")
-        agent = Agent(live, Memory("selftest", d), screens=ScriptedScreens(["Yes, please.", "Yes"]),
+        agent = Agent(live, Memory("selftest", d), screens=ScriptedScreens(["Turn the fan on", "Yes"]),
                       client=None, sleep=lambda s: [room.set_temp(room.state()["temp_c"] - 0.08 * s), None][1])
         agent.last_choice = -1e9
         trig = agent.trigger(agent.perceive())
