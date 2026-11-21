@@ -27,7 +27,7 @@ COMMANDS = ("on", "off", "toggle", "flash")
 RETRY_S = 5.0
 TIMEOUT_S = 5
 HEALTH_S = 10.0          # re-read an online plug this often (unplugged -> offline, phone -> state)
-CALL_LIMIT_S = 15.0      # hard limit for one command / connect / health check (flash takes ~2 s)
+CALL_LIMIT_S = 25.0      # hard limit for one call: a connect may try 2 passwords x (5 s find + 5 s login)
 
 
 class PlugWorker:
