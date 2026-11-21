@@ -10,6 +10,8 @@
  *          content cross-fades (.win-in.swap). Leaving: #win.closing, then hidden.
  * body[data-mode] = "idle" | "menu" | "window" tells the CSS which layer is in front.
  * html[data-theme] = "day" (07:00-17:00 on the backend clock) | "night"; it cross-fades when it changes.
+ * html.big (?gaze=web, or ?big=1): every screen is THREE TALL COLUMNS, one per gaze zone (left / centre /
+ *   right third of the screen), with huge cards far apart, to absorb webcam eye-tracking error (webgaze.js).
  * Calibration (overlay.kind "calibrate"): drawn as an EMPTY check-in window, so the 3 targets are exactly
  * where the real check-in cards are; the target card glows with a dot. body[data-cal] is set meanwhile.
  */
@@ -24,6 +26,9 @@
     middle: { id: "talk", label: "Talk to AI", hint: "Look center + short eyebrow raise", icon: "chat" },
   };
   let home = HOME_DEFAULT, closeTimer = 0, openTimer = 0;
+  const QS = new URLSearchParams(location.search);
+  const BIG = QS.get("gaze") === "web" || QS.get("big") === "1";
+  if (BIG) document.documentElement.classList.add("big");
 
   // The home screen shows a moon at night and a sun by day (both drawn; CSS shows the right one).
   const MOON = '<svg class="celestial moon" viewBox="0 0 24 24" aria-hidden="true"><defs><linearGradient id="mg" x1="0" y1="0" x2="1" y2="1">'
@@ -100,8 +105,39 @@
     return `<div class="center" data-spot="middle">${icon(optIcon(o) || "home", "center-i")}<span><b>${esc(o.label)}</b>${hintTag(o, "middle")}</span></div>`;
   }
 
+  // ---------------- big layout: three columns = the three gaze zones ----------------
+  // A big card for option o (the backend's spot) placed in column `zone` (what the patient looks at).
+  function bigOpt(o, spot, zone, live, extra = "") {
+    if (!o) return `<div class="col" data-zone="${zone}"></div>`;
+    const engage = o.id === "engage";
+    const label = engage ? "Open it" : o.label;             // the engage pill's label is an instruction
+    const where = { left: "Look left", middle: "Look center", right: "Look right" }[zone];
+    const opt = { ...o, hint: `${where} + raise eyebrows` };
+    const fallback = { room: "lamp", talk: "chat", engage: "target", home: "home" }[o.id] || "sparkle";
+    return `<div class="col" data-zone="${zone}"><div class="big-opt ${extra}" ${live ? `data-spot="${spot}"` : ""}>`
+      + `${icon(optIcon(o) || fallback)}<b>${esc(label)}</b>${live ? hintTag(opt, spot) : ""}</div></div>`;
+  }
+  const bigCard = (d, spot, live = true) => bigOpt(d[spot], spot, spot, live);
+  const bigCols = (d, live) => `<div class="cols">${bigCard(d, "left", live)}${bigCard(d, "middle", live)}${bigCard(d, "right", live)}</div>`;
+  // Home + suggestion: Room Controls in the LEFT column, Talk to AI / Open it in the RIGHT column
+  // (it is still the backend's "middle" spot: web/webgaze.js maps the right column to it).
+  function bigHome(h, live) {
+    return `<div class="cols home-cols">${bigOpt(h.left, "left", "left", live)}`
+      + `<div class="col mid" data-zone="middle">${CELESTIAL}<h1 class="hero">${esc(h.title)}</h1>${sub(h)}</div>`
+      + `${bigOpt(h.middle, "middle", "right", live, "talk-big")}</div>`;
+  }
+  function bigWin(d) {
+    if (d.screen === "suggestion" && !d.right)    // open question: Room Controls left, "Open it" right
+      return `${chip(d)}<h1>${esc(d.title)}</h1>${sub(d)}<div class="cols">${bigOpt(d.left, "left", "left", true)}`
+        + `<div class="col" data-zone="middle"></div>${bigOpt(d.middle, "middle", "right", true, "talk-big")}</div>`;
+    const instr = d.screen === "nurse" && (d.left || d.right || d.middle)
+      ? `<p class="big-instr">${icon("brows", "instr-i")}${esc(d.footer || "Look at an answer and raise your eyebrows.")}</p>` : "";
+    return `${chip(d)}<h1>${esc(d.title)}</h1>${sub(d)}${bigCols(d, true)}${instr}${dots(d.page)}`;
+  }
+
   // ---------------- layers ----------------
   function homeHTML(h, live) {
+    if (BIG) return bigHome(h, live);
     const m = h.middle;
     const pill = m ? `<div class="talk" ${live ? 'data-spot="middle"' : ""}><b>${icon(optIcon(m) || "chat")}${esc(m.label)}</b>`
       + `${live ? hintTag(m, "middle") : `<small>${esc(m.hint || "")}</small>`}</div>` : "";
@@ -109,8 +145,11 @@
   }
 
   function winHTML(d) {
+    if (BIG) return bigWin(d);
     switch (d.screen) {
       case "suggestion":
+        if (d.right)    // the two choices on the notification itself, "Not now" in the center
+          return `${chip(d)}<h1>${esc(d.title)}</h1>${sub(d)}${cards(d, "row")}${center(d)}`;
         return `${chip(d)}<h1>${esc(d.title)}</h1>${sub(d)}`
           + (d.middle ? `<div class="engage" data-spot="middle">${icon(optIcon(d.middle) || "target")}<span>${esc(d.middle.label)}</span></div>` : "");
       case "nurse": {
@@ -129,14 +168,14 @@
         return `${chip(d)}<h1>${esc(d.title)}</h1>${sub(d)}${cards(d, "stack")}${center(d)}${dots(d.page)}`;
     }
   }
-  const menuHTML = (d) => `<div class="panel enter">${chip(d)}<h1>${esc(d.title)}</h1>${sub(d)}${cards(d, "stack")}${center(d)}${dots(d.page)}</div>`;
+  const menuHTML = (d) => BIG ? `<div class="panel enter">${chip(d)}<h1>${esc(d.title)}</h1>${sub(d)}${bigCols(d, true)}</div>` : `<div class="panel enter">${chip(d)}<h1>${esc(d.title)}</h1>${sub(d)}${cards(d, "stack")}${center(d)}${dots(d.page)}</div>`;
 
   function headHTML(d) {
     const brand = (cls) => `<div class="brand ${cls}">${icon("eye")}<span>LookAt</span></div>`;
     if (d.screen === "nurse")
       return `${brand("start")}<div class="nursepill">${icon("nurse")}${esc(d.badge || "From your nurse")}</div>`
         + `<div class="conn"><span class="ok">Connected</span><span class="lost">Reconnecting…</span></div>`;
-    const corner = (d.screen === "idle" || d.screen === "suggestion") && d.left
+    const corner = !BIG && (d.screen === "idle" || d.screen === "suggestion") && d.left && d.left.id === "room"
       ? `<div class="corner" data-spot="left">${icon(optIcon(d.left) || "lamp", "corner-i")}<span><b>${esc(d.left.label)}</b>${hintTag(d.left, "left")}</span></div>`
       : "<div></div>";
     return `${corner}<div></div>${brand("")}`;
@@ -147,7 +186,7 @@
     const win = $("win");
     clearTimeout(closeTimer);
     const wasOpen = win.classList.contains("open") && !win.classList.contains("closing");
-    const size = d.screen === "suggestion" ? "notif" : "full";
+    const size = d.screen === "suggestion" && !BIG && !d.right ? "notif" : "full";
     win.className = `open ${size} kind-${d.screen}` + (wasOpen ? "" : " opening");
     win.innerHTML = `<div class="win-in${wasOpen ? " swap" : ""}">${winHTML(d)}</div>`;
     if (!wasOpen) {

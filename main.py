@@ -1,6 +1,8 @@
 """LookAt: the real program.
 
-    py -3.11 main.py --patient NAME [--recalibrate] [--camera 0] [--voice edge|page|windows|off]
+    py -3.11 main.py --patient NAME [--voice edge|page|windows|off]
+        default --gaze web: the patient page (/patient) tracks gaze AND eyebrows itself (WebGazer, big layout)
+    py -3.11 main.py --patient NAME --gaze camera [--recalibrate] [--camera 0]   (the old Python gaze)
     py -3.11 main.py --patient NAME --keyboard      (no camera: test with the keyboard)
 
 Starts the web server (Lea's pages + the JSON API, docs/API.md), the plugs (lamp,
@@ -302,7 +304,7 @@ def run_camera(args, live: Live) -> None:
 
 
 def supervise(run, args, live: Live, retry_s: float = None, sleep=time.sleep) -> None:
-    """Run the camera loop (run = run_camera). If it crashes, or there is no camera at the start,
+    """Run the camera loop (run = run_camera or run_web). If it crashes, or there is no camera at the start,
     the web server, plugs, voice and screen timers keep going and the loop is restarted every
     retry_s. Returns when run returns by itself (q pressed)."""
     retry_s = CAMERA_RESTART_S if retry_s is None else retry_s
@@ -363,6 +365,37 @@ def start_status(live: Live, speech, every: float = None, out=print) -> threadin
     return stop
 
 
+def web_step(live: Live, awake, now: float):
+    """One tick of --gaze web: the browser's latest gaze zone, face, eyes and eyebrow events -> Live.frame."""
+    g = live.web_gaze
+    face = live.web_fresh(now) and g["face"]
+    spot = live.web_spot(now) if face else None
+    awake.set_override(live.eyes_override)
+    blink = None if not face or g["eyes_open"] is None else (0.0 if g["eyes_open"] else 1.0)
+    live.awake_state = awake.update(None if blink is None else {"eyeBlinkLeft": blink, "eyeBlinkRight": blink}, now)
+    brow = g["brow"] if face else {"up": False, "held_s": 0.0}
+    live.frame(now, spot, live.pop_web_events(), face=face, confidence=1.0 if spot else 0.0, brow=brow)
+    return spot
+
+
+def run_web(args, live: Live) -> None:
+    """--gaze web: no Python camera. The patient page (web/webgaze.js) tracks gaze AND eyebrows with
+    WebGazer and sends them to POST /api/gaze; this loop feeds them to the same selection engine."""
+    from lookat.awake import AwakeDetector
+    awake = AwakeDetector()
+    fps, last = 0.0, time.monotonic()
+    print("Web gaze: waiting for the patient page (calibrate there: the dot, then the eyebrows).")
+    while True:
+        key = cv2.waitKey(30) & 0xFF
+        if key == ord("q"):
+            break
+        now = time.monotonic()
+        spot = web_step(live, awake, now)
+        fps = 0.9 * fps + 0.1 / max(now - last, 1e-3)
+        last = now
+        draw_operator(np.zeros((480, 1000, 3), np.uint8), live, 1.0 if spot else 0.0, None, fps, keyboard=False)
+
+
 def run_keyboard(args, live: Live) -> None:
     """No camera: drive the real screens, lamp and fan from the keyboard."""
     spot, look = None, {ord("a"): "left", ord("s"): "middle", ord("d"): "right"}
@@ -396,6 +429,9 @@ def main() -> None:
     ap.add_argument("--camera", type=int, default=0)
     ap.add_argument("--keyboard", action="store_true", help="no camera: test with the keyboard")
     ap.add_argument("--port", type=int, default=config.PAGE_PORT)
+    ap.add_argument("--gaze", choices=("camera", "web"), default="web",
+                    help="camera = Python gaze + eyebrows (left/center/right calibration); "
+                         "web = the patient page tracks gaze AND eyebrows with WebGazer (no Python camera, big layout)")
     ap.add_argument("--voice", choices=("edge", "page", "windows", "off"), default="edge",
                     help="edge = Microsoft natural voice from this laptop (internet); "
                          "page = the patient page speaks (Edge natural voice, click it once); "
@@ -405,6 +441,7 @@ def main() -> None:
     check_wifi()
     room = Room()
     live = Live(room, patient=args.patient)
+    live.gaze_mode = "camera" if args.keyboard else args.gaze   # web: /patient opens with WebGazer
     from lookat.agent import MODEL, Agent
     from lookat.memory import Memory
     agent = Agent(live, Memory(args.patient))
@@ -412,6 +449,10 @@ def main() -> None:
     print(f"Agent: {'Claude ' + MODEL if agent.client else 'rules only (no ANTHROPIC_API_KEY)'}")
     server = start_server(live, args.port)
     print_urls(args.port)
+    if live.gaze_mode == "web":
+        print(f"  WEB GAZE: open http://localhost:{args.port}/patient on the patient screen, click once,\n"
+              f"  follow the dot, then raise your eyebrows when asked (R = redo gaze, B = redo eyebrows,\n"
+              f"  D = hide the gaze ring). Python does not use the camera in this mode.\n")
     print(f"Lamp: {room.lamp.ip or 'simulated'}   Fan: {room.fan.ip or 'simulated (set FAN_IP for plug 2)'}")
     if args.voice == "edge":
         args.speech = EdgeVoice()
@@ -429,8 +470,8 @@ def main() -> None:
     try:
         if args.keyboard:
             run_keyboard(args, live)
-        else:
-            supervise(run_camera, args, live)
+        else:   # restart the gaze loop (camera or web) if it crashes; the pages keep being served
+            supervise(run_web if args.gaze == "web" else run_camera, args, live)
     except KeyboardInterrupt:
         pass
     finally:

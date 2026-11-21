@@ -122,11 +122,11 @@ def test_live_speaks_while_choosing_the_lamp():
             t += 0.1
 
     choose("left")      # Room Controls
-    choose("left")      # Adjust the lights
-    choose("left")      # Lamp on
-    assert said == ["Room Controls.", "+" + RAISE, "Room Controls.", "+What would you like to adjust? Left: Adjust the lights. Right: Adjust the temperature. Center: Return to main menu.",
-                    "Adjust the lights.", "+" + RAISE, "Adjust the lights.", "+The lamp is OFF. Left: Lamp on. Right: Lamp off. Center: Back.",
-                    "Lamp on.", "+" + RAISE, "Lamp on."]
+    choose("left")      # Turn the lamp on (one switch)
+    assert said == ["Room Controls.", "+" + RAISE, "Room Controls.",
+                    "+What would you like to adjust? Left: Turn the lamp on. Right: Turn the fan on. Center: Return to main menu.",
+                    "Turn the lamp on.", "+" + RAISE, "Turn the lamp on.",
+                    "+What would you like to adjust? Left: Turn the lamp off. Right: Turn the fan on. Center: Return to main menu."]
     assert live.room.state()["lamp_on"]
 
 
@@ -179,10 +179,11 @@ def test_labels_ending_in_a_period_get_no_second_one():
 def test_known_lines_cover_the_menus():
     from lookat.speech import known_lines
     lines = known_lines()
-    for line in (RAISE, "Room Controls.", "Lamp on.", "Cooler.", "Return to main menu."):
+    for line in (RAISE, "Room Controls.", "Turn the lamp on.", "Turn the lamp off.", "Turn the fan on.",
+                 "Turn the fan off.", "Return to main menu."):
         assert line in lines
-    for start in ("The lamp is OFF. Left: Lamp on.", "The lamp is ON. Left: Lamp on.",
-                  "What would you like to adjust? Left: Adjust the lights."):
+    for start in ("What would you like to adjust? Left: Turn the lamp on.",
+                  "What would you like to adjust? Left: Turn the lamp off."):
         assert any(x.startswith(start) for x in lines), start
 
 
