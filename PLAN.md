@@ -402,7 +402,7 @@ Set 02:00 · Set 07:30 · Skip to 21:59 · One week later · Temperature − / +
 ## R9. Research (from the final idea doc)
 1. **Patients avoid calling nurses:** *Through a Filter of Empathy and Understanding: Patients' Experiences of Missed Nursing Care* (2026, PMC). Patients delayed or minimised needs so as not to burden busy nurses.
 2. **Patients value attention, not fixed schedules:** *Patient and Carer Perspectives of Intentional Rounding*. Needs met and respectful attention mattered more than set intervals.
-3. **Against excessive check-ins:** *The delivery of compassionate nursing care in a tick-box culture*. Patients disliked scripted, repetitive rounds and preferred judgment and knowing the individual.
+3. **Against excessive check-ins:** *The delivery of compassionate nursing care in a tick-box culture*. Patients disliked scripted, repetitive rounds and preferred judgment and knowing the individual
 
 ## R10. CodeJam 16 facts
 Hacking Fri 7 PM → Sun 12 PM. Submit on Devpost by **12 PM Sunday** (aim 11 AM). Judging **1–3:30 PM**. No code before Fri 7 PM. Say on Devpost it was built with Claude Code.
