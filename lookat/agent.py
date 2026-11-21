@@ -19,6 +19,7 @@ Self-test without camera or key: py -3.11 -m lookat.agent
 import itertools
 import json
 import os
+import re
 import queue
 import threading
 import time
@@ -537,7 +538,8 @@ class Agent:
             self.feed("learned", f"Ignored: no '{name}' suggestions for {mins} min", "respect silence")
             return
         self.ignored_streak[name] = 0
-        declined = [a for a in self.answers if a == "dismissed" or str(a).lower().startswith("no")]
+        declined = [a for a in self.answers                 # "No, thanks." / "No" / back out; not "Not too warm"
+                    if a == "dismissed" or (isinstance(a, str) and re.match(r"no\b", a.strip().lower()))]
         if declined:
             self.backoff[name] = now + DECLINED_BACKOFF_MIN * 60
             self.feed("learned", f"Declined: no '{name}' suggestions for {DECLINED_BACKOFF_MIN} min", "respect the answer")

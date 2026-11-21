@@ -393,3 +393,11 @@ def test_menu_rewritten_only_when_the_situation_changes(tmp_path):
     agent.last_choice = -1e9
     agent.step()
     assert len(calls) == 2                            # the lamp changed: rewritten
+
+
+def test_only_a_real_no_counts_as_declined(tmp_path):
+    agent, live, *_ = make(tmp_path)
+    for ans, held in (("Not too warm", False), (None, False), ("No", True), ("No, thanks.", True)):
+        agent.backoff.clear(); agent.answers = [ans]
+        agent._respect_silence("room_change")
+        assert ("room_change" in agent.backoff) is held, ans
