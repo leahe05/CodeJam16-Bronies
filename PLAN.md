@@ -14,7 +14,7 @@
 - **Nurse app** (phone): alerts and pages with explanations, flags ("feels cold below 20 °C, ask first?"), start a conversation: type any question → AI suggests answers → edit → send → live answers → AI suggests follow-ups → end session. History, preferences, shift summary, room controls, "I'm here" visit button.
 - **Real hardware:** plug 1 = **lamp**, plug 2 = **fan (acts as the AC)**. Temperature = a **demo sensor** (one number, set from the demo panel; it also drifts down while the fan runs).
 - **Safety:** comfort, environment and communication only; anything clinical goes to the nurse. Every action is confirmed by the patient, except routines they already approved. **"Call Nurse"** and **"Something else"** are always available.
-- **Not building:** voice output, ESP32 sensor, dwell-only mode (listed as a limitation), benchmark dashboard, more devices.
+- **Not building:** ESP32 sensor, dwell-only mode (listed as a limitation), benchmark dashboard, more devices.
 
 **Team (3 people):** **P1 = Lea** (vision → agent brain) · **P2 = Belinda** (integrator: menus, patient screen, main program) · **P3** (devices, nurse app, Ask anything, Devpost).
 

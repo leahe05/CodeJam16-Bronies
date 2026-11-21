@@ -5,7 +5,9 @@
     lamp.is_on, lamp.online, lamp.simulated, lamp.last_ms
 
 Each worker has its own thread + asyncio loop. Credentials come from the
-KASA_USER / KASA_PASSWORD environment variables (never printed). An offline plug
+KASA_USER / KASA_PASSWORD environment variables (never printed). After a TP-Link password
+change, a plug that hasn't picked up the new password yet still accepts the old one:
+KASA_OLD_PASSWORD (optional) is tried when a plug refuses KASA_PASSWORD. An offline plug
 logs "PLUG <name> OFFLINE", retries every RETRY_S and never crashes anything.
 Self-test: py -3.11 -m lookat.plugs --ip 172.20.10.2
 """
@@ -16,25 +18,12 @@ import threading
 import time
 from typing import Callable, Optional
 
+from lookat.config import saved_env   # noqa: F401 - re-exported: plugs.saved_env
 from lookat.state import log_event
 
 COMMANDS = ("on", "off", "toggle", "flash")
 RETRY_S = 5.0
 TIMEOUT_S = 5
-
-
-def saved_env(name: str) -> Optional[str]:
-    """os.environ first; on Windows also the value `setx` saved for the user, so a
-    terminal that was opened before setx still works. The value is never printed."""
-    value = os.environ.get(name)
-    if value or os.name != "nt":
-        return value
-    try:
-        import winreg
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as key:
-            return winreg.QueryValueEx(key, name)[0] or None
-    except OSError:
-        return None
 
 
 class PlugWorker:
@@ -100,11 +89,27 @@ class PlugWorker:
                   'Run setx KASA_USER "..." and setx KASA_PASSWORD "..." once.')
         dev = None
         try:
-            dev = await Discover.discover_single(self.ip, discovery_timeout=TIMEOUT_S, timeout=TIMEOUT_S,
-                                                 username=user, password=password)
-            if dev is None:
-                raise ConnectionError("no answer")
-            await dev.update()
+            old = saved_env("KASA_OLD_PASSWORD")
+            tries = [password] + ([old] if old and old != password else [])
+            for i, pw in enumerate(tries):
+                try:
+                    dev = await Discover.discover_single(self.ip, discovery_timeout=TIMEOUT_S, timeout=TIMEOUT_S,
+                                                         username=user, password=pw)
+                    if dev is None:
+                        raise ConnectionError("no answer")
+                    await dev.update()
+                    if i:
+                        print(f"PLUG {self.name}: accepted KASA_OLD_PASSWORD (it hasn't picked up the new one yet)")
+                    break
+                except Exception as e:   # noqa: BLE001
+                    if "Authentication" not in type(e).__name__ or i == len(tries) - 1:
+                        raise
+                    if dev is not None:   # refused: close this session, try the old password
+                        try:
+                            await dev.disconnect()
+                        except Exception:   # noqa: BLE001
+                            pass
+                        dev = None
             self._dev = dev
             self._set(bool(dev.is_on))
             self.online = True
@@ -171,7 +176,8 @@ class PlugWorker:
     def _offline(self, err: Exception) -> None:
         self.online = False
         if not self._warned:
-            hint = ("wrong Kasa login: KASA_USER / KASA_PASSWORD must be the TP-Link account that owns the plug"
+            hint = ("login refused: KASA_USER / KASA_PASSWORD must be the TP-Link account that owns the plug; "
+                    "if they are (another plug works), unplug this plug 10 s, plug it back in, wait 1 min"
                     if "Authentication" in type(err).__name__
                     else "run the network check (PLAN.md R1): laptop on the right Wi-Fi? plug powered?")
             print(f"PLUG {self.name} OFFLINE at {self.ip} ({type(err).__name__}) - {hint}")

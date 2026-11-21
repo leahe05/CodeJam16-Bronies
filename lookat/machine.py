@@ -14,6 +14,8 @@ It returns a list of actions:
 
 States: IDLE -> (look at an active spot for DWELL_S) -> ASKING (spot locked,
 highlighted) -> short raise within ASK_TIMEOUT_S -> select -> COOLDOWN.
+A raise that is in progress (holding=True, eyebrows up right now) stops the timeout:
+the choice counts when the eyebrows come down, even after ASK_TIMEOUT_S.
 Rules (CLAUDE.md): the long raise is checked first; looking away, a timeout or
 losing the face cancels; after a choice or a timeout the patient must look away
 before the same spot can be chosen again.
@@ -44,7 +46,7 @@ class Machine:
         self._active: set = set(config.SPOTS)
 
     def step(self, now: float, spot: Optional[str], events: Iterable[str] = (), face: bool = True,
-             active: Iterable[str] = tuple(config.SPOTS)) -> list:
+             active: Iterable[str] = tuple(config.SPOTS), holding: bool = False) -> list:
         self._now = now
         events = set(events or ())
         active = set(active or ())
@@ -83,7 +85,7 @@ class Machine:
                 self._locked = None
                 self._chosen, self._chosen_at = chosen, now
                 return [("select", chosen)]
-            if now - self._ask_start >= config.ASK_TIMEOUT_S - EPS:
+            if not holding and now - self._ask_start >= config.ASK_TIMEOUT_S - EPS:
                 self._go_idle(spot, now)
                 self._need_release = True
             return []

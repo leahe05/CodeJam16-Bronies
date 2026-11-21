@@ -129,3 +129,25 @@ def test_busy_while_choosing():
     assert not m.busy
     run(m, 0.6, 2.0, "right", active=("left", "middle"))   # staring at an empty spot
     assert not m.busy and m.view() is None
+
+
+def test_raise_in_progress_is_waited_for_after_the_timeout():
+    # the voice names the card, the patient raises late: the raise started in time, so it counts
+    m = Machine()
+    _, t = run(m, 0, 1.0 + 0.1, "left")                      # dwell -> locked
+    t0 = t
+    while t < t0 + config.ASK_TIMEOUT_S + 1.0:               # eyebrows up across the timeout
+        assert m.step(round(t, 3), "left", (), holding=True) == []
+        t += 0.1
+    assert m.state == "ASKING"
+    assert m.step(round(t, 3), "left", ("confirm",)) == [("select", "left")]
+
+
+def test_without_a_raise_the_lock_still_times_out():
+    m = Machine()
+    _, t = run(m, 0, 1.0 + 0.1, "left")
+    t0 = t
+    while t < t0 + config.ASK_TIMEOUT_S + 0.2:
+        m.step(round(t, 3), "left", ())
+        t += 0.1
+    assert m.state == "IDLE"

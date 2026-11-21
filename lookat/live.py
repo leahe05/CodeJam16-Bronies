@@ -44,6 +44,8 @@ class Live:
         self.listeners: list = []        # callbacks(event_tuple) - the agent subscribes here
         self.camera_ok = False
         self.calibration: Optional[dict] = None   # {"text", "spot"} while calibrating
+        self.announcer = None            # lookat.speech.Announcer: spoken feedback (main.py sets it)
+        self.voice_out = None            # lookat.speech.WebVoice: lines the patient page reads aloud
         self._ids = itertools.count(1)
         self._reset_state()
 
@@ -77,7 +79,8 @@ class Live:
                 return []
             out = list(self.sm.tick(now, busy=self.machine.busy))
             self.chosen = None                    # label chosen this frame (operator feedback)
-            for action in self.machine.step(now, spot, events, face, self.sm.active_spots()):
+            holding = bool(self.brow.get("up"))   # a raise in progress: wait for it to come down
+            for action in self.machine.step(now, spot, events, face, self.sm.active_spots(), holding=holding):
                 if action[0] == "call_nurse":
                     out += self.sm.call_nurse(now)
                 elif action[0] == "select":
@@ -87,6 +90,11 @@ class Live:
             self.room.tick(now)
             for ev in out:
                 self._handle(ev, now)
+            if self.announcer is not None:
+                try:
+                    self.announcer.update(self.sm.view(now), self.machine.view(), self.chosen, out, now=now)
+                except Exception as e:   # noqa: BLE001 - the voice must never stop the camera loop
+                    log_event("voice_error", error=repr(e))
         for ev in out:
             self._notify(ev)
         return out
@@ -153,7 +161,8 @@ class Live:
         return {"v": 1, **v, "focus": None if self.calibration else self.machine.view(),
                 "clock": {"time": clock.hhmm(), "demo": clock.demo},
                 "room": {k: r[k] for k in ("temp_c", "setpoint_c", "lamp_on", "fan_on")},
-                "face": self.face,
+                "face": self.face, "ask_s": config.ASK_TIMEOUT_S,
+                "voice": self.voice_out.recent() if self.voice_out is not None else [],
                 "brow": {"up": bool(self.brow.get("up")), "held_s": round(float(self.brow.get("held_s", 0.0)), 2),
                          "long_s": config.EMERGENCY_S}}
 
