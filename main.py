@@ -99,7 +99,7 @@ class ScreenPrompt:
         from lookat.gaze import SPOKEN_NAMES
         spot = next((s for s, name in SPOKEN_NAMES.items() if name in text), None)
         self.live.set_calibration(text, spot)
-        self.speaker(text)
+        self.speaker.say(text, interrupt=True)   # the newest prompt wins: never lag behind the camera
 
 
 def calibrate(tracker, live: Live, speaker, patient: str, what: str):
@@ -201,16 +201,17 @@ def run_camera(args, live: Live) -> None:
     from lookat.vision import FaceTracker
     from lookat.awake import AwakeDetector
 
-    speaker = LocalSpeaker()
+    speaker = LocalSpeaker()                          # Ava: the app's voice
+    cal_voice = LocalSpeaker(ava=False, fast=True)     # calibration: instant, offline, quicker
     awake = AwakeDetector()
     tracker = FaceTracker(args.camera)
     live.camera_ok = True
     try:
-        gaze = (calibrate(tracker, live, speaker, args.patient, "gaze")
+        gaze = (calibrate(tracker, live, cal_voice, args.patient, "gaze")
                 if args.recalibrate or not GazeModel.exists(args.patient) else GazeModel.load(args.patient))
         settings = None if args.recalibrate else load_settings(args.patient)
         if settings is None:
-            settings = calibrate(tracker, live, speaker, args.patient, "gestures")
+            settings = calibrate(tracker, live, cal_voice, args.patient, "gestures")
         det = GestureDetector(settings, on_release=True)
         print(f"Ready. Eyebrow threshold {det.threshold:.2f} ({settings['gesture']}). "
               f"Watch the '{WINDOW}' window; press q in it to quit.")
@@ -245,16 +246,17 @@ def run_camera(args, live: Live) -> None:
                 print("Stopped: q pressed.")
                 break
             if key == ord("c"):
-                gaze = calibrate(tracker, live, speaker, args.patient, "gaze")
+                gaze = calibrate(tracker, live, cal_voice, args.patient, "gaze")
                 raised = False
             elif key == ord("g"):
-                settings = calibrate(tracker, live, speaker, args.patient, "gestures")
+                settings = calibrate(tracker, live, cal_voice, args.patient, "gestures")
                 det = GestureDetector(settings, on_release=True)
                 raised = False
     finally:
         live.camera_ok = False
         tracker.close()
         speaker.close()
+        cal_voice.close()
 
 
 def run_keyboard(args, live: Live) -> None:

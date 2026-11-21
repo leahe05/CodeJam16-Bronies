@@ -1,1 +1,2 @@
 14:46 agent (patient side): awake.py (eyes open/awake), memory.py (facts, learn: comfort, silence, option ranking), agent.py (triggers warm-night/cold/patient-asked; Claude tool loop with code-enforced Yes-before-act + question limit; rules fallback); 2 AM loop end to end on the real screens; 135 tests pass
+15:01 voice: calibration uses the instant offline system voice (faster rate, newest prompt replaces stale ones); Ava stays for the app; 135 tests pass
