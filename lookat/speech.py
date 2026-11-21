@@ -34,7 +34,7 @@ from typing import Callable, Optional
 
 RAISE = "Raise your eyebrows."
 NAME_AFTER_S = 0.3      # look at a card this long before its name is said (skips gaze flicker)
-RENAME_S = 2.0          # the same card's name is not repeated within this time
+RENAME_S = 6.0        # the same card is not named again within this time (gaze dropouts restart the dwell)
 NURSE_CALLED = "Calling your nurse. Help is on the way."
 # screens whose title is the news (a question or a suggestion); on the others it's a live
 # status like "The room is 23.4 °C" that must not be read out again every time it changes
