@@ -49,18 +49,62 @@ def _diff(a: int, b: int) -> int:
     """a - b in minutes on a 24-hour clock, in -720..719 (21:50 - 22:10 = -20, 00:10 - 23:50 = 20)."""
     return (a - b + 720) % 1440 - 720
 
-# The patient's chart (demo data, labelled "chart" on the panel). Comfort facts carry the numbers the triggers
-# use; care facts give Claude something real to work with (the Talk to AI menu, explained pages).
-DEMO_CHART = [
-    {"text": "Runs warm at night", "kind": "comfort", "data": {"runs_warm": True}},
-    {"text": "Feels cold below 20 °C", "kind": "comfort", "data": {"cold_below_c": 20}},
-    {"text": "Feels warm above 24 °C (23 °C at night)", "kind": "comfort", "data": {"warm_above_c": 24}},
-    {"text": "Answers only with the eyes: keep questions short", "kind": "care"},
-    {"text": "Repositioned every 2 hours (care plan)", "kind": "care"},
-    {"text": "Likes the lamp on in the evening, off to sleep", "kind": "preference"},
-    {"text": "Usual bedtime around 22:00", "kind": "routine", "data": {"bedtime": "22:00"}},
-    {"text": "Drinks water through a straw; the nurse helps", "kind": "care"},
-]
+# The demo patients (fictional), picked on the panel. Each chart is what LookAt knows on day one (labelled
+# "chart" on the panel). Comfort facts carry the numbers the triggers use (cold_below_c, warm_above_c,
+# runs_warm); routine facts carry the times (bedtime, wake); the rest gives Claude something real to work with.
+# "Reset demo" puts every profile back to exactly its chart: what the agent did or learned since is deleted.
+PROFILES = {
+    "margaret": {
+        "name": "Margaret Chen", "about": "78, ALS: answers with her eyes only",
+        "chart": [
+            {"text": "Margaret Chen, 78, ALS: answers only with her eyes; keep questions short", "kind": "care"},
+            {"text": "Runs warm at night", "kind": "comfort", "data": {"runs_warm": True}},
+            {"text": "Feels cold below 20 °C", "kind": "comfort", "data": {"cold_below_c": 20}},
+            {"text": "Feels warm above 24 °C (23 °C at night)", "kind": "comfort", "data": {"warm_above_c": 24}},
+            {"text": "Usual bedtime around 22:00", "kind": "routine", "data": {"bedtime": "22:00"}},
+            {"text": "Wakes up around 07:00 and likes the lamp on right away", "kind": "routine", "data": {"wake": "07:00"}},
+            {"text": "Likes the lamp on in the evening, off to sleep", "kind": "preference"},
+            {"text": "When warm, prefers the fan over removing a blanket", "kind": "preference"},
+            {"text": "Repositioned every 2 hours (care plan); prefers her right side", "kind": "care"},
+            {"text": "Drinks water through a straw; the nurse helps", "kind": "care"},
+            {"text": "Her daughter Lily visits on Sunday afternoons", "kind": "note"},
+        ]},
+    "james": {
+        "name": "James Okafor", "about": "54, brainstem stroke (locked-in): eyes and eyebrows",
+        "chart": [
+            {"text": "James Okafor, 54, brainstem stroke (locked-in): eyes and eyebrows only; one question at a time",
+             "kind": "care"},
+            {"text": "Runs cold: feels cold below 21 °C", "kind": "comfort", "data": {"cold_below_c": 21, "runs_warm": False}},
+            {"text": "Feels warm only above 26 °C", "kind": "comfort", "data": {"warm_above_c": 26}},
+            {"text": "Night owl: usual bedtime around 23:30", "kind": "routine", "data": {"bedtime": "23:30"}},
+            {"text": "Sleeps in: wakes up around 08:30", "kind": "routine", "data": {"wake": "08:30"}},
+            {"text": "Dislikes the fan blowing on his face: always ask before turning it on", "kind": "preference"},
+            {"text": "When cold, wants a warm blanket from the nurse", "kind": "preference"},
+            {"text": "Likes the lamp on while awake (audiobooks); off to sleep", "kind": "preference"},
+            {"text": "Repositioned every 3 hours; prefers his left side", "kind": "care"},
+            {"text": "Thickened fluids only: water through the nurse", "kind": "care"},
+            {"text": "Gets tired after 2 or 3 questions in a row: keep it brief", "kind": "care"},
+            {"text": "His wife Ada calls around 19:00 most evenings", "kind": "note"},
+        ]},
+}
+DEFAULT_PROFILE = "margaret"
+DEMO_CHART = PROFILES[DEFAULT_PROFILE]["chart"]
+
+
+def profile_memory(pid: str, folder: str = None) -> "Memory":
+    """The memory of a demo profile (memory/profile-<pid>.json), with its chart loaded."""
+    m = Memory(f"profile-{pid}", folder or DIR)
+    m.load_chart(PROFILES[pid]["chart"])
+    return m
+
+
+def routine_time(memory: "Memory", key: str) -> Optional[str]:
+    """The latest fact's "bedtime" / "wake" time ("HH:MM"), or None."""
+    for f in reversed(memory.data["facts"]):
+        v = (f.get("data") or {}).get(key)
+        if v:
+            return str(v)
+    return None
 
 
 class Memory:
@@ -108,6 +152,14 @@ class Memory:
         for f in facts:
             if f["text"] not in known:
                 self.add_fact(f["text"], f.get("kind", "comfort"), "chart", f.get("data"))
+
+    def reset_to(self, chart: list) -> None:
+        """Back to exactly this chart: every action, question, suggestion, page, note and learned fact is deleted."""
+        self.data = {k: [] for k in LISTS}
+        for f in chart:
+            self.data["facts"].append({"time": clock.now().isoformat(timespec="seconds"), "text": f["text"],
+                                       "kind": f.get("kind", "comfort"), "source": "chart", "data": f.get("data") or {}})
+        self.save()
 
     # ----- learning (deterministic) ------------------------------------------
     def learn(self) -> dict:
@@ -187,9 +239,14 @@ class Memory:
             return 0
         today = clock.now().date()
         added = []
+        bedtime = routine_time(self, "bedtime")          # the week follows this patient's bedtime (22:00 = as written)
+        shift = _diff(_mins(bedtime), _mins("22:00")) if bedtime else 0
         for (device, cmd), times in DEMO_WEEK.items():
             for i, hhmm in enumerate(times):
                 if hhmm:
+                    if (device, cmd) == ("lamp", "off") and shift:
+                        m = (_mins(hhmm) + shift) % 1440
+                        hhmm = f"{m // 60:02d}:{m % 60:02d}"
                     day = today - dt.timedelta(days=len(times) - i)
                     added.append({"time": f"{day.isoformat()}T{hhmm}:00", "device": device, "cmd": cmd,
                                   "by": "patient", "result": "demo week", "demo": True})

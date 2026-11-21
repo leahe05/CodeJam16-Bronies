@@ -11,6 +11,7 @@ WHEN is decided by deterministic triggers (cheap, explainable, demo-safe):
                  switch isn't in that state yet: offer it (from 15 min before to 30 min after)
     bedtime      about the patient's bedtime (a learned habit, else the chart, else 22:00), once a night:
                  Claude checks in for the night in its own words (lamp, fan, anything for the nurse)
+    wake         about the patient's wake-up time (the chart), once a morning: Claude says good morning in its own words
     extreme      room >= 30 or <= 16 °C: page the nurse at once (awake or not)
 A suggestion shows its 2 concrete choices on the notification ("Turn the fan off" / "Ask nurse for a blanket"),
 "Not now" in the center; ignoring it fades it. Ignored / declined topics back off (respecting silence).
@@ -40,7 +41,7 @@ from pydantic import BaseModel
 
 from lookat import config
 from lookat.clock import clock
-from lookat.memory import DEMO_CHART, Memory
+from lookat.memory import DEMO_CHART, PROFILES, Memory
 from lookat.state import log_event
 
 MODEL = "claude-opus-5-5"
@@ -71,6 +72,7 @@ CLEARLY_C = 1.5              # ...unless the room is now clearly past their thre
 HABIT_BEFORE_MIN, HABIT_AFTER_MIN = 15, 30   # offer a habit from 15 min before its usual time to 30 min after
 BEDTIME_DEFAULT = "22:00"    # when neither a learned habit nor the chart says when the patient goes to bed
 BEDTIME_BEFORE_MIN, BEDTIME_AFTER_MIN = 15, 60   # the bedtime check-in runs once a night, in this window
+WAKE_BEFORE_MIN, WAKE_AFTER_MIN = 15, 90         # the good-morning check-in runs once a morning, in this window
 EXTREME_HIGH_C = 30.0        # outside these the room is unsafe (or the sensor is wrong): page the nurse at once,
 EXTREME_LOW_C = 16.0         # awake or not, screen or not
 
@@ -105,6 +107,8 @@ bedtime." -> "Turn the lamp off" / "Not yet"); at other times, let them shape wh
 - BEDTIME trigger: it is about the patient's bedtime. Check in for the night with ONE suggestion in your own \
 words, built from the room right now and memory (lamp still on -> offer to turn it off; warm -> the fan; or \
 what the nurse can do before sleep: water, position).
+- WAKE-UP trigger: it is about when the patient usually wakes up. Say good morning with ONE suggestion in your own words, built from the room and what memory says they like in the morning (e.g. the lamp on; water).
+- Every patient is different: their chart in get_context (temperatures, times, what they like and dislike) decides what you offer. E.g. someone who dislikes the fan: offer the nurse first.
 - A TEMPERATURE change the room just went through is new information: look at it even if you asked about \
 temperature before, and say what you noticed in the suggestion. If nothing would help, finish without asking.
 - remember() only a durable preference the patient has shown at least twice, on different occasions, or \
@@ -238,29 +242,68 @@ class LiveScreens:
 
 # ----- the agent ----------------------------------------------------------------------------
 class Agent:
-    def __init__(self, live, memory: Memory, screens=None, client=None, sleep: Callable = time.sleep):
+    def __init__(self, live, memory: Memory, screens=None, client=None, sleep: Callable = time.sleep,
+                 profile: Optional[str] = None, memory_folder: Optional[str] = None):
+        """profile = a demo patient from memory.PROFILES (main.py); memory is then that profile's memory."""
         self.live, self.memory, self.sleep = live, memory, sleep
+        self.profile, self.memory_folder = profile, memory_folder
         self.events: "queue.Queue[tuple]" = queue.Queue()
         self.screens = screens or LiveScreens(live, self._next_event)
         self.client = client if client is not None else self._make_client()
+        self._fresh_state()
+        self._stop = False
+        self.memory.load_chart(PROFILES[profile]["chart"] if profile else DEMO_CHART)
+        live.listeners.append(self.events.put)
+        live.demo_week = self.load_demo_week
+        live.switch_profile = self.use_profile
+        live.reset_memory = self.reset_demo
+        live.profile = profile
+        live.room.on_action.append(self._log_action)
+        self._publish()
+
+    def _fresh_state(self) -> None:
+        """What the agent decided on its own (timers, holds, what it already asked today): all forgotten."""
         self.last_run: dict = {}          # trigger -> clock datetime
         self.last_choice = -1e9           # monotonic time of the patient's last choice
         self.quiet_until = None           # clock datetime
         self.last_change_look = -1e9
         self.seen: Optional[dict] = None   # the room as Claude last looked at it (room-change triggers)
-        self.bedtime_night = None          # the night (date it started) the bedtime check-in already ran
+        self.done_today: dict = {}         # "bedtime" / "wake" -> the night / morning its check-in already ran
         self.menu_sig = None              # the situation the Talk to AI menu was written for
         self.hush_until = 0.0             # clock timestamp: no speaking first before this
         self.backoff: dict = {}           # trigger -> clock timestamp it may run again
         self.ignored_streak: dict = {}    # trigger -> suggestions ignored in a row
         self.answers: list = []           # this episode's answers
         self.choice: Optional[str] = None
-        self._stop = False
-        self.memory.load_chart(DEMO_CHART)
-        live.listeners.append(self.events.put)
-        live.demo_week = self.load_demo_week
-        live.room.on_action.append(self._log_action)
+
+    # ----- demo profiles (the panel) ----------------------------------------------------------
+    def use_profile(self, pid: str) -> str:
+        """Switch to another demo patient: their memory (chart + what happened with them so far)."""
+        from lookat.memory import profile_memory
+        if pid not in PROFILES:
+            return f"unknown profile {pid!r}"
+        self.memory = profile_memory(pid, self.memory_folder)
+        self.profile = self.live.profile = pid
+        self.live.memory = self.memory              # the shift summary reads it
+        self._fresh_state()
+        self.feed("learned", f"Now caring for {PROFILES[pid]['name']} ({PROFILES[pid]['about']})",
+                  f"profile switched on the panel: {len(self.memory.data['facts'])} facts in memory", fallback=False)
         self._publish()
+        return "ok"
+
+    def reset_demo(self) -> str:
+        """Reset demo: every profile back to exactly its chart; everything the agent did or learned is deleted."""
+        from lookat.memory import profile_memory
+        if self.profile:
+            for pid, prof in PROFILES.items():
+                m = self.memory if pid == self.profile else profile_memory(pid, self.memory_folder)
+                m.reset_to(prof["chart"])
+        else:
+            self.memory.reset_to(DEMO_CHART)
+        self._fresh_state()
+        self.quiet_until = None
+        self._publish()
+        return "ok"
 
     @staticmethod
     def _make_client():
@@ -428,14 +471,34 @@ class Agent:
         if not -BEDTIME_BEFORE_MIN <= d <= BEDTIME_AFTER_MIN:
             return None
         night = (clock.now() - timedelta(hours=12)).date()    # 21:50 and 00:30 belong to the same night
-        if self.bedtime_night == night or self._backed_off("bedtime"):
+        if self.done_today.get("bedtime") == night or self._backed_off("bedtime"):
             return None
-        self.bedtime_night = night
+        self.done_today["bedtime"] = night
         return "bedtime", (f"BEDTIME: it is {p['time']}, about the patient's usual bedtime {bt} ({source}). "
                            f"Room {p['temp_c']} °C, lamp {'on' if p['lamp_on'] else 'off'}, "
                            f"fan {'on' if p['fan_on'] else 'off'}. Check in for the night now with one suggestion "
                            "in your own words: 2 options that would help them settle, from the room and memory "
                            "('Not now' is always added). If they choose a switch, act() it, then finish.")
+
+    def wake_due(self, p: dict, L: dict) -> Optional[tuple]:
+        """("wake", reason) once a morning, from WAKE_BEFORE_MIN before the patient's wake-up time (chart) to
+        WAKE_AFTER_MIN after. No wake-up time in memory: nothing (the morning room change still reaches Claude)."""
+        from lookat.memory import _diff, _mins, routine_time
+        wake = routine_time(self.memory, "wake")
+        if not wake:
+            return None
+        d = _diff(_mins(p["time"]), _mins(wake))
+        if not -WAKE_BEFORE_MIN <= d <= WAKE_AFTER_MIN:
+            return None
+        day = clock.now().date()
+        if self.done_today.get("wake") == day or self._backed_off("wake"):
+            return None
+        self.done_today["wake"] = day
+        return "wake", (f"WAKE-UP: it is {p['time']}, about when the patient usually wakes up ({wake}, from memory). "
+                        f"Room {p['temp_c']} °C, lamp {'on' if p['lamp_on'] else 'off'}, "
+                        f"fan {'on' if p['fan_on'] else 'off'}. Say good morning with one suggestion in your own "
+                        "words: 2 options that would start their day well, from the room and what memory says they "
+                        "like in the morning ('Not now' is always added). If they choose a switch, act() it, then finish.")
 
     def habit_due(self, p: dict, L: dict) -> Optional[tuple]:
         """("habit", reason) when it is about the time of a habit and its switch isn't in that state yet."""
@@ -531,7 +594,7 @@ class Agent:
             return "cold", (f"Room {p['temp_c']} °C <= {cold} °C, memory: feels cold below {cold} °C"
                             + (f"; they turned the fan on themselves at {own}, so ask kindly, don't assume" if own else "")
                             + ". Make one suggestion now.")
-        habit = self.habit_due(p, L) or self.bedtime_due(p, L)
+        habit = self.habit_due(p, L) or self.bedtime_due(p, L) or self.wake_due(p, L)
         if habit:
             return habit
         changes = self.room_changes(p)
@@ -633,6 +696,19 @@ class Agent:
             if action_in(ans) == (dev, cmd):
                 c("act", {"device": dev, "cmd": cmd, "why": "the patient chose it"})
             c("finish", {"summary": f"Habit ({h.get('text', '')}): {ans}", "why": "done"})
+        elif name == "wake":
+            lamp = self.live.room.state()["lamp_on"]
+            first = "Ask nurse for water" if lamp else "Turn the lamp on"
+            ans = c("suggest", {"text": "Good morning.", "question": "How can I start your day?",
+                                "options": [first, "Not yet"], "if_yes": None,
+                                "why": "usual wake-up time" + ("" if lamp else ", lamp still off")})
+            if action_in(ans) == ("lamp", "on"):
+                c("act", {"device": "lamp", "cmd": "on", "why": "the patient chose it"})
+            elif ans == "Ask nurse for water":
+                c("page_nurse", {"message": "Awake for the day; would like some water.",
+                                 "reason": "Chosen at the good-morning check-in.", "urgency": "normal",
+                                 "why": "needs a person"})
+            c("finish", {"summary": f"Good-morning check-in: {ans}", "why": "done"})
         elif name == "bedtime":
             lamp = self.live.room.state()["lamp_on"]
             first = "Turn the lamp off" if lamp else "Ask nurse to settle me"

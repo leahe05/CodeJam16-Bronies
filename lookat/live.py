@@ -51,6 +51,12 @@ class Live:
         self.announcer = None            # lookat.speech.Announcer: spoken feedback (main.py sets it)
         self.voice_out = None            # lookat.speech.WebVoice: lines the patient page reads aloud
         self._ids = itertools.count(1)
+        # set once by main.py / the agent; "Reset demo" keeps them (it used to drop them, which broke the buttons)
+        self.gaze_mode = "camera"                  # "web": the patient page tracks gaze itself (main.py --gaze web)
+        self.demo_week: Optional[Callable] = None  # the agent: loads the labelled demo week ("One week later")
+        self.switch_profile: Optional[Callable] = None   # the agent: switch to another demo patient
+        self.reset_memory: Optional[Callable] = None     # the agent: every profile back to its chart
+        self.profile: Optional[str] = None         # the demo patient the agent cares for (memory.PROFILES)
         self._reset_state()
 
     def _reset_state(self) -> None:
@@ -75,9 +81,7 @@ class Live:
         self.awake_state: dict = {"eyes_open": None, "open_ratio": None, "awake": None}   # main.py, from awake.py
         self.memory_view: Optional[dict] = None   # the agent publishes what it learned (panel)
         self._say_nurse_called = False   # nurse_called(): the voice says it on the next frame
-        self.gaze_mode = "camera"                  # "web": the patient page tracks gaze itself (main.py --gaze web)
         self.agent_status = "Starting"             # the agent: what it is doing / why it is quiet (panel)
-        self.demo_week: Optional[Callable] = None  # the agent: loads the labelled demo week ("One week later")
         self.quiet_until: Optional[str] = None
         self.web_gaze = {"spot": None, "x": None, "y": None, "at": -1e9,   # from the browser (main.py --gaze web)
                          "face": False, "eyes_open": None, "brow": {"up": False, "held_s": 0.0}}
@@ -220,9 +224,21 @@ class Live:
                 "memory": self.memory_view or {"facts": self.facts, "routines": [], "top_options": [],
                                                "hidden_options": [], "night_checkins": True},
                 "feed": self.feed[-30:],
+                "profile": self._profile_json(),
                 "status": {"camera": self.camera_ok, "lamp": r["lamp"]["online"],
                            "fan": "simulated" if fan["simulated"] else fan["online"],
                            "ai": bool(os.environ.get("ANTHROPIC_API_KEY"))}}
+
+    def _profile_json(self) -> Optional[dict]:
+        """The demo patients for the panel: who is selected, and each one's bedtime and wake-up time."""
+        from lookat.memory import PROFILES
+        if self.profile is None:
+            return None
+        out = []
+        for pid, p in PROFILES.items():
+            times = {k: v for f in p["chart"] for k, v in (f.get("data") or {}).items() if k in ("bedtime", "wake")}
+            out.append({"id": pid, "name": p["name"], "about": p["about"], **times})
+        return {"current": self.profile, "all": out}
 
     # ----- POST /api/nurse/... ---------------------------------------------
     def nurse_action(self, path: str, body: dict) -> dict:
@@ -369,6 +385,20 @@ class Live:
                 return {"ok": False, "error": "the agent is not running"}
             self.demo_week()
             return {"ok": True}
+        if action == "profile":                  # outside the lock: the agent loads memory and writes the panel
+            if self.switch_profile is None:
+                return {"ok": False, "error": "the agent is not running"}
+            res = self.switch_profile(str(value))
+            return {"ok": True} if res == "ok" else {"ok": False, "error": res}
+        if action == "reset":
+            with self.lock:
+                clock.reset()
+                self._reset_state()
+                self.room.set_temp(22.0)
+                log_event("demo_reset")
+            if self.reset_memory is not None:    # outside the lock: the agent rewrites the memory files
+                self.reset_memory()              # every profile back to its chart; the AI's history is deleted
+            return {"ok": True}
         with self.lock:
             if action == "set_time":
                 clock.set_time(str(value))
@@ -379,11 +409,6 @@ class Live:
                 if value not in ("auto", "open", "closed"):
                     return {"ok": False, "error": "eyes must be auto, open or closed"}
                 self.eyes_override = None if value == "auto" else value
-            elif action == "reset":
-                clock.reset()
-                self._reset_state()
-                self.room.set_temp(22.0)
-                log_event("demo_reset")
             else:
                 return {"ok": False, "error": "unknown action"}
             return {"ok": True}
