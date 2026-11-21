@@ -44,3 +44,17 @@ def test_bedtime_check_in_once_a_night_from_the_chart(tmp_path):
 def test_no_bedtime_check_in_during_the_day(tmp_path):
     agent, *_ = make(tmp_path, temp=21.0, at="15:00")
     assert agent.trigger(agent.perceive()) is None
+
+
+def test_extreme_page_shows_the_nurse_is_coming_screen(tmp_path):
+    agent, live, room, _ = make(tmp_path, temp=31.0, at="14:00", awake=None)
+    spoken = []
+    live.announcer = type("A", (), {"update": lambda self, s, m, c, events, now=None: spoken.append(list(events))})()
+    assert agent.extreme(agent.perceive())
+    view = live.screen_json()
+    assert (view.get("overlay") or {}).get("kind") == "call_nurse"            # the same screen as an eyebrow call
+    assert [a["kind"] for a in live.alerts] == ["page"]                       # one alert, not a second "call"
+    live.frame(live.now(), None, [], face=False)
+    assert ("call_nurse",) in spoken[-1]                                      # the voice says the nurse is coming
+    live.frame(live.now(), None, [], face=False)
+    assert ("call_nurse",) not in spoken[-1]                                  # once

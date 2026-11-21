@@ -68,6 +68,7 @@ class Live:
         self.eyes_override: Optional[str] = None
         self.awake_state: dict = {"eyes_open": None, "open_ratio": None, "awake": None}   # main.py, from awake.py
         self.memory_view: Optional[dict] = None   # the agent publishes what it learned (panel)
+        self._say_nurse_called = False   # nurse_called(): the voice says it on the next frame
         self.gaze_mode = "camera"                  # "web": the patient page tracks gaze itself (main.py --gaze web)
         self.agent_status = "Starting"             # the agent: what it is doing / why it is quiet (panel)
         self.demo_week: Optional[Callable] = None  # the agent: loads the labelled demo week ("One week later")
@@ -101,7 +102,9 @@ class Live:
                 self._handle(ev, now)
             if self.announcer is not None:
                 try:
-                    self.announcer.update(self.sm.view(now), self.machine.view(), self.chosen, out, now=now)
+                    spoken = out + ([("call_nurse",)] if self._say_nurse_called else [])
+                    self._say_nurse_called = False
+                    self.announcer.update(self.sm.view(now), self.machine.view(), self.chosen, spoken, now=now)
                 except Exception as e:   # noqa: BLE001 - the voice must never stop the camera loop
                     log_event("voice_error", error=repr(e))
         for ev in out:
@@ -145,6 +148,13 @@ class Live:
             self.alerts.insert(0, a)
             log_event("nurse_alert", kind=kind, text=text, urgency=urgency, reason=reason)
             return a
+
+    def nurse_called(self) -> None:
+        """Show the patient the "Your nurse has been called" screen, the same one as a long eyebrow raise
+        (and the voice says it), when someone else already paged the nurse: no second alert."""
+        with self.lock:
+            self.sm.call_nurse(self.now())
+            self._say_nurse_called = True
 
     def add_feed(self, stage: str, text: str, why: Optional[str] = None, fallback: bool = False) -> None:
         with self.lock:

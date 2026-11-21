@@ -502,6 +502,8 @@ class Agent:
                                  "reason": f"Outside the safe range {EXTREME_LOW_C:g}-{EXTREME_HIGH_C:g} °C; "
                                            "paged at once, whether the patient is awake or not.",
                                  "urgency": "urgent", "why": "unsafe temperature"})
+        self.live.nurse_called()          # the patient sees the same "nurse is coming" screen as an eyebrow call
+        self.feed("did", "Showed the patient: Your nurse has been called", "they should know help is coming")
         return True
 
     def trigger(self, p: dict) -> Optional[tuple]:
