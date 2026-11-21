@@ -4,3 +4,4 @@
 20:32 B2: state machine (pure logic), 30 machine tests pass
 20:45 A1: vision.py FaceTracker + features, 4 tests pass (live camera check still to do)
 20:45 A2: gaze.py KNN + vote + calibration, 7 tests pass (live calibration still to do)
+21:04 B1: eyebrow confirm + emergency (gestures.py), 12 gesture tests pass; live check pending
