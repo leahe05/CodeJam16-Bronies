@@ -49,6 +49,8 @@ A patient who cannot speak or move (e.g. intubated ICU patient) runs their room,
 - Pure logic (state machine, classifier, gesture timing, memory/learn, scheduler, clock) gets pytest tests in tests/. Run `py -3.11 -m pytest -q` before every commit.
 - Log every event as one JSON line to logs/events.jsonl (time, type, details).
 - Keep code small and readable. Only edit files your task names. Owners: vision, gaze, memory, agent (P1); gestures, machine, clock, routines, sim, main (P2); lamp, voice, ask, devices, page (P3); display, bench (P4).
-- Work on your own branch (p1-vision, p2-brain, p3-actions, p4-display). After each task: run its self-test, show the output, append one line to PROGRESS.md ("<time> <prompt id>: <what works>"), `git pull origin main`, commit and push to your branch. P2 merges into main after the Verify passes.
+- Work on your own branch (p1-vision, p2-brain, p3-actions, p4-display). NEVER commit, merge or push to main directly.
+- After each task: run its self-test, show the output, append one line to PROGRESS.md ("<time> <prompt id>: <what works>"), `git pull origin main` into your branch, commit and push to your branch, then open a PULL REQUEST into main (`gh pr create --base main --title "<prompt id>: <what>" --body "<what changed, self-test output, how to verify>"`; without gh, give the person the "Create a pull request" link that git push printed). Do not merge it.
+- Every PR gets a code review BEFORE merging: run the engineering code-review skill (/code-review-engineering, or /engineering:code-review) on the PR's changes, fix real findings on the same branch, push, and note the review result in the PR. Merging into main happens only on GitHub ("Merge pull request"), by P2, after the review and the prompt's Verify step both pass.
 - Hackathon rule: all code is written during the event (after Fri 7 PM).
 - Commits: never add Co-Authored-By or any Claude attribution lines to commit messages.
