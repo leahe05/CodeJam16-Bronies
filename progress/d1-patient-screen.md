@@ -1,3 +1,4 @@
 12:21 D1: lookat/display.py patient screen (all 6 mockup screens + live gaze feedback + call-nurse overlay), --demo PASS with 17 frames, 55 tests pass
 12:33 D1: patient screen moved to web/patient.html on the docs/API.md contract (shared web/lookat.js), + 3 alternative designs (Directions, Daylight, High contrast) and a side-by-side gallery at /web/designs/index.html; all checked against lookat.fake_api
 12:49 D1: pop-ups open as a window over the blurred home screen (notification morphs into the check-in), countdown = light draining around the option; shared patient-ui.js + patient-base.css; 3 blue variants (Aurora, Tide, Midnight); old designs removed; all 4 tested through idle>suggestion>checkin>nurse/room>idle with no JS errors
+12:59 D1 final: Aurora is the only patient screen; night (17:00-07:00, moon) and day (07:00-17:00, light blue + dark text + sun) looks switch on the backend clock with a 2.5 s cross-fade; other designs removed

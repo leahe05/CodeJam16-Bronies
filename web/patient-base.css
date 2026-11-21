@@ -1,6 +1,5 @@
 /* Patient screen: shared layout + mechanics for every design (used with patient-ui.js + lookat.js).
-   Designs restyle it by overriding the variables below and the few keyframes named at the bottom.
-   Defaults = "Glow" (the LookAt mockups). Everything is sized in --u (1% of a 16:9 screen's height). */
+   patient.html restyles it by overriding the variables below (night + day looks) and the window keyframes. Everything is sized in --u (1% of a 16:9 screen's height). */
 :root {
   --u: min(1vh, 0.5625vw);
   --font: "Segoe UI Variable Display", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", sans-serif;
@@ -83,10 +82,20 @@ body[data-mode="menu"] #menu { visibility: visible; }
 
 /* home */
 .home-in { text-align: center; display: flex; flex-direction: column; align-items: center; }
-.moon { width: calc(var(--u) * 13); height: calc(var(--u) * 13); margin-bottom: calc(var(--u) * 1); filter: drop-shadow(0 0 calc(var(--u) * 2.5) var(--moon-glow)); }
+.celestial { width: calc(var(--u) * 13); height: calc(var(--u) * 13); margin-bottom: calc(var(--u) * 1); overflow: visible; }
+.moon { filter: drop-shadow(0 0 calc(var(--u) * 2.5) var(--moon-glow)); }
 .moon .star { fill: var(--moon-a); animation: twinkle 3.5s ease-in-out infinite; }
 .moon .star + .star { animation-delay: 1.7s; }
+.sun { display: none; filter: drop-shadow(0 0 calc(var(--u) * 2.5) var(--sun-glow, rgba(245, 184, 46, .55))); }
+.sun .rays path { fill: none; stroke: var(--sun-b, #f5b82e); stroke-width: 1.5; stroke-linecap: round; }
+.sun .rays { transform-origin: 12px 12px; animation: turn 60s linear infinite; }
+.sun .star { fill: var(--sun-b, #f5b82e); animation: twinkle 3.5s ease-in-out infinite; }
+html[data-theme="day"] .moon { display: none; }
+html[data-theme="day"] .sun { display: block; }
 @keyframes twinkle { 50% { opacity: .35; } }
+@keyframes turn { to { transform: rotate(360deg); } }
+/* day <-> night: the whole screen cross-fades slowly (patient-ui.js uses a view transition) */
+::view-transition-old(root), ::view-transition-new(root) { animation-duration: 2.5s; animation-timing-function: ease-in-out; }
 h1 { margin: 0; font-size: calc(var(--u) * 6.4); line-height: 1.12; font-weight: var(--title-w); letter-spacing: -.01em; text-wrap: balance; }
 h1.hero { font-size: calc(var(--u) * 9.5); }
 .sub { margin: calc(var(--u) * 1.2) 0 0; font-size: calc(var(--u) * 3); color: var(--hint); }
@@ -187,7 +196,7 @@ h1.hero { font-size: calc(var(--u) * 9.5); }
 [data-spot] { transition: border-color .25s, background .35s, box-shadow .35s, transform .35s cubic-bezier(.2, .8, .2, 1); }
 [data-spot].dwell { border-color: var(--dwell-border); box-shadow: var(--dwell-glow); }
 [data-spot].asking { border-color: var(--ask-border); background: var(--ask-bg); box-shadow: var(--ask-glow); transform: scale(1.025); }
-[data-spot].asking small { color: #fff; font-weight: 600; }
+[data-spot].asking small { color: var(--ask-hint, #fff); font-weight: 600; }
 [data-spot].chosen { border-color: #fff; animation: chosen .55s ease-out; }
 @keyframes chosen { 0% { background: var(--chosen-flash); box-shadow: 0 0 calc(var(--u) * 8) #fff; } }
 

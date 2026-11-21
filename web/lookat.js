@@ -184,6 +184,7 @@
         const d = await r.json();
         fails = 0;
         document.body.dataset.conn = "ok";
+        if (opts && opts.onData) { try { opts.onData(d); } catch (e) { console.error(e); } }
         const key = contentKey(d);
         if (key !== lastKey) {
           lastKey = key;
