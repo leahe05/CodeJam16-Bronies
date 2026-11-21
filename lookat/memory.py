@@ -16,6 +16,7 @@ Every timestamp comes from lookat.clock (the demo can jump to 2 AM).
 """
 import json
 import os
+import time
 from collections import Counter
 from typing import Optional
 
@@ -54,7 +55,14 @@ class Memory:
         tmp = self.path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(self.data, f, indent=1, ensure_ascii=False)
-        os.replace(tmp, self.path)                # atomic: a crash never leaves half a file
+        for attempt in range(10):                 # atomic: a crash never leaves half a file
+            try:
+                os.replace(tmp, self.path)
+                return
+            except PermissionError:               # Windows: a virus scan / indexer briefly holds the
+                if attempt == 9:                  # file we just wrote; wait a moment and try again
+                    raise
+                time.sleep(0.05 * (attempt + 1))
 
     def log(self, kind: str, item: dict) -> dict:
         item = {"time": clock.now().isoformat(timespec="seconds"), **item}

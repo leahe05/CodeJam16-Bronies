@@ -264,3 +264,22 @@ def test_status_line_and_printer():
     stop = main.start_status(live, voice, every=0.05, out=got.append)
     assert wait_for(lambda: len(got) >= 2, limit=2)
     stop.set()
+
+
+# ----- memory file briefly locked by Windows (virus scan / indexer) -----------------
+def test_memory_save_retries_a_briefly_locked_file(tmp_path, monkeypatch):
+    import os as _os
+    from lookat import memory
+    m = memory.Memory("lockcheck", folder=str(tmp_path)) if "folder" in memory.Memory.__init__.__code__.co_varnames \
+        else memory.Memory("lockcheck")
+    m.path = str(tmp_path / "lockcheck.json")
+    real, fails = _os.replace, []
+
+    def flaky(a, b):
+        if len(fails) < 2:
+            fails.append(1)
+            raise PermissionError(5, "Access is denied")
+        return real(a, b)
+    monkeypatch.setattr(memory.os, "replace", flaky)
+    m.save()
+    assert len(fails) == 2 and _os.path.exists(m.path)
