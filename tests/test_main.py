@@ -1,6 +1,15 @@
-"""main.LiveBackend without a camera: fake gaze + eyebrow events drive the real screens."""
+"""Lea's main.py checks (PR #6), run against the live backend main.py uses (lookat.live.Live):
+fake gaze + eyebrow events drive the real screens, with simulated plugs."""
 from lookat import config
-from main import SAMPLE_NURSE_Q, LiveBackend
+from lookat.devices import Room, SimPlug
+from lookat.live import Live
+
+SAMPLE_NURSE_Q = ("What would help you feel more comfortable?",
+                  ["Adjust pillows", "Change position", "Water", "Something else"])
+
+
+def make_live(now=0.0):
+    return Live(Room(lamp_ip="", fan_ip="", plug_factory=SimPlug), now=lambda: now)
 
 
 def choose(b, spot, t):
@@ -16,14 +25,12 @@ def choose(b, spot, t):
 
 
 def test_idle_screen_json():
-    b = LiveBackend()
-    s = b.screen_json()
+    s = make_live().screen_json()
     assert s["screen"] == "idle" and s["left"]["label"] == "Room Controls" and "time" in s["clock"]
 
 
 def test_dwell_shows_asking_highlight():
-    b = LiveBackend()
-    t = 0.0
+    b, t = make_live(), 0.0
     for _ in range(4):
         b.frame(t, "left", [], True)
         t += 0.4
@@ -31,31 +38,30 @@ def test_dwell_shows_asking_highlight():
 
 
 def test_lamp_on_by_gaze_and_eyebrows():
-    b = LiveBackend()
+    b = make_live()
     _, t = choose(b, "left", 0.0)           # Room Controls
     assert b.sm.kind == "room"
     _, t = choose(b, "left", t)             # Adjust the lights
     ev, t = choose(b, "left", t)            # Lamp on
-    assert ("device", "lamp", "on") in ev and b.room["lamp_on"]
+    assert ("device", "lamp", "on") in ev and b.room.state()["lamp_on"]
 
 
 def test_long_raise_shows_call_nurse_overlay():
-    b = LiveBackend()
+    b = make_live()
     ev = b.frame(0.0, "middle", ["confirm", "emergency"], True)
-    assert ("call_nurse",) in ev and b.screen_json(0.0)["overlay"]["kind"] == "call_nurse"
+    assert ("call_nurse",) in ev and b.screen_json()["overlay"]["kind"] == "call_nurse"
 
 
 def test_nurse_question_answer():
-    b = LiveBackend()
-    qid = b.nurse_send(*SAMPLE_NURSE_Q, 0.0)
+    b = make_live()
+    qid = b.send_question(*SAMPLE_NURSE_Q, 0.0)
     assert b.screen_json()["screen"] == "nurse"
     ev, _ = choose(b, "right", 1.0)
     assert ("nurse_answer", qid, "Change position") in ev
 
 
 def test_no_face_cancels():
-    b = LiveBackend()
-    t = 0.0
+    b, t = make_live(), 0.0
     for _ in range(4):
         b.frame(t, "left", [], True)
         t += 0.4

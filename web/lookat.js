@@ -9,6 +9,9 @@
  *     and it gets a .countdown (a light that drains around its border in ASK_S seconds, or a draining
  *     .tank of liquid; each design's CSS picks which one shows)
  *   - #overlay (call nurse), #facehint ("Move into view of the camera"), #demotag (DEMO TIME)
+ *   - #browtag: "Eyebrows up" while the eyebrows are raised, with a bar filling to the long raise
+ *     (= Call Nurse); the asking option's hint turns into "Raised - lower to choose"
+ *   - opts.view(data) can turn the backend data into what the design draws (used for calibration)
  *   - body[data-conn="lost"] after 3 failed polls
  * Never crashes on null or unknown fields.
  */
@@ -139,7 +142,8 @@
     return el;
   }
 
-  function applyFocus(f) {
+  function applyFocus(f, brow) {
+    const up = !!(brow && brow.up);
     document.querySelectorAll("[data-spot]").forEach((el) => {
       const state = f && f.spot === el.dataset.spot ? f.state : null;
       el.classList.toggle("dwell", state === "dwell");
@@ -147,7 +151,8 @@
       el.classList.toggle("chosen", state === "chosen");
       if (state === "asking") addCountdown(el); else removeCountdown(el);
       const sm = el.querySelector("small[data-hint]");
-      if (sm) sm.textContent = state === "asking" ? "Raise your eyebrows" : sm.dataset.hint;
+      if (sm) sm.textContent = state === "asking" ? (up ? "✓ Raised – lower to choose" : "Raise your eyebrows") : sm.dataset.hint;
+      el.classList.toggle("raised", state === "asking" && up);
     });
   }
 
@@ -161,6 +166,16 @@
     const face = ensure("facehint", `${icon("camera")}<span>Move into view of the camera</span>`);
     face.classList.toggle("show", d.face === false);
 
+    // eyebrows: show that a raise is seen; the bar fills up to the long raise (= Call Nurse)
+    const b = d.brow || {};
+    const bt = ensure("browtag", `${icon("brows")}<span class="bt-t"></span><i class="bt-bar"><i></i></i>`);
+    const held = +b.held_s || 0, long = +b.long_s || 2;
+    bt.classList.toggle("show", !!b.up && !(d.overlay && d.overlay.kind === "call_nurse"));
+    // past half the long raise: say what is about to happen and how to stop it (never "keep holding")
+    bt.querySelector(".bt-t").textContent = held >= long * 0.5
+      ? `Nurse in ${Math.max(0, long - held).toFixed(1)} s – lower to cancel` : "Eyebrows up";
+    bt.querySelector(".bt-bar i").style.width = (b.up ? Math.min(100, (held / long) * 100) : 0) + "%";
+
     const demo = ensure("demotag");
     const isDemo = !!(d.clock && d.clock.demo);
     demo.textContent = isDemo ? `DEMO TIME${d.clock.time ? " · " + d.clock.time : ""}` : "";
@@ -169,7 +184,7 @@
 
   /** Content that changes the layout (focus/overlay/clock/room/face are applied live instead). */
   function contentKey(d) {
-    const { focus, overlay, clock, room, face, ...rest } = d;
+    const { focus, overlay, clock, room, face, brow, ...rest } = d;
     return JSON.stringify(rest);
   }
 
@@ -181,7 +196,9 @@
       const t0 = performance.now();
       try {
         const r = await fetch(url, { cache: "no-store" });
-        const d = await r.json();
+        const raw = await r.json();
+        let d = raw;
+        if (opts && opts.view) { try { d = opts.view(raw) || raw; } catch (e) { console.error(e); } }
         fails = 0;
         document.body.dataset.conn = "ok";
         if (opts && opts.onData) { try { opts.onData(d); } catch (e) { console.error(e); } }
@@ -190,7 +207,7 @@
           lastKey = key;
           try { render(d); } catch (e) { console.error("render failed", e); }
         }
-        applyFocus(d.focus);
+        applyFocus(d.focus, d.brow);
         applyLive(d);
       } catch (e) {
         if (++fails > 2) document.body.dataset.conn = "lost";

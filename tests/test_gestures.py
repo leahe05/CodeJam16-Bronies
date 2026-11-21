@@ -87,6 +87,27 @@ def test_small_dip_does_not_end_a_hold():
     assert names(run(GestureDetector(BROW), series)) == ["confirm", "emergency"]
 
 
+# ----- on_release mode (main.py): a long raise must not also choose ----------
+def test_on_release_short_raise_confirms_when_it_ends():
+    ev = run(GestureDetector(BROW, on_release=True), [(1, REST), (0.5, UP), (1, REST)])
+    assert names(ev) == ["confirm"] and 1.49 <= ev[0][0] <= 1.55
+
+
+def test_on_release_long_raise_is_only_emergency():
+    ev = run(GestureDetector(BROW, on_release=True), [(1, REST), (2.5, UP), (1, REST)])
+    assert names(ev) == ["emergency"]
+
+
+def test_on_release_too_short_or_face_lost_does_nothing():
+    assert run(GestureDetector(BROW, on_release=True), [(0.2, UP), (1, REST)]) == []
+    assert run(GestureDetector(BROW, on_release=True), [(0.5, UP), (0.1, None), (1, REST)]) == []
+
+
+def test_on_release_ten_raises_ten_confirms():
+    series = [(0.6, UP), (0.8, REST)] * 10
+    assert names(run(GestureDetector(BROW, on_release=True), series)) == ["confirm"] * 10
+
+
 def test_mouth_backup_needs_longer_hold():
     mouth = make_settings("mouth", compute_threshold(0.05, [0.6, 0.7, 0.65]))
     assert mouth["key"] == "jawOpen"

@@ -1,244 +1,299 @@
-"""LookAt: the patient screen driven by the real camera (task M2-1, first version).
+"""LookAt: the real program.
 
-    py -3.11 main.py --patient NAME [--recalibrate] [--camera N]
+    py -3.11 main.py --patient NAME [--recalibrate] [--camera 0]
+    py -3.11 main.py --patient NAME --keyboard      (no camera: test with the keyboard)
 
-Starts the web server (same URLs and JSON as lookat.fake_api, docs/API.md), calibrates
-gaze + eyebrows if needed, then runs the camera loop in the MAIN thread:
+Starts the web server (Lea's pages + the JSON API, docs/API.md), the plugs (lamp,
+fan), calibrates gaze and eyebrows on the patient screen if needed, then runs the
+camera loop in the main thread: camera -> gaze spot + eyebrow events -> Live.frame()
+(selection engine -> screens -> room / nurse).
 
-    FaceTracker -> GazeModel.predict -> GestureDetector.update
-      -> Machine.step(active = ScreenManager.active_spots())
-      -> ("select", spot) -> ScreenManager.select -> events (logged; devices simulated)
-      -> ("call_nurse",)   -> ScreenManager.call_nurse (overlay)
-
-Open http://<laptop>:8000/patient on the screen the patient looks at.
-Operator window keys (team only):
-    q quit   c recalibrate gaze   g recalibrate eyebrows
-    s show an AI suggestion   n nurse asks a sample question   e nurse ends the session
-    2 set the demo clock to 02:00 (night look)   7 set it to 07:30 (day look)
-
-Not wired yet: real lamp/fan plugs (room is simulated), the agent, the nurse app page.
+Operator window (team only) keys:  c = recalibrate gaze   g = recalibrate eyebrows   q = quit
+Keyboard mode keys:  a / s / d = look left / center / right   x = look away
+                     space = short eyebrow raise   e = long raise (Call Nurse)   q = quit
 """
 import argparse
-import itertools
+import os
 import socket
 import threading
 import time
 
+import cv2
+import numpy as np
+
 from lookat import config
-from lookat.clock import clock
-from lookat.machine import Machine
-from lookat.screens import ScreenManager
-from lookat.state import log_event
+from lookat.devices import Room
+from lookat.live import Live
+from lookat.server import PAGES, find_page, make_app
 
-SAMPLE_NURSE_Q = ("What would help you feel more comfortable?",
-                  ["Adjust pillows", "Change position", "Water", "Something else"])
-SAMPLE_SUGGESTION = "You seem to be awake. Too warm?"
+WINDOW = "LookAt operator (team only)"
 
 
-class LiveBackend:
-    """The data behind /api/screen (and minimal /api/nurse, /api/demo) for lookat.server.make_app.
-    Everything is changed under self.lock: the camera loop and the web server both use it."""
-
-    def __init__(self):
-        self.lock = threading.Lock()
-        self.room = {"temp_c": 24.5, "setpoint_c": 22.0, "lamp_on": False, "fan_on": False}
-        self.sm = ScreenManager(room=lambda: self.room)
-        self.machine = Machine()
-        self.face = False
-        self.feed = []                       # what happened, newest last (shown on /api/nurse)
-        self._ids = itertools.count(1)
-
-    # ----- one camera frame (pure logic, testable without a camera) -------
-    def frame(self, now: float, spot, events, face: bool) -> list:
-        """Run one frame through the selection engine and the screens. Caller holds self.lock."""
-        self.face = face
-        out = []
-        for action in self.machine.step(now, spot, events, face, active=self.sm.active_spots()):
-            if action[0] == "select":
-                out += self.sm.select(action[1], now)
-            elif action[0] == "call_nurse":
-                out += self.sm.call_nurse(now)
-        out += self.sm.tick(now, busy=self.machine.busy)
-        for ev in out:
-            self._handle(ev)
-        return out
-
-    def _handle(self, ev: tuple) -> None:
-        if ev[0] == "device":                # simulated room until the plugs are wired
-            _, device, cmd = ev
-            self.room[f"{device}_on"] = cmd == "on"
-        self.feed.append({"time": clock.hhmm(), "event": list(ev)})
-        del self.feed[:-50]
-        log_event("patient", event=list(ev))
-        print(f"  -> {ev}")
-
-    # ----- operator / nurse actions -------------------------------------------
-    def suggest(self, now: float) -> None:
-        self.sm.show_suggestion(f"s{next(self._ids)}", SAMPLE_SUGGESTION, now)
-        self.machine.reset(now)
-
-    def nurse_send(self, question: str, options: list, now: float) -> str:
-        qid = f"q{next(self._ids)}"
-        self.sm.nurse_question(qid, question, options, now)
-        self.machine.reset(now)
-        return qid
-
-    def nurse_end(self, now: float) -> None:
-        self.sm.nurse_end(now)
-        self.machine.reset(now)
-
-    # ----- what lookat.server calls (under self.lock) -------------------------
-    def screen_json(self, now: float = None) -> dict:
-        now = time.monotonic() if now is None else now
-        return {"v": 1, **self.sm.view(now), "focus": self.machine.view(),
-                "clock": {"time": clock.hhmm(), "demo": clock.demo}, "room": dict(self.room),
-                "face": self.face}
-
-    def nurse_json(self) -> dict:
-        return {"v": 1, "connected": True, "screen": self.sm.kind, "feed": self.feed[-20:]}
-
-    def panel_json(self) -> dict:
-        return {"v": 1, "clock": {"time": clock.hhmm(), "demo": clock.demo}, "room": dict(self.room)}
-
-    def nurse_action(self, path: str, body: dict) -> dict:
-        now = time.monotonic()
-        if path == "session/start":
-            self.sm.nurse_start(now)
-            self.machine.reset(now)
-        elif path == "send":
-            q, opts = (body.get("question") or "").strip(), list(body.get("options") or [])
-            if not q or len(opts) < 2:
-                return {"ok": False, "error": "need a question and at least 2 options"}
-            return {"ok": True, "qid": self.nurse_send(q, opts, now)}
-        elif path == "session/end":
-            self.nurse_end(now)
-        else:
-            return {"ok": False, "error": "not wired yet in main.py"}
-        return {"ok": True}
-
-    def demo_action(self, body: dict) -> dict:
-        action = body.get("action")
-        if action == "set_time":
-            clock.set_time(str(body.get("value") or body.get("time")))
-        elif action == "set_temp":
-            self.room["temp_c"] = float(body.get("value"))
-        elif action == "call_nurse":
-            self.sm.call_nurse(time.monotonic())
-        else:
-            return {"ok": False, "error": "not wired yet in main.py"}
-        return {"ok": True}
-
-
-# ----- startup ---------------------------------------------------------------
-def start_server(backend: LiveBackend, port: int = config.PAGE_PORT) -> None:
-    import uvicorn
-    from lookat.server import make_app
-    server = uvicorn.Server(uvicorn.Config(make_app(backend), host="0.0.0.0", port=port, log_level="warning"))
-    threading.Thread(target=server.run, daemon=True, name="web").start()
-    for _ in range(50):
-        if server.started:
-            break
-        time.sleep(0.1)
-
-
-def lan_ip() -> str:
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+def local_ip() -> str:
+    """The laptop's address on the hotspot (no packet is sent)."""
     try:
-        s.connect(("10.255.255.255", 1))     # no packet is sent; picks the LAN interface
-        return s.getsockname()[0]
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("192.0.2.1", 9))
+            return s.getsockname()[0]
     except OSError:
-        return "127.0.0.1"
+        return "localhost"
+
+
+def current_wifi():
+    """Name of the Wi-Fi the laptop is on (Windows), or None if unknown."""
+    import subprocess
+    import sys
+    if sys.platform != "win32":
+        return None
+    try:
+        out = subprocess.run(["netsh", "wlan", "show", "interfaces"], capture_output=True, text=True,
+                             timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    for line in out.splitlines():
+        name, _, value = line.partition(":")
+        if name.strip() == "SSID":
+            return value.strip()
+    return ""
+
+
+def check_wifi() -> None:
+    wifi = current_wifi()
+    if wifi is not None and wifi != config.WIFI_NAME:
+        print("\n" + "!" * 64)
+        print(f"  WRONG WI-FI: the laptop is on '{wifi or 'nothing'}', the plugs are on '{config.WIFI_NAME}'.")
+        print(f"  Connect to '{config.WIFI_NAME}' (and turn off auto-connect for other networks).")
+        print("!" * 64 + "\n")
+
+
+def start_server(live: Live, port: int):
+    import uvicorn
+    server = uvicorn.Server(uvicorn.Config(make_app(live), host="0.0.0.0", port=port, log_level="warning"))
+    threading.Thread(target=server.run, name="web", daemon=True).start()
+    deadline = time.monotonic() + 10
+    while not server.started and time.monotonic() < deadline:
+        time.sleep(0.05)
+    if not server.started:
+        raise SystemExit(f"Web server did not start on port {port} (already in use? close the other LookAt)")
+    return server
+
+
+def print_urls(port: int) -> None:
+    ip = local_ip()
+    print("\n" + "=" * 64)
+    for name in PAGES:
+        lea = find_page(name)[1]
+        where = "localhost" if name == "patient" else ip
+        print(f"  {name.upper():8} http://{where}:{port}/{name}   ({'Lea' if lea else 'test page'})")
+    print("  Phone: same Wi-Fi (\"lea\"), use the address with the IP.")
+    print("=" * 64 + "\n")
+
+
+class ScreenPrompt:
+    """The `say` callback for calibration: speaks AND shows the text on the patient screen."""
+
+    def __init__(self, live: Live, speaker):
+        self.live, self.speaker = live, speaker
+
+    def __call__(self, text: str) -> None:
+        from lookat.gaze import SPOKEN_NAMES
+        spot = next((s for s, name in SPOKEN_NAMES.items() if name in text), None)
+        self.live.set_calibration(text, spot)
+        self.speaker(text)
+
+
+def calibrate(tracker, live: Live, speaker, patient: str, what: str):
+    from lookat.gaze import GazeModel, calibrate as calibrate_gaze
+    from lookat.gestures import calibrate_gestures
+    prompt = ScreenPrompt(live, speaker)
+    try:
+        if what == "gaze":
+            prompt("Calibrating where you look. Keep your head still and move only your eyes.")
+            time.sleep(2.5)
+            return calibrate_gaze(tracker, prompt, patient)
+        return calibrate_gestures(tracker, prompt, patient)
     finally:
-        s.close()
+        live.set_calibration(None)
+        # the calibration windows would stay on screen, frozen, on top of the live one
+        for name in ("LookAt gaze (operator)", "LookAt gestures (operator)"):
+            try:
+                cv2.destroyWindow(name)
+            except cv2.error:
+                pass
+        cv2.waitKey(1)
 
 
-def screen_speaker():
-    """Calibration voice: the old prompts named the room cards; the patient now looks at the screen."""
-    from lookat.gaze import LocalSpeaker
-    say = LocalSpeaker()
-    words = {"the YES card": "the LEFT side of the screen", "the lamp": "the CENTER of the screen",
-             "the NO card": "the RIGHT side of the screen"}
-
-    def speak(text: str) -> None:
-        for old, new in words.items():
-            text = text.replace(old, new)
-        say(text)
-    speak.close = say.close
-    return speak
+def raise_window() -> None:
+    """Bring the live operator window to the front once."""
+    try:
+        cv2.setWindowProperty(WINDOW, cv2.WND_PROP_TOPMOST, 1)
+        cv2.waitKey(1)
+        cv2.setWindowProperty(WINDOW, cv2.WND_PROP_TOPMOST, 0)
+    except cv2.error:
+        pass
 
 
-def run(patient: str, recalibrate: bool, camera: int) -> None:
-    import cv2
-    from lookat.gaze import GazeModel, calibrate
-    from lookat.gestures import GestureDetector, calibrate_gestures, load_settings
+def draw_operator(frame, live: Live, gaze_conf: float, det, fps: float, keyboard: bool = False,
+                  flash: tuple = ("", 0.0)):
+    h, w = frame.shape[:2]
+    with live.lock:
+        m, screen = live.machine, live.sm.kind
+        spot, face, brow = live.spot, live.face, dict(live.brow)
+        focus = m.view()
+    color = (0, 200, 0) if spot else (0, 165, 255)
+    cv2.putText(frame, (spot or ("no face" if not face else "unsure")).upper(), (30, 90),
+                cv2.FONT_HERSHEY_SIMPLEX, 2.5, color, 6)
+    # eyebrows: big and obvious, so the patient/team can see the raise was seen
+    if brow.get("up"):
+        held = brow.get("held_s", 0.0)
+        text = f"EYEBROWS UP {held:.1f}s" + ("  -> CALL NURSE" if held >= config.EMERGENCY_S else "")
+        cv2.putText(frame, text, (w // 2 - 40, 90), cv2.FONT_HERSHEY_SIMPLEX, 1.6, (0, 255, 255), 5)
+    else:
+        cv2.putText(frame, "eyebrows down", (w // 2 - 40, 90), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (160, 160, 160), 2)
+    text, at = flash
+    if text and time.monotonic() - at < 1.5:
+        cv2.putText(frame, text, (30, h // 2), cv2.FONT_HERSHEY_SIMPLEX, 2.2, (0, 255, 0), 6)
+    lines = [f"confidence {gaze_conf:.2f}   machine {m.state}   screen {screen}",
+             f"focus {focus}   fps {fps:.0f}"]
+    if keyboard:
+        lines.append("KEYBOARD MODE: a/s/d look  x away  space raise  e long raise  q quit")
+    else:
+        lines.append("Look at a card until it LOCKS (bright), then a short eyebrow raise.")
+        lines.append("c = recalibrate gaze   g = eyebrows   q = quit")
+    for i, line in enumerate(lines):
+        cv2.putText(frame, line, (30, 140 + 40 * i), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2)
+    if det is not None:   # eyebrow bar: grey = value, red = threshold
+        x0, x1, y0, y1 = 30, w - 30, h - 70, h - 35
+        xpos = lambda v: int(x0 + max(0.0, min(1.0, v)) * (x1 - x0))
+        cv2.rectangle(frame, (x0, y0), (x1, y1), (60, 60, 60), -1)
+        cv2.rectangle(frame, (x0, y0), (xpos(det.value), y1), (0, 200, 0) if det.above_since else (200, 200, 200), -1)
+        cv2.line(frame, (xpos(det.threshold), y0 - 8), (xpos(det.threshold), y1 + 8), (0, 0, 255), 3)
+    cv2.imshow(WINDOW, frame)
+
+
+def describe(events, out, chosen, flash: tuple) -> tuple:
+    """What the last raise did, to flash in the operator window (and print)."""
+    text = ""
+    if any(e[0] == "call_nurse" for e in out):
+        text = "CALL NURSE"
+    elif chosen:
+        text = f"CHOSE: {chosen}"
+    elif "confirm" in events:
+        text = "RAISE SEEN - look at a card until it locks first"
+    if not text:
+        return flash
+    print(text)
+    return text, time.monotonic()
+
+
+def run_camera(args, live: Live) -> None:
+    from lookat.gaze import GazeModel, LocalSpeaker
+    from lookat.gestures import GestureDetector, load_settings
     from lookat.vision import FaceTracker
 
-    backend = LiveBackend()
-    start_server(backend)
-    url = f"http://{lan_ip()}:{config.PAGE_PORT}/patient"
-    print(f"\nPatient screen: {url}   (also http://localhost:{config.PAGE_PORT}/patient)\n")
-
-    say = screen_speaker()
-    tracker = FaceTracker(camera)
+    speaker = LocalSpeaker()
+    tracker = FaceTracker(args.camera)
+    live.camera_ok = True
     try:
-        gaze = (calibrate(tracker, say, patient) if recalibrate or not GazeModel.exists(patient)
-                else GazeModel.load(patient))
-        settings = None if recalibrate else load_settings(patient)
-        brows = GestureDetector(settings or calibrate_gestures(tracker, say, patient))
-        print("Live. Look at a box on the screen for 1 s, then raise your eyebrows. Hold 2 s = Call Nurse.")
-        print("Keys in the camera window: q quit, c/g recalibrate, s suggestion, n/e nurse, 2/7 clock.\n")
-
-        fps_t, fps_n, fps = time.monotonic(), 0, 0.0
+        gaze = (calibrate(tracker, live, speaker, args.patient, "gaze")
+                if args.recalibrate or not GazeModel.exists(args.patient) else GazeModel.load(args.patient))
+        settings = None if args.recalibrate else load_settings(args.patient)
+        if settings is None:
+            settings = calibrate(tracker, live, speaker, args.patient, "gestures")
+        det = GestureDetector(settings, on_release=True)
+        print(f"Ready. Eyebrow threshold {det.threshold:.2f} ({settings['gesture']}). "
+              f"Watch the '{WINDOW}' window; press q in it to quit.")
+        fps, last, raised, flash = 0.0, time.monotonic(), False, ("", 0.0)
         while True:
             frame, f = tracker.read()
             if frame is None:
-                print("camera returned no frame; stopping")
+                live.camera_ok = False
+                print("Stopped: the camera stopped giving frames (unplugged, or used by another app?).")
                 break
             now = time.monotonic()
             spot, conf = gaze.predict(f)
-            events = brows.update(f, now)
-            with backend.lock:
-                backend.frame(now, spot, events, f is not None)
-                state, kind = backend.machine.state, backend.sm.kind
-
-            # operator window (team only)
-            fps_n += 1
-            if now - fps_t >= 1:
-                fps, fps_t, fps_n = fps_n / (now - fps_t), now, 0
-            lines = [f"looking: {'no face' if f is None else (spot or 'unsure')}  ({conf:.2f})",
-                     f"{brows.key} {brows.value:.2f} / {brows.threshold:.2f}  held {brows.held(now):.1f}s",
-                     f"machine {state}   screen {kind}   {fps:.0f} fps"]
-            for i, text in enumerate(lines):
-                cv2.putText(frame, text, (20, 50 + 45 * i), cv2.FONT_HERSHEY_SIMPLEX, 1.1, (0, 220, 255), 3)
-            cv2.imshow("LookAt (operator)", frame)
-
+            events = det.update(f, now)
+            brow = {"up": det.above_since is not None, "held_s": det.held(now)}
+            out = live.frame(now, spot, events, face=f is not None, confidence=conf, brow=brow)
+            flash = describe(events, out, live.chosen, flash)
+            fps = 0.9 * fps + 0.1 / max(now - last, 1e-3)
+            last = now
+            if f is not None and f["face_px"] < config.MIN_FACE_PX:
+                cv2.putText(frame, "FACE TOO SMALL: move the camera closer", (30, frame.shape[0] - 100),
+                            cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 3)
+            draw_operator(frame, live, conf, det, fps, flash=flash)
+            if not raised:
+                raise_window()
+                raised = True
             key = cv2.waitKey(1) & 0xFF
             if key == ord("q"):
+                print("Stopped: q pressed.")
                 break
-            with backend.lock:
-                now = time.monotonic()
-                if key == ord("s"):
-                    backend.suggest(now)
-                elif key == ord("n"):
-                    backend.nurse_send(*SAMPLE_NURSE_Q, now)
-                elif key == ord("e"):
-                    backend.nurse_end(now)
-                elif key in (ord("2"), ord("7")):
-                    clock.set_time("02:00" if key == ord("2") else "07:30")
             if key == ord("c"):
-                gaze = calibrate(tracker, say, patient)
+                gaze = calibrate(tracker, live, speaker, args.patient, "gaze")
+                raised = False
             elif key == ord("g"):
-                brows = GestureDetector(calibrate_gestures(tracker, say, patient))
+                settings = calibrate(tracker, live, speaker, args.patient, "gestures")
+                det = GestureDetector(settings, on_release=True)
+                raised = False
     finally:
+        live.camera_ok = False
         tracker.close()
-        say.close()
+        speaker.close()
+
+
+def run_keyboard(args, live: Live) -> None:
+    """No camera: drive the real screens, lamp and fan from the keyboard."""
+    spot, look = None, {ord("a"): "left", ord("s"): "middle", ord("d"): "right"}
+    fps, last = 0.0, time.monotonic()
+    while True:
+        now = time.monotonic()
+        key = cv2.waitKey(30) & 0xFF
+        events = []
+        if key == ord("q"):
+            break
+        if key in look:
+            spot = look[key]
+        elif key == ord("x"):
+            spot = None
+        elif key == ord(" "):
+            events = ["confirm"]
+        elif key == ord("e"):
+            events = ["emergency"]
+        live.frame(now, spot, events, face=True, confidence=1.0 if spot else 0.0)
+        fps = 0.9 * fps + 0.1 / max(now - last, 1e-3)
+        last = now
+        draw_operator(np.zeros((480, 1000, 3), np.uint8), live, 1.0 if spot else 0.0, None, fps, keyboard=True)
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description="LookAt")
+    ap.add_argument("--patient", default="demo")
+    ap.add_argument("--recalibrate", action="store_true")
+    ap.add_argument("--camera", type=int, default=0)
+    ap.add_argument("--keyboard", action="store_true", help="no camera: test with the keyboard")
+    ap.add_argument("--port", type=int, default=config.PAGE_PORT)
+    args = ap.parse_args()
+
+    check_wifi()
+    room = Room()
+    live = Live(room, patient=args.patient)
+    server = start_server(live, args.port)
+    print_urls(args.port)
+    print(f"Lamp: {room.lamp.ip or 'simulated'}   Fan: {room.fan.ip or 'simulated (set FAN_IP for plug 2)'}")
+    try:
+        (run_keyboard if args.keyboard else run_camera)(args, live)
+    except KeyboardInterrupt:
+        pass
+    finally:
         cv2.destroyAllWindows()
+        server.should_exit = True
+        room.close()
+        print("LookAt stopped.", flush=True)
+        # end the process for sure: a stuck camera/voice/web thread kept it alive before, holding
+        # port 8000 and the camera, so the next start failed with "port already in use"
+        os._exit(0)
 
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser(description="LookAt: patient screen by gaze + eyebrows")
-    ap.add_argument("--patient", required=True, help="name for the calibration files in calib/")
-    ap.add_argument("--recalibrate", action="store_true")
-    ap.add_argument("--camera", type=int, default=0)
-    a = ap.parse_args()
-    run(a.patient, a.recalibrate, a.camera)
+    main()

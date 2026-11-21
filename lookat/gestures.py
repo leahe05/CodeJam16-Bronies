@@ -78,7 +78,10 @@ def load_settings(patient: str, folder: str = CALIB_DIR):
 
 # ----- live detector ------------------------------------------------------
 class GestureDetector:
-    def __init__(self, settings: dict):
+    def __init__(self, settings: dict, on_release: bool = False):
+        """on_release=True (main.py): "confirm" fires when a raise of >= confirm_s ENDS
+        before EMERGENCY_S, so a long raise is only "emergency". False: confirm while held."""
+        self.on_release = on_release
         self.key = settings["key"]
         self.threshold = settings["threshold"]
         rest = settings.get("rest", 0.0)
@@ -108,12 +111,16 @@ class GestureDetector:
                 return []
             self.above_since = now    # a raise starts
         elif self.value < self.release:
-            self._reset()             # the raise ended
-            return []
+            # the raise ended. on_release mode: a short raise counts now, so a long
+            # raise (Call Nurse) never also chooses what the patient was looking at
+            short = (self.on_release and not self.emergency
+                     and now - self.above_since >= self.confirm_s - 1e-9)
+            self._reset()
+            return ["confirm"] if short else []
 
         events = []
         held = now - self.above_since
-        if not self.confirmed and held >= self.confirm_s - 1e-9:
+        if not self.on_release and not self.confirmed and held >= self.confirm_s - 1e-9:
             self.confirmed = True
             events.append("confirm")
         if not self.emergency and held >= config.EMERGENCY_S - 1e-9:

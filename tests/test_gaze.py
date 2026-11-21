@@ -67,6 +67,35 @@ def test_separation_and_self_check():
     assert self_check(X, y) > 0.95
 
 
+def test_round_check_learns_round_one_tests_round_two():
+    from lookat.gaze import round_check
+    X, y, centres, rng = clusters(n=60)
+    rounds = np.tile(np.repeat([0, 1], 30), 3)
+    assert round_check(X, y, rounds) > 0.95
+
+
+def test_small_head_turn_does_not_beat_the_eyes():
+    from lookat.gaze import MIN_STD
+    # 15 features like vision.GAZE_FEATURES: head angles barely move during calibration,
+    # the eyes (feature 3 = eyeLookInLeft) clearly separate the spots
+    rng = np.random.default_rng(1)
+    X, y = [], []
+    for spot, eye in (("left", 0.0), ("middle", 0.4), ("right", 0.8)):
+        for _ in range(60):
+            v = np.zeros(15)
+            v[:3] = rng.normal(0, 0.3, 3)            # head almost still (std 0.3°)
+            v[3] = eye + rng.normal(0, 0.03)
+            v[4:] = rng.normal(0, 0.01, 11)
+            X.append(v)
+            y.append(spot)
+    model = GazeModel(np.array(X), np.array(y))
+    probe = np.zeros(15)
+    probe[1] = 3.0                                    # head turned 3°, eyes at "middle"
+    probe[3] = 0.4
+    assert model.classify(probe)[0] == "middle"
+    assert MIN_STD.shape == (15,)
+
+
 def test_save_and_load_roundtrip(tmp_path):
     X, y, centres, _ = clusters()
     GazeModel(X, y).save("Test Patient", folder=str(tmp_path))
