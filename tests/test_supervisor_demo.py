@@ -150,7 +150,7 @@ def eventually(predicate):
     assert predicate()
 
 
-def test_independent_random_streams_start_and_stop_without_needing_a_key(monkeypatch):
+def test_independent_random_streams_can_start_another_shift_without_losing_requests(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     playback = ShiftPlayback(.005, .02, seed=7)
     avery, morgan = make_demo_patients(playback=playback)
@@ -165,6 +165,15 @@ def test_independent_random_streams_start_and_stop_without_needing_a_key(monkeyp
         assert avery.nurse_action("shift/start", {})["ok"]
         eventually(lambda: all(len(patient.nurse_json()["alerts"]) >= 2 for patient in (avery, morgan)))
         assert avery.nurse_action("shift/end", {})["ok"]
+        assert morgan.nurse_json()["shift"]["state"] == "complete"
+        first_shift = [[alert["id"] for alert in patient.nurse_json()["alerts"]] for patient in (avery, morgan)]
+        assert morgan.nurse_action("shift/start", {})["ok"]
+        assert avery.nurse_json()["shift"]["state"] == "running"
+        eventually(lambda: all(len(patient.nurse_json()["alerts"]) > len(previous)
+                               for patient, previous in zip((avery, morgan), first_shift)))
+        assert avery.nurse_action("shift/end", {})["ok"]
+        for patient, previous in zip((avery, morgan), first_shift):
+            assert set(previous) <= {alert["id"] for alert in patient.nurse_json()["alerts"]}
     finally:
         stop.set()
         worker.join(2)

@@ -375,7 +375,8 @@ function renderShift(roster) {
     running: "Simulated shift in progress",
     complete: "Simulated shift complete"
   }[state]);
-  $("start-shift").hidden = state !== "ready";
+  $("start-shift").hidden = state === "running";
+  updateText($("start-shift"), state === "complete" ? "Start another shift" : "Start shift");
   $("start-shift").disabled = first.busy || first.state !== "online";
   $("end-shift").hidden = state !== "running";
   $("end-shift").disabled = first.busy || first.state !== "online";

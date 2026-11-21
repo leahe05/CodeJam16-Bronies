@@ -1,7 +1,7 @@
 """Independent, random patient-agent arrivals for the nurse shift demo."""
 import math
 import random
-from threading import Event
+from threading import Condition
 import time
 
 
@@ -20,33 +20,50 @@ class ShiftPlayback:
         self.minimum_s = minimum_s
         self.maximum_s = maximum_s
         self.random = random.Random(seed)
-        self.started = Event()
-        self.finished = Event()
+        self._condition = Condition()
+        self._state = "ready"
+        self._generation = 0
 
     @property
     def state(self):
-        return "complete" if self.finished.is_set() else "running" if self.started.is_set() else "ready"
+        with self._condition:
+            return self._state
 
     def start(self):
-        self.started.set()
+        with self._condition:
+            if self._state != "running":
+                self._generation += 1
+                self._state = "running"
+                self._condition.notify_all()
 
     def finish(self):
-        self.finished.set()
+        with self._condition:
+            if self._state == "running":
+                self._state = "complete"
+                self._condition.notify_all()
 
     def run(self, stop, patients):
-        while not self.started.wait(.1):
-            if stop.is_set():
-                return
+        while not stop.is_set():
+            with self._condition:
+                if self._state != "running":
+                    self._condition.wait(.2)
+                    continue
+                generation = self._generation
+            self._run_shift(stop, patients, generation)
+
+    def _run_shift(self, stop, patients, generation):
         clocks = {patient: random.Random(self.random.getrandbits(64)) for patient in patients}
         due = {patient: time.monotonic() + rng.uniform(self.minimum_s, self.maximum_s)
                for patient, rng in clocks.items()}
-        while not self.finished.is_set():
+        while not stop.is_set():
             patient = min(due, key=due.get)
-            remaining = max(0, due[patient] - time.monotonic())
-            if stop.wait(min(remaining, .2)):
-                return
-            if time.monotonic() < due[patient] or self.finished.is_set():
-                continue
+            with self._condition:
+                if self._state != "running" or self._generation != generation:
+                    return
+                remaining = due[patient] - time.monotonic()
+                if remaining > 0:
+                    self._condition.wait(min(remaining, .2))
+                    continue
             rng = clocks[patient]
             patients[patient].emit_random_request(rng)
             due[patient] = time.monotonic() + rng.uniform(self.minimum_s, self.maximum_s)
