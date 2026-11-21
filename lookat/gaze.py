@@ -324,8 +324,31 @@ class LocalSpeaker:
         self.worker.start()
 
     def __call__(self, text: str) -> None:
+        self.say(text)
+
+    def say(self, text: str, interrupt: bool = False) -> None:
+        """Queue text. interrupt=True drops sentences still waiting (the screen moved on);
+        the one already playing finishes."""
         print(f"[say] {text}")
+        if interrupt:
+            while True:
+                try:
+                    stale = self.q.get_nowait()
+                except queue.Empty:
+                    break
+                self.q.task_done()
+                if stale is None:          # never drop a close request
+                    self.q.put(None)
+                    break
         self.q.put(text)
+
+    def prefetch(self, text: str) -> None:
+        """Make Ava's audio for text now (cached), without playing it."""
+        if self.ava is not None:
+            try:
+                self.ava.fetch(text)
+            except Exception:
+                pass
 
     def _run(self) -> None:
         while True:
