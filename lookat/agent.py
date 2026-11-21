@@ -40,7 +40,9 @@ COOLDOWN_MIN = 20            # a trigger stays quiet this long after it ran (dem
 SETTLE_S = 10                # wait this long after the patient's last choice before speaking first
 YES_WORDS = ("yes", "ok", "please", "sure")
 COMFORT_OPTIONS = ["Adjust pillows", "Change position", "Water", "Too warm", "Too cold", "Something else"]
-CHECKIN_EVERY_S = 180        # AI check-in: Claude looks at the situation this often (awake + idle) and may stay quiet
+TEMP_CHANGE_C = 1.0          # a room change worth a look: the temperature moved this much since Claude last looked
+CHANGE_GAP_S = 60            # at most one room-change look per minute
+PERIODS = [(7, "morning"), (12, "afternoon"), (17, "evening"), (22, "night")]
 MENU_EVERY_S = 600           # the Talk to AI menu is rewritten by Claude this often (and after each episode)
 MENU_MAX = 4                 # options Claude writes; "Something else" is always added last
 
@@ -188,7 +190,8 @@ class Agent:
         self.last_run: dict = {}          # trigger -> clock datetime
         self.last_choice = -1e9           # monotonic time of the patient's last choice
         self.quiet_until = None           # clock datetime
-        self.last_checkin = time.monotonic()
+        self.last_change_look = -1e9
+        self.seen: Optional[dict] = None   # the room as Claude last looked at it (room-change triggers)
         self.last_menu = -1e9
         self.choice: Optional[str] = None
         self._stop = False
@@ -284,9 +287,43 @@ class Agent:
         mins = (clock.now() - last).total_seconds() / 60
         return mins < 0 or mins >= COOLDOWN_MIN        # < 0: the demo clock jumped back
 
+    @staticmethod
+    def period(hhmm: str) -> str:
+        h = int(hhmm[:2])
+        name = "night"
+        for start, label in PERIODS:
+            if h >= start:
+                name = label
+        return name
+
+    def room_changes(self, p: dict) -> list:
+        """What changed in the room since Claude last looked (temperature, time of day, lamp/fan switched by
+        someone other than the patient, the patient waking up). Updates the snapshot when it reports."""
+        now = {"temp_c": p["temp_c"], "lamp_on": p["lamp_on"], "fan_on": p["fan_on"],
+               "period": self.period(p["time"]), "awake": p["awake"]}
+        if self.seen is None:
+            self.seen = now
+            return []
+        old, out = self.seen, []
+        if abs(now["temp_c"] - old["temp_c"]) >= TEMP_CHANGE_C:
+            out.append(f"temperature {old['temp_c']} -> {now['temp_c']} °C")
+        if now["period"] != old["period"]:
+            out.append(f"it is now {now['period']} ({p['time']})")
+        last_by = (self.memory.data["actions"][-1].get("by") if self.memory.data["actions"] else None)
+        for dev in ("lamp", "fan"):
+            if now[f"{dev}_on"] != old[f"{dev}_on"] and last_by not in ("patient", "agent"):
+                out.append(f"{dev} turned {'on' if now[dev + '_on'] else 'off'}" + (f" (by {last_by})" if last_by else ""))
+        if now["awake"] and not old["awake"]:
+            out.append("the patient just opened their eyes")
+        if out or now["lamp_on"] != old["lamp_on"] or now["fan_on"] != old["fan_on"]:
+            self.seen = now                         # the patient's own switches update quietly
+        return out
+
     def trigger(self, p: dict) -> Optional[tuple]:
         """(name, reason) when it is time to speak first, else None. Pure rules, no AI."""
         if not self.can_speak() or not p["awake"]:
+            if self.seen is not None and not p["awake"]:
+                self.seen["awake"] = p["awake"]      # so waking up later counts as a change
             return None
         L = self.memory.learn()
         comfort = L["comfort"]
@@ -297,12 +334,13 @@ class Agent:
         cold = comfort.get("cold_below_c")
         if cold is not None and p["temp_c"] <= cold and self._cooled_down("cold"):
             return "cold", f"Room {p['temp_c']} °C <= {cold} °C, memory: feels cold below {cold} °C"
-        if (self.client is not None and time.monotonic() - self.last_checkin >= CHECKIN_EVERY_S
-                and (L["night_checkins_enabled"] or not p["night"])):
-            self.last_checkin = time.monotonic()
-            return "checkin", ("Routine look-in: the patient is awake and idle. Nothing specific happened. "
-                               "If something is worth offering right now, make ONE suggestion (a short question); "
-                               "otherwise call finish without asking. Don't repeat recent questions.")
+        changes = self.room_changes(p)
+        if changes and self.client is not None and time.monotonic() - self.last_change_look >= CHANGE_GAP_S \
+                and (L["night_checkins_enabled"] or not p["night"]):
+            self.last_change_look = time.monotonic()
+            return "room_change", ("The room changed: " + "; ".join(changes) + ". If that is worth offering the "
+                                   "patient something right now, make ONE suggestion (a short question); otherwise "
+                                   "call finish without asking. Don't repeat recent questions.")
         return None
 
     # ----- one episode -------------------------------------------------------------------------
@@ -322,10 +360,12 @@ class Agent:
             except Exception as e:   # noqa: BLE001 - any AI failure -> rules
                 log_event("agent_ai_error", error=repr(e))
                 self.feed("decided", "AI unavailable, using rules", type(e).__name__, fallback=True)
-        if not done and self.questions == 0 and name != "checkin":
+        if not done and self.questions == 0 and name != "room_change":
             self._rules(name)
         if self.client is not None:
             self.refresh_menu()
+        self.seen = None                 # the room as it is now becomes the new baseline (not a "change")
+        self.room_changes(self.perceive())
         self._publish()
 
     def _claude(self, reason: str) -> bool:

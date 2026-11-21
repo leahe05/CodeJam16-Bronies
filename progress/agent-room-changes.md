@@ -1,0 +1,1 @@
+15:30 agent: AI check-ins are no longer on a timer; Claude is called when the room changes (temperature >= 1 °C, new part of the day, lamp/fan switched by someone else, patient wakes up), at most once a minute; 170 tests pass
