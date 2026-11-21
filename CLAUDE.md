@@ -16,6 +16,13 @@ A webcam lets a bedridden patient who cannot speak or move (e.g. intubated ICU p
 - Middle spot in ROOM mode: "Lamp?" (confirm toggles the lamp), then menu items every MENU_STEP_S = 1.5 s: "Help?", "Water?", "Pain?". Confirming a menu item sends it to the nurse page and speaks it.
 - Backup confirm gesture for a person whose eyebrows fail calibration: mouth open (jawOpen) held >= 0.7 s.
 
+## Nurse questions: 3 ways (the nurse chooses on the phone, e.g. after a HELP alert)
+1. AGENT: "AI agent asks". lookat/agent.py runs a Claude tool-use loop (the triage agent) that decides each question itself from the previous answers, asks the patient through the normal QUESTION mode, and ends with a short summary + urgency (now/soon/routine) + up to 3 things to check. Max 5 questions. Never diagnoses, never suggests medication, never answers for the patient. The nurse sees every step live and can stop it anytime.
+2. AI CHOICES: the nurse types the question, lookat/ask.py (make_choices) turns it into 2-3 choices, the nurse edits/approves, then it is sent.
+3. MANUAL: the nurse types the question AND the choices herself. No AI call.
+- Every question dict carries source: "agent" | "ai" | "manual" | "fallback". Only one question is open at a time; while the agent runs, the page refuses other questions.
+- Any AI failure (no key, error, timeout) falls back: agent -> fixed decision tree, AI choices -> YES/NO.
+
 ## Hard rules
 - The PATIENT NEVER READS A SCREEN. Every prompt to the patient is SPOKEN. Any window is for the team (operator) only.
 - Windows 11 with Smart App Control ON. Run Python as `py -3.11`. Pinned: mediapipe==0.10.14, opencv-contrib-python==4.10.0.84, numpy<2, python-kasa==0.12.0, plus anthropic, fastapi, uvicorn[standard], pyttsx3, pydantic, pytest. NEVER add scikit-learn, scipy or other new dependencies (they get blocked). If an import fails with "An Application Control policy has blocked this file", do not upgrade; use plain Python/NumPy instead.
@@ -25,7 +32,7 @@ A webcam lets a bedridden patient who cannot speak or move (e.g. intubated ICU p
 - Every module has an `if __name__ == "__main__":` self-test that a person can run with `py -3.11 -m lookat.<module>` and that prints PASS/FAIL or shows a window.
 - Pure logic (state machine, classifier, gesture timing) gets pytest tests in tests/. Run `py -3.11 -m pytest -q` before every commit.
 - Log every event as one JSON line to logs/events.jsonl (time, type, details).
-- Keep code small and readable. Only edit files your task names. Folder owners: vision (P1), brain + main (P2), actions + ai (P3), page + bench (P4).
+- Keep code small and readable. Only edit files your task names. Folder owners: vision + agent.py (P1), brain + main (P2), actions + ask.py (P3), page + bench (P4).
 - After each task: run its self-test, show the output, append one line to PROGRESS.md ("<time> <prompt id>: <what works>"), then `git pull --rebase`, commit and push.
 - Hackathon rule: all code is written during the event (after Fri 7 PM).
 - Commits: never add Co-Authored-By or any Claude attribution lines to commit messages.
