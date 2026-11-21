@@ -1,46 +1,54 @@
 # LookAt: project rules (read before every task)
 
 ## What it is
-A webcam lets a bedridden patient who cannot speak or move (e.g. intubated ICU patient) communicate by LOOKING at one of 3 spots in the room and confirming with an EYEBROW RAISE. A nurse uses a phone web page to ask questions; Claude turns any question into 2-3 short choices mapped to the 3 spots.
+A patient who cannot speak or move (e.g. intubated ICU patient) runs their room, talks with their nurse and gets help from an AI agent by LOOKING at one of 3 tiles projected on the wall (fallback: a monitor) and confirming with an EYEBROW RAISE. Every tile is also SPOKEN. The agent remembers what the patient does, finds routines, asks before automating them, then runs them on its own.
 
-## The 3 spots (left, middle, right)
-- ROOM mode (default): left = YES, middle = LAMP + spoken menu, right = NO.
-- QUESTION mode (a nurse question is open): left/middle/right = the question's choices (middle may be empty = not selectable).
-- One meaning at a time. Question mode ends on answer, nurse cancel, or 30 s timeout.
+## The 3 tiles (left, middle, right)
+- MENU mode (default), tree in config.MENU_TREE:
+  top: Room | Assistant | Nurse
+  room: Lamp (REAL smart plug) | AC (SIMULATED submenu: Warmer | Cooler | Back) | Back
+  assistant: Help me rest | Uncomfortable | Suggest   (each starts the agent)
+  Nurse = call the nurse (non-urgent card on her phone).
+- No selection for MENU_TIMEOUT_S = 10 s in a submenu -> back to top. After a device action, stay in that menu.
+- QUESTION mode: the tiles show a question's 2-3 choices ("" = empty, not selectable). Sources: nurse (typed), ai (ask.py), agent, routine announcement. Ends on answer, cancel or timeout (default 30 s; a question may set timeout_s and silent_timeout). Then back to the top menu.
+- One meaning at a time.
 
 ## Interaction rules (constants live in config.py)
-- Look at a spot for DWELL_S = 1.0 s -> speak its name ("Lamp?", "Yes?", "Water?") -> state ASKING, spot locked.
+- Look at a tile for DWELL_S = 1.0 s -> outline it and speak its label ("Lamp?") -> state ASKING, tile locked.
 - Confirm = eyebrow raise held >= CONFIRM_S = 0.3 s within ASK_TIMEOUT_S = 3 s. Then act, then COOLDOWN_S = 2 s.
-- Looking away, timeout or losing the face cancels. Nothing ever happens without the eyebrow confirm.
-- EMERGENCY = eyebrow held >= EMERGENCY_S = 2.0 s, in ANY mode, checked before everything else: say "Calling the nurse", flash the lamp 3 times, send HELP to the nurse page.
-- Middle spot in ROOM mode: "Lamp?" (confirm toggles the lamp), then menu items every MENU_STEP_S = 1.5 s: "Help?", "Water?", "Pain?". Confirming a menu item sends it to the nurse page and speaks it.
+- Looking away, timeout or losing the face cancels. Nothing ever happens without the eyebrow confirm (except approved routines, below).
+- EMERGENCY = eyebrow held >= EMERGENCY_S = 2.0 s, in ANY mode, checked before everything else: say "Calling the nurse", flash the lamp 3 times, display "Help is coming", HELP card on the nurse page.
 - Backup confirm gesture for a person whose eyebrows fail calibration: mouth open (jawOpen) held >= 0.7 s.
 
-## Nurse questions: 3 ways (the nurse chooses on the phone, e.g. after a HELP alert)
-1. AGENT: "AI agent asks". lookat/agent.py runs a Claude tool-use loop (the triage agent) that decides each question itself from the previous answers, asks the patient through the normal QUESTION mode, and ends with a short summary + urgency (now/soon/routine) + up to 3 things to check. Max 5 questions. Never diagnoses, never suggests medication, never answers for the patient. The nurse sees every step live and can stop it anytime.
-2. AI CHOICES: the nurse types the question, lookat/ask.py (make_choices) turns it into 2-3 choices, the nurse edits/approves, then it is sent.
-3. MANUAL: the nurse types the question AND the choices herself. No AI call.
-- Every question dict carries source: "agent" | "ai" | "manual" | "fallback". Only one question is open at a time; while the agent runs, the page refuses other questions.
-- Any AI failure (no key, error, timeout) falls back: agent -> fixed decision tree, AI choices -> YES/NO.
+## Devices (lookat/devices.py)
+- lamp = REAL (python-kasa plug). ac = SIMULATED (shown as "(simulated)" everywhere). Every action from anyone goes through Room.execute(device, cmd, by=...) and is logged to memory with the clock time.
 
-## Triage agent memory + learning (AI agent challenge: it must NOT be a thin AI wrapper)
-- lookat/memory.py (pure Python + JSON, no AI): one file per patient in memory/<patient>.json (git-ignored): chart (nurse-typed conditions/notes/preferences), facts (learned), episodes (every call: questions, answers, times, agent summary, likely cause, urgency, the NURSE'S confirmed outcome, follow-ups).
-- learn() computes from past episodes: recency-weighted cause priors from nurse-confirmed outcomes only, time-of-day patterns, responsiveness trend (answer time, missed answers), agent accuracy, questions-to-cause per call (learning curve), the question path that worked per cause.
-- Agent tools: recall (always first), ask_patient, notify_nurse (early warning, loop continues), remember (confirmed facts only), schedule_followup, finish (summary, likely_cause, urgency, suggested_checks, compared_to_history).
-- Behaviour: ask the most likely cause FIRST as yes/no but always offer "Something else"; adapt to responsiveness (slower/missed answers -> fewer questions, higher urgency, tell the nurse); compare with past calls in the summary; follow up on unresolved problems.
-- The nurse taps the real outcome after every call; that is the only thing that updates the priors. Never write fake episodes or edit memory files by hand; demo history comes from real rehearsal calls.
-- The fallback (no AI) still uses memory.first_question(priors) and still records the episode.
+## Time (lookat/clock.py)
+- Everything that uses time of day uses lookat.clock (never datetime.now() directly), so "simulated nights" can run the real system with a fast clock. Whenever speed != 1, the display and nurse page show "SIMULATED TIME xN".
+
+## The agent (lookat/agent.py + lookat/memory.py) - AI agent challenge: must NOT be a thin AI wrapper
+- memory.py (pure Python + JSON, no AI): memory/<patient>.json (git-ignored): chart, facts, actions, suggestions + answers, routines, episodes (nurse calls/emergencies with the nurse's confirmed outcome).
+- learn() (deterministic): routine candidates (same patient action on >= 3 days within a 60-min window), routine health (cancelled twice -> suggest pausing), preferences by time of day, things refused twice (avoid), cause priors from nurse-confirmed outcomes, responsiveness.
+- Agent tools: recall (always first), get_room_state, ask_patient, run_action, propose_routine, notify_nurse, remember, finish. Tasks: assist:rest / assist:uncomfortable / assist:suggest / propose_routine / nurse_call / emergency.
+- Safety enforced IN CODE: run_action only after a matching "Yes" answer in the same run; routines only after the patient said Yes to propose_routine; every routine run is announced with a 10 s "Cancel" tile; nothing automatic runs during a question, an agent run or HELP. Never medical advice; pain/breathing/distress -> notify_nurse at once.
+- routines.py Scheduler: proposes candidates when the patient is idle; runs due routines with the cancel window.
+- sim.py: --simulate-nights N drives the SAME pipeline (Machine -> actions -> Room -> memory) with a scripted patient and a fast clock. Never write fake history or edit memory files by hand.
+- Any AI failure falls back to rules from learn() (agent) or YES/NO (ask.py).
+
+## Nurse page (phone) + display (projector)
+- page.py (nurse, phone): status, Ask anything (AI choices or write your own), patient calls, HELP card with 3 options (AI makes choices / write your own / AI agent asks), answers, routines, patient memory tab.
+- display.py (patient, projector): /display + /state, 3 huge tiles, clock, room status, banner, calibration mode.
 
 ## Hard rules
-- The PATIENT NEVER READS A SCREEN. Every prompt to the patient is SPOKEN. Any window is for the team (operator) only.
+- Every tile is SHOWN and SPOKEN. The operator window (camera, debug) is for the team only.
 - Windows 11 with Smart App Control ON. Run Python as `py -3.11`. Pinned: mediapipe==0.10.14, opencv-contrib-python==4.10.0.84, numpy<2, python-kasa==0.12.0, plus anthropic, fastapi, uvicorn[standard], pyttsx3, pydantic, pytest. NEVER add scikit-learn, scipy or other new dependencies (they get blocked). If an import fails with "An Application Control policy has blocked this file", do not upgrade; use plain Python/NumPy instead.
-- The camera loop runs in the MAIN thread (cv2.imshow must). Voice, lamp, web server and Claude calls each run in their own worker thread. Communicate only through the queues and the lock-protected State in lookat/state.py. Nothing may block the camera loop.
+- The camera loop runs in the MAIN thread (cv2.imshow must). Voice, lamp, web server, scheduler and Claude calls each run in their own worker thread. Communicate only through the queues and the lock-protected State in lookat/state.py. Nothing may block the camera loop.
 - Secrets only from environment variables: ANTHROPIC_API_KEY, KASA_USER, KASA_PASSWORD, LAMP_IP (default 172.20.10.2). Never print or commit them.
-- Claude: official `anthropic` Python SDK, model "claude-opus-5-5", output_config effort "low", structured output via client.messages.parse with a Pydantic model, 8 s timeout. On ANY error or refusal fall back to YES/NO.
+- Claude: official `anthropic` Python SDK, model "claude-opus-5-5". ask.py: output_config effort "low", structured output via client.messages.parse with a Pydantic model, 8 s timeout. agent.py: manual tool-use loop, thinking adaptive, 15 s per call. On ANY error fall back as above.
 - Every module has an `if __name__ == "__main__":` self-test that a person can run with `py -3.11 -m lookat.<module>` and that prints PASS/FAIL or shows a window.
-- Pure logic (state machine, classifier, gesture timing) gets pytest tests in tests/. Run `py -3.11 -m pytest -q` before every commit.
+- Pure logic (state machine, classifier, gesture timing, memory/learn, scheduler, clock) gets pytest tests in tests/. Run `py -3.11 -m pytest -q` before every commit.
 - Log every event as one JSON line to logs/events.jsonl (time, type, details).
-- Keep code small and readable. Only edit files your task names. Folder owners: vision + agent.py (P1), brain + main (P2), actions + ask.py (P3), page + bench (P4).
-- After each task: run its self-test, show the output, append one line to PROGRESS.md ("<time> <prompt id>: <what works>"), then `git pull --rebase`, commit and push.
+- Keep code small and readable. Only edit files your task names. Owners: vision, gaze, memory, agent (P1); gestures, machine, clock, routines, sim, main (P2); lamp, voice, ask, devices, page (P3); display, bench (P4).
+- Work on your own branch (p1-vision, p2-brain, p3-actions, p4-display). After each task: run its self-test, show the output, append one line to PROGRESS.md ("<time> <prompt id>: <what works>"), `git pull origin main`, commit and push to your branch. P2 merges into main after the Verify passes.
 - Hackathon rule: all code is written during the event (after Fri 7 PM).
 - Commits: never add Co-Authored-By or any Claude attribution lines to commit messages.
