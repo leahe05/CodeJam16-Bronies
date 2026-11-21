@@ -23,6 +23,14 @@ A webcam lets a bedridden patient who cannot speak or move (e.g. intubated ICU p
 - Every question dict carries source: "agent" | "ai" | "manual" | "fallback". Only one question is open at a time; while the agent runs, the page refuses other questions.
 - Any AI failure (no key, error, timeout) falls back: agent -> fixed decision tree, AI choices -> YES/NO.
 
+## Triage agent memory + learning (AI agent challenge: it must NOT be a thin AI wrapper)
+- lookat/memory.py (pure Python + JSON, no AI): one file per patient in memory/<patient>.json (git-ignored): chart (nurse-typed conditions/notes/preferences), facts (learned), episodes (every call: questions, answers, times, agent summary, likely cause, urgency, the NURSE'S confirmed outcome, follow-ups).
+- learn() computes from past episodes: recency-weighted cause priors from nurse-confirmed outcomes only, time-of-day patterns, responsiveness trend (answer time, missed answers), agent accuracy, questions-to-cause per call (learning curve), the question path that worked per cause.
+- Agent tools: recall (always first), ask_patient, notify_nurse (early warning, loop continues), remember (confirmed facts only), schedule_followup, finish (summary, likely_cause, urgency, suggested_checks, compared_to_history).
+- Behaviour: ask the most likely cause FIRST as yes/no but always offer "Something else"; adapt to responsiveness (slower/missed answers -> fewer questions, higher urgency, tell the nurse); compare with past calls in the summary; follow up on unresolved problems.
+- The nurse taps the real outcome after every call; that is the only thing that updates the priors. Never write fake episodes or edit memory files by hand; demo history comes from real rehearsal calls.
+- The fallback (no AI) still uses memory.first_question(priors) and still records the episode.
+
 ## Hard rules
 - The PATIENT NEVER READS A SCREEN. Every prompt to the patient is SPOKEN. Any window is for the team (operator) only.
 - Windows 11 with Smart App Control ON. Run Python as `py -3.11`. Pinned: mediapipe==0.10.14, opencv-contrib-python==4.10.0.84, numpy<2, python-kasa==0.12.0, plus anthropic, fastapi, uvicorn[standard], pyttsx3, pydantic, pytest. NEVER add scikit-learn, scipy or other new dependencies (they get blocked). If an import fails with "An Application Control policy has blocked this file", do not upgrade; use plain Python/NumPy instead.
