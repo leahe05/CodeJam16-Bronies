@@ -165,3 +165,14 @@ Examples of each screen are in `lookat/fake_api.py` (`SCREENS`).
 | `{"action": "set_temp", "value": 24.5}` | room temperature |
 | `{"action": "eyes", "value": "auto"\|"open"\|"closed"}` | eyes-open override |
 | `{"action": "reset"}` | reset the demo (page asks "Are you sure?" first) |
+
+---
+
+## 4. `POST /api/gaze`: browser eye tracking (`main.py --gaze web`)
+
+`/patient?gaze=web` runs WebGazer (`web/webgaze.js`, vendored in `web/vendor/webgazer/`, offline) and sends the zone the patient looks at ~10x a second:
+
+```json
+{"spot": "left", "x": 0.12, "y": 0.44}
+```
+`spot` = the screen third (`"left"`, `"middle"`, `"right"`) or `null` (no face / no prediction); `x`, `y` = the smoothed gaze point as a share of the screen (for logs only). Returns `{"ok": true}`. With `--gaze web`, `main.py` uses this spot instead of the Python gaze model (stale after 0.6 s = no gaze); eyebrows (choose, long raise = Call Nurse) still come from the Python camera loop. `?gaze=web` (or `?big=1`) also switches the page to the big three-column layout.

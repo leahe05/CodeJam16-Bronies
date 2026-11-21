@@ -296,3 +296,33 @@ html.noanim *, html.noanim *::before, html.noanim *::after { animation: none !im
   *, *::before, *::after { animation-duration: .01s !important; animation-iteration-count: 1 !important; transition-duration: .01s !important; }
   .countdown .ring-left, .countdown .liquid { animation-duration: var(--ask, 3s) !important; }   /* the countdown is information, not decoration */
 }
+
+/* ---------------- big layout (?gaze=web): three tall columns = the three gaze zones ---------------- */
+html.big body { padding-left: calc(var(--u) * 2.5); padding-right: calc(var(--u) * 2.5); }
+html.big #stage > section { width: 100%; }
+html.big .panel, html.big #win.open { width: 100%; padding: calc(var(--u) * 2.6) calc(var(--u) * 3) calc(var(--u) * 3); }
+html.big .panel h1, html.big #win h1 { font-size: calc(var(--u) * 5.6); }
+html.big .cols { display: grid; grid-template-columns: repeat(3, 1fr); gap: calc(var(--u) * 7); width: 100%;
+  margin-top: calc(var(--u) * 2.6); align-items: stretch; text-align: center; }
+html.big .col { display: flex; flex-direction: column; justify-content: center; align-items: stretch; min-width: 0; }
+html.big .col.top { justify-content: flex-start; }
+html.big .col.mid { align-items: center; justify-content: center; }
+html.big .big-opt {
+  position: relative; flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: calc(var(--u) * 1.6); min-height: calc(var(--u) * 36); padding: calc(var(--u) * 3) calc(var(--u) * 2.4);
+  border: var(--card-bw) solid var(--card-border); border-radius: calc(var(--u) * 4);
+  background: var(--card-bg); box-shadow: var(--card-shadow); text-align: center;
+}
+html.big .big-opt > svg { font-size: calc(var(--u) * 11); color: var(--icon); }
+html.big .big-opt b { font-size: calc(var(--u) * 5.4); font-weight: 650; line-height: 1.1; text-wrap: balance; }
+html.big .big-opt small { font-size: calc(var(--u) * 2.2); color: var(--hint); }
+html.big .home-cols { margin-top: 0; min-height: calc(var(--u) * 62); }
+html.big .home-cols .col.top .big-opt { flex: none; min-height: calc(var(--u) * 46); }
+html.big .home-cols h1.hero { font-size: calc(var(--u) * 7.6); }
+html.big .home-cols .celestial { width: calc(var(--u) * 10); height: calc(var(--u) * 10); }
+html.big .talk-big { flex: none; width: 100%; min-height: calc(var(--u) * 26); margin-top: calc(var(--u) * 3);
+  border: 2.5px solid var(--pill-border); background: var(--pill-bg); box-shadow: var(--pill-glow); }
+html.big .big-instr { display: flex; align-items: center; justify-content: center; gap: calc(var(--u) * 1.4);
+  margin: calc(var(--u) * 2.4) 0 0; font-size: calc(var(--u) * 2.4); color: var(--hint); }
+html.big .big-instr .instr-i { font-size: calc(var(--u) * 3.6); border: 0; padding: 0; }
+html.big .illus { display: none; }

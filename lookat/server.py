@@ -112,6 +112,14 @@ def make_app(backend, title: str = "LookAt", web_dir: str = WEB_DIR):
         body = await _json(request)
         return public(await run_in_threadpool(safe, lambda: backend.demo_action(body)))
 
+    @app.post("/api/gaze")
+    async def api_gaze(request: Request):
+        """Browser eye tracking (web/webgaze.js, /patient?gaze=web): {"spot": "left"|"middle"|"right"|null}."""
+        body = await _json(request)
+        if not hasattr(backend, "gaze_action"):
+            return {"ok": False, "error": "this backend has no browser gaze"}
+        return public(safe(lambda: backend.gaze_action(body)))
+
     return app
 
 

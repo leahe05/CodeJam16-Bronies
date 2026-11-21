@@ -1,0 +1,1 @@
+15:49 webgazer: /patient?gaze=web runs WebGazer offline (calibration = follow the dot, no clicks), sends the screen third to POST /api/gaze; main.py --gaze web uses it (eyebrows stay in Python); big three-column layout; 169 tests pass
