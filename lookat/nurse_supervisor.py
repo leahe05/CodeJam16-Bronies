@@ -23,6 +23,7 @@ class NurseSupervisor:
         self._agents = {}
         self._reports = {}
         self._requests = {}
+        self._questions = {}
         self._generation = {}
         self._ids = itertools.count(1)
         self._lock = threading.Lock()
@@ -31,6 +32,7 @@ class NurseSupervisor:
         with self._lock:
             self._agents[patient_id] = check_in
             self._requests.setdefault(patient_id, deque(maxlen=100))
+            self._questions.setdefault(patient_id, {})
             self._generation.setdefault(patient_id, 0)
 
     def check_patients(self):
@@ -45,6 +47,10 @@ class NurseSupervisor:
                     self._reports[patient_id] = report
                     if report.get("attention"):
                         self._receive_request(patient_id, **report["attention"], delivery="check-in")
+                    for request in report.get("requests", ()):
+                        self._receive_request(patient_id, **request, delivery="check-in")
+                    for question in report.get("questions", ()):
+                        self._questions[patient_id].setdefault(question["id"], question)
             except Exception:
                 log.exception("Nurse check-in failed for patient agent %s", patient_id)
 
@@ -63,7 +69,16 @@ class NurseSupervisor:
         with self._lock:
             self._reports.pop(patient_id, None)
             self._requests[patient_id].clear()
+            self._questions[patient_id].clear()
             self._generation[patient_id] += 1
+
+    def pending_questions(self, patient_id):
+        with self._lock:
+            return list(self._questions[patient_id].values())
+
+    def resolve_question(self, patient_id, question_id):
+        with self._lock:
+            self._questions[patient_id].pop(question_id, None)
 
     def receive_request(self, patient_id, request, **details):
         with self._lock:

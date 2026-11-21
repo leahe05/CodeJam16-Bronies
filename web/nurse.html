@@ -21,6 +21,17 @@
       <p id="connection-summary" class="connection" role="status">Connecting to LookAt…</p>
     </div>
 
+    <section id="shift-panel" class="panel shift-panel" aria-labelledby="shift-heading" hidden>
+      <div class="section-heading">
+        <div>
+          <h2 id="shift-heading">Shift feeds</h2>
+          <p id="shift-status" class="muted" role="status"></p>
+        </div>
+        <button id="start-shift" class="button primary" type="button">Start shift</button>
+      </div>
+      <div id="shift-feeds" class="shift-feeds"></div>
+    </section>
+
     <section id="supervisor-panel" class="panel supervisor" aria-labelledby="supervisor-heading" hidden>
       <div class="section-heading">
         <h2 id="supervisor-heading">Suggested check-ins</h2>

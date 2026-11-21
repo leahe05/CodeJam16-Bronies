@@ -80,6 +80,14 @@ p, li { line-height: 1.5; overflow-wrap: anywhere; }
 .proposal-branches li + li { margin-top: .45rem; }
 .proposal-branches small { display: block; }
 .proposal .alert-actions { margin-top: auto; padding-top: .75rem; }
+.shift-feeds { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 19rem), 1fr)); gap: .75rem; margin-top: .9rem; }
+.shift-feed { background: #f7fafc; border: 1px solid var(--line); border-radius: .65rem; padding: .85rem 1rem; }
+.shift-feed h3 { margin-bottom: .35rem; }
+.shift-feed ul { list-style: none; padding: 0; margin: 0; max-height: 17rem; overflow: auto; }
+.shift-feed li { padding: .5rem 0; }
+.shift-feed li + li { border-top: 1px solid var(--line); }
+.shift-feed time { color: var(--muted); font-size: .8rem; font-variant-numeric: tabular-nums; }
+.shift-response { display: block; color: var(--blue); font-size: .85rem; margin-top: .15rem; }
 .simulation { display: grid; justify-items: start; gap: .6rem; }
 .simulation a.button { text-decoration: none; }
 .alert-list { display: grid; gap: .7rem; margin-top: .9rem; }

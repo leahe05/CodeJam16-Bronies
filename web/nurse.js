@@ -322,19 +322,59 @@ function renderAlerts() {
   $("alert-count").dataset.urgent = String(pending.some(entry => urgent(entry.alert)));
 }
 
+function renderShift(roster) {
+  const patients = roster.filter(agent => agent.data?.shift);
+  const first = patients[0];
+  $("shift-panel").hidden = !first;
+  if (!first) return;
+  const state = first.data.shift.state;
+  updateText($("shift-status"), {
+    ready: "Ready for the simulated shift",
+    running: "Simulated shift in progress",
+    complete: "Simulated shift complete"
+  }[state]);
+  $("start-shift").hidden = state !== "ready";
+  $("start-shift").disabled = first.busy || first.state !== "online";
+  updateRegion($("shift-feeds"), patients.map(agent => [agentName(agent), agent.data.patient.room, agent.data.shift.feed]),
+    () => patients.map(agent => {
+      const card = element("article", "shift-feed");
+      card.append(element("h3", "", [agentName(agent), agent.data.patient.room].filter(Boolean).join(" · ")));
+      const updates = list(agent.data.shift.feed);
+      if (!updates.length) {
+        card.append(element("p", "muted", "Waiting for the first patient-agent update."));
+        return card;
+      }
+      const entries = element("ul");
+      entries.tabIndex = 0;
+      entries.setAttribute("aria-label", agentName(agent) + " updates");
+      for (const update of updates.reverse()) {
+        const row = element("li");
+        row.append(element("time", "", update.time), element("p", "", update.status),
+          element("small", "shift-response", update.response));
+        entries.append(row);
+      }
+      card.append(entries);
+      return card;
+    }));
+}
+
 function renderProposals(roster) {
   const pending = roster.filter(agent => agent.data?.proposal);
   $("supervisor-panel").hidden = pending.length === 0;
-  updateText($("supervisor-mode"), roster.some(agent => agent.data?.tracked_demo) ?
-    "Live patient input + simulated patient" : "Two-patient simulation");
+  updateText($("supervisor-mode"), roster.some(agent => agent.data?.shift) ? "Simulated shift" :
+    roster.some(agent => agent.data?.tracked_demo) ? "Live patient input + simulated patient" : "Two-patient simulation");
   updateRegion($("proposals"), pending.map(agent => [
-    agent.origin, agent.data.proposal, agent.state, agent.busy, agent.data.session?.active, agent.data.ai_drafts
+    agent.origin, agent.data.proposal, agent.state, agent.busy, agent.data.session?.active, agent.data.ai_drafts,
+    agent.data.shift?.queued_questions
   ]), () => pending.map(agent => {
     const proposal = agent.data.proposal;
     const card = element("article", "alert-card proposal");
     card.append(element("h3", "", agentName(agent) + " · " + agent.data.patient.room),
       element("p", "muted", proposal.evidence),
       element("p", "", proposal.preference));
+    if (agent.data.shift?.queued_questions > 1) {
+      card.append(element("small", "muted", `${agent.data.shift.queued_questions - 1} more check-in queued`));
+    }
     const branches = element("ol", "proposal-branches");
     for (const step of proposal.steps) {
       const item = element("li", "", step.question);
@@ -596,6 +636,7 @@ function render() {
   updateText(connection, waiting ? "Connecting to LookAt…" : `${connected} of ${roster.length} agents connected`);
   renderAlerts();
   renderRoster();
+  renderShift(roster);
   renderProposals(roster);
 
   const agent = agents.get(selected);
@@ -613,6 +654,13 @@ function render() {
     return notes.length ? notes : [element("p", "empty note", data ? "No status notes yet." : "Waiting for patient data…")];
   });
 }
+
+$("start-shift").addEventListener("click", () => {
+  const agent = [...agents.values()].find(item => item.data?.shift);
+  if (agent) act(agent, "/shift/start", {}, "Shift started.", () => {
+    agent.data.shift.state = "running";
+  });
+});
 
 for (const name of ["patients", "attention"]) {
   const control = $(name + "-tab");

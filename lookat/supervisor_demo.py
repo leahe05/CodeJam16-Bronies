@@ -7,6 +7,7 @@ import time
 from lookat import nurse_ai
 from lookat.fake_api import Fake, opt, screen
 from lookat.nurse_link import NurseLink
+from lookat.nurse_shift import ShiftPlayback
 from lookat.nurse_supervisor import DEFAULT_INTERVAL_S, NurseSupervisor
 from lookat.server import make_app
 
@@ -17,12 +18,20 @@ def minutes(hhmm):
 
 
 class SimulatedPatient(Fake):
+    initial_history = (
+        ("22:24:00", "Patient agent", "Noticed", "Patient was still awake and the room was 24 °C."),
+        ("22:24:12", "Patient agent", "Asked", "Are you too warm to sleep?"),
+        ("22:24:25", "Patient", "Chose", "Yes"),
+        ("22:24:26", "Patient agent", "Replied", "I’ll let your nurse know you’re warm."),
+    )
     questions = {
         "window": ("Would opening the window a little help you sleep?",
                    "Patient requests opening the window a little."),
         "fan": ("Would a fan on low help you sleep?", "Patient requests a fan on low."),
         "lighter_blanket": ("Would you like a lighter blanket?", "Patient requests a lighter blanket."),
         "remove_blanket": ("Would you like to remove a blanket?", "Patient requests removing a blanket."),
+        "sit_up": ("Would you like help sitting upright?", "Patient requests help sitting upright."),
+        "pillow": ("Would you like your pillows adjusted instead?", "Patient requests a pillow adjustment."),
     }
 
     def suggest_question(self, report):
@@ -38,11 +47,11 @@ class SimulatedPatient(Fake):
                 f'{warmer:g} °C above their usual {report["usual_temp_c"]:g} °C.'
             ),
             "preference": report["preference"],
-            "steps": [
-                {"question": question, "request": request}
-                for question, request in (self.questions[want] for want in report["common_wants"])
-            ],
+            "steps": self.question_steps(report["common_wants"]),
         }
+
+    def question_steps(self, wants):
+        return [{"question": self.questions[want][0], "request": self.questions[want][1]} for want in wants]
 
     def __init__(self, supervisor, patient_id, name, room, preference, common_wants):
         self.supervisor = supervisor
@@ -74,12 +83,7 @@ class SimulatedPatient(Fake):
         self.approved_steps = []
         self.last_suggestion = None
         self.interaction_start = time.monotonic()
-        for at, actor, action, text in [
-            ("22:24:00", "Patient agent", "Noticed", "Patient was still awake and the room was 24 °C."),
-            ("22:24:12", "Patient agent", "Asked", "Are you too warm to sleep?"),
-            ("22:24:25", "Patient", "Chose", "Yes"),
-            ("22:24:26", "Patient agent", "Replied", "I’ll let your nurse know you’re warm."),
-        ]:
+        for at, actor, action, text in self.initial_history:
             self.nurse_link.record_interaction(actor, action, text, at=at)
 
     def clock(self):
@@ -140,8 +144,8 @@ class SimulatedPatient(Fake):
                     history=self.nurse_link.interaction_history(), ai_drafts=nurse_ai.available())
         data["agent_checkin"] = {"time": report["time"] if report else None,
                                  "interval_s": self.supervisor.interval_s,
-                                 "suggested_question": bool(report and report["question"]),
-                                 "needs_attention": bool(report and report["attention"])}
+                                 "suggested_question": bool(report and (report["question"] or report.get("questions"))),
+                                 "needs_attention": bool(report and (report["attention"] or report.get("requests")))}
         if self.companion_port is not None:
             data["demo_companion_port"] = self.companion_port
         return data
@@ -236,8 +240,12 @@ class SimulatedPatient(Fake):
                 self.approved_steps = proposal["steps"]
                 self._interaction("Nurse", "Approved", proposal["steps"][0]["question"])
                 self._send_question(self.approved_steps[0]["question"], ["Yes", "No"], actor="Nurse supervisor")
-            self.resolved_proposal = proposal["id"]
+            self._resolve_proposal(proposal["id"])
             return {"ok": True}
+
+    def _resolve_proposal(self, proposal_id):
+        self.resolved_proposal = proposal_id
+        self.refined_proposal = None
 
     def _refine_proposal(self, proposal_id):
         with self.lock:
@@ -315,17 +323,113 @@ class SimulatedPatient(Fake):
         return {"ok": True}
 
 
-def make_demo_patients(interval_s=DEFAULT_INTERVAL_S):
+class ShiftPatient(SimulatedPatient):
+    initial_history = ()
+
+    def __init__(self, *args, playback):
+        self.playback = playback
+        super().__init__(*args)
+
+    def _reset_state(self):
+        super()._reset_state()
+        self.temp_c = 22.0
+        self.shift_feed = []
+        self._pending_updates = []
+
+    def clock(self):
+        return {"time": self.interaction_time()[:5], "demo": True}
+
+    def receive_shift_update(self, update):
+        with self.lock:
+            if not self.shift_feed:
+                self.interaction_start = time.monotonic()
+            if update.temperature is not None:
+                self.temp_c = update.temperature
+            entry = {
+                "time": self.interaction_time(), "status": update.status, "delivery": update.delivery,
+                "response": "Shared by patient agent", "_request": update.request,
+            }
+            self.shift_feed.append(entry)
+            self._interaction("Patient agent", "Reported status", update.status)
+            if update.delivery == "proactive":
+                self.supervisor.receive_request(self.patient_id, update.request, at=entry["time"],
+                                                reason=update.status)
+                entry["response"] = "Supervisor alerted the nurse"
+                self._interaction("Nurse supervisor", "Forwarded to nurse", update.request)
+            elif update.delivery in ("scheduled", "question"):
+                entry["response"] = "Waiting for the next supervisor check-in"
+                self._pending_updates.append((update, entry))
+
+    def check_in(self, prompt):
+        with self.lock:
+            questions, requests = [], []
+            for update, entry in self._pending_updates:
+                event_id = f"{self.patient_id}-shift-{update.seconds}"
+                if update.delivery == "question":
+                    steps = self.question_steps(update.choices or self.common_wants)
+                    questions.append({"id": event_id, "evidence": update.status,
+                                      "preference": self.preference, "steps": steps})
+                    entry["response"] = "Suggested check-in · " + steps[0]["question"]
+                    self._interaction("Nurse supervisor", "Queued for review", steps[0]["question"])
+                else:
+                    requests.append({"request": update.request, "at": entry["time"],
+                                     "reason": update.status, "request_id": event_id})
+                    entry["response"] = "Supervisor alerted the nurse at check-in"
+                    self._interaction("Nurse supervisor", "Forwarded to nurse", update.request)
+            self._pending_updates.clear()
+            return {
+                "prompt": prompt, "time": self.interaction_time(), "status": self.report(),
+                "preferences": list(self.facts), "question": None, "attention": None,
+                "questions": questions, "requests": requests,
+            }
+
+    def proposal(self):
+        questions = self.supervisor.pending_questions(self.patient_id)
+        return (self.refined_proposal or questions[0]) if questions else None
+
+    def _resolve_proposal(self, proposal_id):
+        super()._resolve_proposal(proposal_id)
+        self.supervisor.resolve_question(self.patient_id, proposal_id)
+
+    def nurse_json(self):
+        return {
+            **super().nurse_json(),
+            "shift": {"state": self.playback.state, "feed": self.shift_feed,
+                      "queued_questions": len(self.supervisor.pending_questions(self.patient_id))},
+        }
+
+    def nurse_action(self, path, body):
+        if path == "shift/start":
+            self.playback.start()
+            return {"ok": True}
+        if path == "alert" and str(body.get("id", "")).startswith("agent-"):
+            with self.lock:
+                alert = next((item for item in self.supervisor.alerts(self.patient_id)
+                              if item["id"] == body["id"]), None)
+                result = super().nurse_action(path, body)
+                if result["ok"] and alert and not alert["done"]:
+                    self._interaction("Nurse", "Acknowledged", alert["text"])
+                    for entry in reversed(self.shift_feed):
+                        if alert["request"] and entry["_request"] == alert["request"]:
+                            entry["response"] = "Nurse acknowledged · On my way"
+                            break
+                return result
+        return super().nurse_action(path, body)
+
+
+def make_demo_patients(interval_s=DEFAULT_INTERVAL_S, *, playback=None):
     supervisor = NurseSupervisor(interval_s)
-    avery = SimulatedPatient(
+    patient = ShiftPatient if playback else SimulatedPatient
+    options = {"playback": playback} if playback else {}
+    avery = patient(
         supervisor, "avery", "Avery", "Room 14",
         "Prefers a cracked window when warm at night. A lighter blanket is their second choice.",
-        ("window", "lighter_blanket"),
+        ("window", "lighter_blanket"), **options,
     )
-    morgan = SimulatedPatient(
+    morgan = patient(
         supervisor, "morgan", "Morgan", "Room 19",
         "Prefers the window closed at night. Usually asks for a fan on low when warm.",
-        ("fan", "remove_blanket"),
+        ("fan", "remove_blanket"), **options,
     )
     for patient in (avery, morgan):
         supervisor.register(patient.patient_id, patient.check_in)
@@ -333,8 +437,8 @@ def make_demo_patients(interval_s=DEFAULT_INTERVAL_S):
     return avery, morgan
 
 
-def make_demo_app(companion_port, interval_s=DEFAULT_INTERVAL_S):
-    avery, morgan = make_demo_patients(interval_s)
+def make_demo_app(companion_port, interval_s=DEFAULT_INTERVAL_S, *, playback=None):
+    avery, morgan = make_demo_patients(interval_s, playback=playback)
     avery.companion_port = companion_port
     app = make_app(avery)
     companion = make_app(morgan)
@@ -342,13 +446,18 @@ def make_demo_app(companion_port, interval_s=DEFAULT_INTERVAL_S):
     async def serve(scope, receive, send):
         if scope["type"] == "lifespan":
             stop = threading.Event()
-            worker = threading.Thread(target=avery.supervisor.run, args=(stop,), daemon=True)
-            worker.start()
+            workers = [threading.Thread(target=avery.supervisor.run, args=(stop,), daemon=True)]
+            if playback:
+                patients = {patient.patient_id: patient for patient in (avery, morgan)}
+                workers.append(threading.Thread(target=playback.run, args=(stop, patients), daemon=True))
+            for worker in workers:
+                worker.start()
             try:
                 await app(scope, receive, send)
             finally:
                 stop.set()
-                worker.join()
+                for worker in workers:
+                    worker.join()
             return
         # Each original patient page fetches its screen from its own origin.
         server = scope.get("server")
@@ -365,9 +474,12 @@ def main():
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8768)
     parser.add_argument("--companion-port", type=int, help="Morgan's port (defaults to --port + 1)")
-    parser.add_argument("--check-in-seconds", type=float, default=DEFAULT_INTERVAL_S,
-                        help="fixed interval between patient-agent check-ins (default: 30)")
+    parser.add_argument("--shift-demo", action="store_true", help="enable the two live simulated shift feeds")
+    parser.add_argument("--check-in-seconds", type=float,
+                        help="fixed interval between check-ins (default: 30, or 5 in the shift demo)")
     args = parser.parse_args()
+    interval_s = args.check_in_seconds if args.check_in_seconds is not None else (5 if args.shift_demo else DEFAULT_INTERVAL_S)
+    playback = ShiftPlayback() if args.shift_demo else None
     with socket.create_server((args.host, args.port)) as primary:
         port = primary.getsockname()[1]
         with socket.create_server((args.host, args.companion_port if args.companion_port is not None else port + 1)) as secondary:
@@ -375,7 +487,7 @@ def main():
             print(f"Nurse dashboard: http://{args.host}:{port}/nurse")
             print(f"Avery: http://{args.host}:{port}/patient  Morgan: http://{args.host}:{companion_port}/patient")
             try:
-                app = make_demo_app(companion_port, args.check_in_seconds)
+                app = make_demo_app(companion_port, interval_s, playback=playback)
             except ValueError as error:
                 parser.error(str(error))
             server = uvicorn.Server(uvicorn.Config(app, log_level="warning"))

@@ -1,6 +1,7 @@
 import threading
 
 from lookat import nurse_ai
+from lookat.nurse_shift import SHIFT_UPDATES, ShiftPlayback, ShiftUpdate
 from lookat.nurse_supervisor import CHECK_IN_PROMPT, NurseSupervisor
 from lookat.supervisor_demo import make_demo_patients
 
@@ -133,3 +134,48 @@ def test_patient_agent_can_push_and_retry_with_its_own_identity():
     assert sum(entry["text"] == request["request"] for entry in morgan.nurse_json()["history"]) == 1
     assert morgan.nurse_action("alert", {"id": first["id"], "action": "ack"})["ok"]
     assert morgan.nurse_json()["alerts"][0]["done"]
+
+
+def test_shift_streams_route_requests_and_keep_patient_specific_questions_queued():
+    playback = ShiftPlayback()
+    avery, morgan = make_demo_patients(playback=playback)
+    patients = {"avery": avery, "morgan": morgan}
+    assert not avery.proposal() and not morgan.proposal()
+
+    for event in SHIFT_UPDATES:
+        patients[event.patient].receive_shift_update(event)
+
+    assert "water" in avery.nurse_json()["alerts"][0]["request"]
+    water_id = avery.nurse_json()["alerts"][0]["id"]
+    assert avery.nurse_action("alert", {"id": water_id, "action": "ack"})["ok"]
+    assert avery.nurse_json()["shift"]["feed"][1]["response"] == "Nurse acknowledged · On my way"
+    assert "massage" in morgan.nurse_json()["alerts"][0]["request"]
+    assert not avery.proposal() and not morgan.proposal()
+    assert "Waiting" in avery.nurse_json()["shift"]["feed"][2]["response"]
+
+    avery.supervisor.check_patients()
+    assert {alert["delivery"] for alert in morgan.nurse_json()["alerts"]} == {"check-in", "proactive"}
+    morgan_requests = [alert["request"] for alert in morgan.nurse_json()["alerts"]]
+    assert any("brief" in request for request in morgan_requests)
+    assert any("sitting upright" in request for request in morgan_requests)
+    assert avery.proposal()["evidence"] == morgan.proposal()["evidence"]
+    assert "window" in avery.proposal()["steps"][0]["question"]
+    assert "fan" in morgan.proposal()["steps"][0]["question"]
+    assert avery.nurse_json()["shift"]["queued_questions"] == 2
+    draft = avery.proposal()
+    assert avery.nurse_action("proposal/dismiss", {"id": draft["id"]})["ok"]
+    assert "sitting upright" in avery.proposal()["steps"][0]["question"]
+    assert all("massage" not in entry["status"] for entry in avery.nurse_json()["shift"]["feed"])
+
+
+def test_shift_starts_on_request_and_completes_after_both_feeds():
+    playback = ShiftPlayback((ShiftUpdate(0, "avery", "Avery update"),
+                              ShiftUpdate(0, "morgan", "Morgan update")))
+    avery, morgan = make_demo_patients(playback=playback)
+    assert avery.nurse_json()["shift"]["state"] == "ready"
+    assert avery.nurse_action("shift/start", {})["ok"]
+    assert morgan.nurse_json()["shift"]["state"] == "running"
+    playback.run(threading.Event(), {"avery": avery, "morgan": morgan})
+    assert avery.nurse_json()["shift"]["state"] == "complete"
+    assert [entry["status"] for entry in avery.nurse_json()["shift"]["feed"]] == ["Avery update"]
+    assert [entry["status"] for entry in morgan.nurse_json()["shift"]["feed"]] == ["Morgan update"]
