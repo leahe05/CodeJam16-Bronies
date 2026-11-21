@@ -6,11 +6,14 @@ majority vote over the last 10 frames. predict() returns (spot, confidence), or
 
 Self-test: py -3.11 -m lookat.gaze --patient NAME [--recalibrate]   (q quits)
 """
+import hashlib
 import os
+import queue
 import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from collections import Counter, deque
 from itertools import combinations
@@ -191,13 +194,11 @@ def calibrate(tracker, say, patient: str, frames: int = CALIB_FRAMES, show: bool
     return model
 
 
-class LocalSpeaker:
-    """The spoken prompts: a calm, natural female voice. Never blocks.
+class SystemVoice:
+    """The computer's own voice (works offline). Blocks until spoken (call it from a worker).
 
-    Windows: one persistent PowerShell System.Speech process reading lines from stdin, using the
-    first installed female voice (usually "Microsoft Zira"), slightly slower than default.
+    Windows: one persistent PowerShell System.Speech process, female voice (usually "Microsoft Zira").
     macOS: the built-in `say` command with the best installed female voice (see MAC_VOICES).
-    Otherwise: print.
     """
 
     # best first; "(Premium)"/"(Enhanced)" voices sound the most natural once downloaded in
@@ -215,9 +216,9 @@ class LocalSpeaker:
                       "try { $s.SelectVoiceByHints([System.Speech.Synthesis.VoiceGender]::Female, "
                       "[System.Speech.Synthesis.VoiceAge]::Adult) } catch {}; "
                       "$s.Rate = -1; "
-                      "while ($null -ne ($l = [Console]::In.ReadLine())) { $s.Speak($l) }")
+                      "while ($null -ne ($l = [Console]::In.ReadLine())) { $s.Speak($l); [Console]::Out.WriteLine('done') }")
             self.proc = subprocess.Popen(["powershell", "-NoProfile", "-Command", script],
-                                         stdin=subprocess.PIPE, text=True)
+                                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
         elif shutil.which("say"):
             self.mac_voice = self._pick_mac_voice()
 
@@ -230,22 +231,139 @@ class LocalSpeaker:
         installed = {line.split("  ")[0].strip() for line in listing.splitlines()}
         return next((v for v in cls.MAC_VOICES if v in installed), None)
 
-    def __call__(self, text: str) -> None:
-        print(f"[say] {text}")
-        try:
-            if self.proc is not None:
-                self.proc.stdin.write(text.replace("\n", " ") + "\n")
-                self.proc.stdin.flush()
-            elif shutil.which("say"):
-                voice = ["-v", self.mac_voice] if self.mac_voice else []
-                subprocess.Popen(["say", *voice, "-r", self.MAC_RATE, text])
-        except OSError as e:
-            print(f"[say failed: {e}]")
+    def speak(self, text: str) -> None:
+        if self.proc is not None:
+            self.proc.stdin.write(text.replace("\n", " ") + "\n")
+            self.proc.stdin.flush()
+            self.proc.stdout.readline()
+        elif shutil.which("say"):
+            voice = ["-v", self.mac_voice] if self.mac_voice else []
+            subprocess.run(["say", *voice, "-r", self.MAC_RATE, text])
 
     def close(self) -> None:
         if self.proc is not None:
             self.proc.stdin.close()
             self.proc.wait(timeout=5)
+
+
+class AvaVoice:
+    """LookAt's own voice: Microsoft "Ava" (calm, caring neural voice) through edge-tts.
+
+    Needs internet the FIRST time a sentence is spoken; every sentence is then cached in
+    cache/voice/, so repeated prompts work offline. Any failure (edge-tts missing or blocked,
+    no internet, timeout) raises, and LocalSpeaker falls back to SystemVoice.
+    """
+    VOICE = "en-US-AvaNeural"
+    RATE, PITCH = "-8%", "-2Hz"   # a little slower and lower = calmer
+    TIMEOUT_S = 8
+    CACHE = os.path.join(_REPO, "cache", "voice")
+
+    def __init__(self):
+        import edge_tts   # optional: not in requirements.txt (Smart App Control); ImportError = no Ava
+        self.edge_tts = edge_tts
+        self.player = None
+        if sys.platform == "win32":   # one persistent Windows Media Player, plays one file per line
+            script = ("$w = New-Object -ComObject WMPlayer.OCX; "
+                      "while ($null -ne ($f = [Console]::In.ReadLine())) { $w.URL = $f; $w.controls.play(); "
+                      "$t = 0; while ($w.playState -ne 3 -and $t -lt 40) { Start-Sleep -Milliseconds 50; $t++ }; "
+                      "while ($w.playState -eq 3) { Start-Sleep -Milliseconds 50 }; [Console]::Out.WriteLine('done') }")
+            self.player = subprocess.Popen(["powershell", "-NoProfile", "-Command", script],
+                                           stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        elif not shutil.which("afplay"):
+            raise RuntimeError("no audio player")
+
+    def path(self, text: str) -> str:
+        key = hashlib.sha1(f"{self.VOICE}|{self.RATE}|{self.PITCH}|{text}".encode()).hexdigest()[:16]
+        return os.path.join(self.CACHE, key + ".mp3")
+
+    def fetch(self, text: str) -> str:
+        """The cached mp3 for text, made with edge-tts if missing."""
+        path = self.path(text)
+        if not os.path.exists(path):
+            import asyncio
+            os.makedirs(self.CACHE, exist_ok=True)
+            tmp = path + ".part"
+            comm = self.edge_tts.Communicate(text, self.VOICE, rate=self.RATE, pitch=self.PITCH)
+            try:
+                asyncio.run(asyncio.wait_for(comm.save(tmp), self.TIMEOUT_S))
+                os.replace(tmp, path)
+            finally:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+        return path
+
+    def speak(self, text: str) -> None:
+        path = self.fetch(text)
+        if self.player is not None:
+            self.player.stdin.write(path + "\n")
+            self.player.stdin.flush()
+            self.player.stdout.readline()
+        else:
+            subprocess.run(["afplay", path])
+
+    def close(self) -> None:
+        if self.player is not None:
+            self.player.stdin.close()
+            self.player.wait(timeout=5)
+
+
+class LocalSpeaker:
+    """LookAt's voice for every spoken prompt. Never blocks the caller: sentences are queued and
+    spoken one after another by a worker thread. Uses Ava (AvaVoice) when it works, otherwise the
+    computer's own female voice (SystemVoice), so the prompts are never silent."""
+
+    def __init__(self):
+        self.system = SystemVoice()
+        try:
+            self.ava = AvaVoice()
+        except Exception as e:   # edge-tts missing / blocked, or no audio player
+            print(f"[voice] Ava unavailable ({type(e).__name__}); using the system voice")
+            self.ava = None
+        self.q: "queue.Queue" = queue.Queue()
+        self.worker = threading.Thread(target=self._run, daemon=True, name="voice")
+        self.worker.start()
+
+    def __call__(self, text: str) -> None:
+        print(f"[say] {text}")
+        self.q.put(text)
+
+    def _run(self) -> None:
+        while True:
+            text = self.q.get()
+            try:
+                if text is None:
+                    return
+                self._speak(text)
+            finally:
+                self.q.task_done()
+
+    def _speak(self, text: str) -> None:
+        try:
+            if self.ava is not None:
+                try:
+                    self.ava.speak(text)
+                    return
+                except Exception as e:   # offline, timeout, service error: fall back for this sentence
+                    print(f"[voice] Ava failed ({type(e).__name__}); system voice")
+            self.system.speak(text)
+        except Exception as e:
+            print(f"[say failed: {e}]")
+
+    def wait(self, timeout: float = 30) -> None:
+        """Block until everything queued has been spoken (tests, the end of a script)."""
+        end = time.monotonic() + timeout
+        while self.q.unfinished_tasks and time.monotonic() < end:
+            time.sleep(0.05)
+
+    def close(self) -> None:
+        self.q.put(None)
+        self.worker.join(timeout=10)
+        for v in (self.ava, self.system):
+            if v is not None:
+                try:
+                    v.close()
+                except Exception:
+                    pass
 
 
 def _self_test(patient: str, recalibrate: bool, camera: int) -> None:
