@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LookAt</title>
+<!-- Patient screen (projector). Design "Aurora": frosted glass over slowly drifting light.
+     Night look (17:00-07:00): deep blue, white text, moon.  Day look (07:00-17:00): light blue, near-black text, sun.
+     The switch follows the backend clock and cross-fades (patient-ui.js). Force one with ?theme=day / ?theme=night.
+     Pop-ups bloom out of a glowing orb into a window; the countdown is a light draining around the option.
+     Data: GET /api/screen (docs/API.md). Structure: patient-ui.js + lookat.js. Layout: patient-base.css. -->
+<link rel="stylesheet" href="/web/patient-base.css">
+<style>
+  /* ---------------- night (default) ---------------- */
+  :root {
+    --bg: #050a22;
+    --b1: #1d4ed8; --b2: #0891b2; --b3: #3730a3; --blob-op: .55;
+    --text: #fff; --hint: #a9c6ff; --icon: #c4ecff; --brand-icon: #67e8f9; --bell: #ff9f8a; --ok: #4ade80;
+    --card-bg: rgba(255, 255, 255, .055); --card-border: rgba(190, 225, 255, .24); --card-bw: 1.5px; --card-r: calc(var(--u) * 3.2);
+    --card-shadow: inset 0 1px 0 rgba(255, 255, 255, .14);
+    --dwell-border: #7de3ff; --dwell-glow: 0 0 calc(var(--u) * 4) rgba(80, 220, 255, .5), inset 0 1px 0 rgba(255, 255, 255, .2);
+    --ask-bg: rgba(56, 200, 255, .2); --ask-border: #a5f3fc; --ask-glow: 0 0 calc(var(--u) * 6) rgba(56, 210, 255, .6); --ask-hint: #fff;
+    --chosen-flash: rgba(200, 250, 255, .9);
+    --ring-w: 5; --ring-color: #cffafe; --ring-glow: rgba(34, 211, 238, 1); --ring-track: rgba(165, 243, 252, .12);
+    --panel-bg: rgba(255, 255, 255, .06); --panel-border: rgba(190, 225, 255, .26); --panel-r: calc(var(--u) * 4.5);
+    --panel-shadow: 0 calc(var(--u) * 3) calc(var(--u) * 10) rgba(0, 0, 20, .45), inset 0 1px 0 rgba(255, 255, 255, .16);
+    --win-bg: linear-gradient(160deg, rgba(130, 180, 255, .22), rgba(40, 70, 190, .2)); --win-border: rgba(210, 240, 255, .5); --win-blur: 30px;
+    --win-shadow: 0 0 calc(var(--u) * 10) rgba(80, 160, 255, .35), 0 calc(var(--u) * 3) calc(var(--u) * 10) rgba(0, 0, 25, .5), inset 0 1px 0 rgba(255, 255, 255, .28);
+    --home-behind: blur(18px) brightness(.6);
+    --pulse: rgba(125, 227, 255, .85);
+    --chip-bg: rgba(125, 227, 255, .12); --chip-border: rgba(125, 227, 255, .42); --chip-text: #c7f4ff;
+    --pill-bg: linear-gradient(135deg, rgba(56, 189, 248, .34), rgba(79, 110, 247, .34)); --pill-border: rgba(200, 240, 255, .7);
+    --pill-glow: 0 0 calc(var(--u) * 4) rgba(80, 180, 255, .45), inset 0 1px 0 rgba(255, 255, 255, .25);
+    --bar-bg: rgba(255, 255, 255, .06); --bar-border: rgba(190, 225, 255, .24);
+    --dot: rgba(190, 225, 255, .3); --dot-on: #a5f3fc;
+    --moon-a: #ffffff; --moon-b: #67e8f9; --moon-glow: rgba(103, 232, 249, .75);
+    --demo: rgba(190, 215, 255, .55);
+  }
+
+  /* ---------------- day (07:00-17:00) ---------------- */
+  html[data-theme="day"] {
+    --bg: #e9f3ff;
+    --b1: #93c5fd; --b2: #a5f3fc; --b3: #c7d2fe; --blob-op: .75;
+    --text: #0b1730; --hint: #3d5a85; --icon: #1d4ed8; --brand-icon: #2563eb; --bell: #e0533d; --ok: #16a34a;
+    --card-bg: rgba(255, 255, 255, .55); --card-border: rgba(255, 255, 255, .95);
+    --card-shadow: 0 calc(var(--u) * .8) calc(var(--u) * 3) rgba(30, 64, 140, .1), inset 0 1px 0 #fff;
+    --dwell-border: #3b82f6; --dwell-glow: 0 0 0 calc(var(--u) * .7) rgba(59, 130, 246, .2), 0 calc(var(--u) * 1) calc(var(--u) * 3) rgba(30, 64, 175, .15);
+    --ask-bg: rgba(219, 234, 254, .95); --ask-border: #2563eb; --ask-glow: 0 0 calc(var(--u) * 4) rgba(37, 99, 235, .35); --ask-hint: #1d4ed8;
+    --chosen-flash: rgba(147, 197, 253, .95);
+    --ring-color: #2563eb; --ring-glow: rgba(37, 99, 235, .55); --ring-track: rgba(37, 99, 235, .12);
+    --panel-bg: rgba(255, 255, 255, .45); --panel-border: rgba(255, 255, 255, .9);
+    --panel-shadow: 0 calc(var(--u) * 3) calc(var(--u) * 10) rgba(30, 64, 140, .15), inset 0 1px 0 #fff;
+    --win-bg: linear-gradient(160deg, rgba(255, 255, 255, .78), rgba(224, 236, 255, .68)); --win-border: rgba(255, 255, 255, .95);
+    --win-shadow: 0 calc(var(--u) * 3) calc(var(--u) * 10) rgba(30, 64, 140, .22), 0 0 calc(var(--u) * 8) rgba(96, 165, 250, .3), inset 0 1px 0 #fff;
+    --home-behind: blur(18px) opacity(.5);
+    --pulse: rgba(59, 130, 246, .6);
+    --chip-bg: rgba(37, 99, 235, .1); --chip-border: rgba(37, 99, 235, .3); --chip-text: #1e40af;
+    --pill-bg: linear-gradient(135deg, rgba(255, 255, 255, .9), rgba(219, 234, 254, .9)); --pill-border: #93c5fd;
+    --pill-glow: 0 calc(var(--u) * 1) calc(var(--u) * 4) rgba(37, 99, 235, .2), inset 0 1px 0 #fff;
+    --bar-bg: rgba(255, 255, 255, .5); --bar-border: rgba(255, 255, 255, .95);
+    --dot: rgba(30, 64, 175, .22); --dot-on: #1d4ed8;
+    --sun-a: #fff8db; --sun-b: #f5b82e; --sun-glow: rgba(245, 184, 46, .55);
+    --demo: rgba(30, 60, 110, .5);
+  }
+  html[data-theme="day"] #facehint { background: #fef3c7; border-color: #f59e0b; color: #92400e; }
+  html[data-theme="day"] .instr { color: var(--text); }
+
+  /* frosted glass */
+  .opt, .center, .corner, .panel, footer, .instr { backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); }
+  footer { width: auto; padding: calc(var(--u) * 1.3) calc(var(--u) * 4); border-radius: 99px; }
+  #demotag { color: var(--demo); }
+
+  /* drifting aurora light */
+  .aurora i { position: absolute; border-radius: 50%; filter: blur(9vw); opacity: var(--blob-op); }
+  .aurora .b1 { width: 62vw; height: 62vw; left: -18vw; top: -24vw; background: var(--b1); animation: drift1 28s ease-in-out infinite alternate; }
+  .aurora .b2 { width: 48vw; height: 48vw; right: -12vw; top: 6vh; background: var(--b2); animation: drift2 34s ease-in-out infinite alternate; }
+  .aurora .b3 { width: 60vw; height: 40vw; left: 18vw; bottom: -26vw; background: var(--b3); animation: drift3 30s ease-in-out infinite alternate; }
+  @keyframes drift1 { to { transform: translate(14vw, 10vh) scale(1.1); } }
+  @keyframes drift2 { to { transform: translate(-16vw, 14vh) scale(.9); } }
+  @keyframes drift3 { to { transform: translate(10vw, -12vh) scale(1.15); } }
+
+  /* pop-ups bloom out of an orb of light */
+  @keyframes win-open {
+    0% { transform: scale(.14); border-radius: 50%; filter: blur(22px) brightness(2.6); opacity: .4; }
+    45% { border-radius: calc(var(--u) * 9); filter: blur(5px) brightness(1.4); opacity: 1; }
+  }
+  @keyframes win-close { to { transform: scale(.3); border-radius: 50%; filter: blur(18px) brightness(2); opacity: 0; } }
+  #win.opening .win-in { animation: soft-in .8s ease-out; }
+  @keyframes soft-in { 0%, 35% { opacity: 0; transform: scale(.97); } }
+</style>
+</head>
+<body>
+<div class="bg aurora" aria-hidden="true"><i class="b1"></i><i class="b2"></i><i class="b3"></i></div>
+<script src="/web/lookat.js"></script>
+<script src="/web/patient-ui.js"></script>
+<script>PatientUI.start();</script>
+</body>
+</html>
