@@ -12,6 +12,8 @@ import itertools
 import threading
 import time
 
+from lookat import config
+
 CYCLE_S = 3.0
 
 
@@ -157,7 +159,7 @@ class Fake:
             overlay = {"kind": "call_nurse", "text": "Your nurse has been called"}
         up = bool(focus and focus["state"] == "asking")
         return {"v": 1, **base, "focus": focus, "overlay": overlay, "clock": self.clock(),
-                "room": self.room(), "face": True,
+                "room": self.room(), "face": True, "ask_s": config.ASK_TIMEOUT_S,
                 "brow": {"up": up, "held_s": 0.6 if up else 0.0, "long_s": 2.0}}
 
     def nurse_json(self):

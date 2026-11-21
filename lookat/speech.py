@@ -18,16 +18,20 @@ A line starting with "!" cancels whatever is being said first. Elsewhere: print 
 """
 import subprocess
 import sys
+import time
 from typing import Callable, Optional
 
 RAISE = "Raise your eyebrows."
+REPEAT_S = 8.0          # the same card re-locking within this time is not announced again
+VOICE = "Microsoft Zira Desktop"   # calmer than the default David; falls back if missing
 NURSE_CALLED = "Calling your nurse. Help is on the way."
 # screens whose title is the news (a question or a suggestion); on the others it's a live
 # status like "The room is 23.4 °C" that must not be read out again every time it changes
 TITLE_IS_NEWS = ("suggestion", "checkin", "assistant", "nurse", "room")
 
 _SCRIPT = ("[Console]::InputEncoding = [Text.Encoding]::UTF8; Add-Type -AssemblyName System.Speech; "
-           "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; $s.Rate = 1; "
+           "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
+           f"try {{ $s.SelectVoice('{VOICE}') }} catch {{ }}; $s.Rate = 0; $s.Volume = 100; "
            "while ($null -ne ($l = [Console]::In.ReadLine())) { "
            "if ($l.StartsWith('!')) { $s.SpeakAsyncCancelAll(); $l = $l.Substring(1) }; "
            "if ($l.Length -gt 0) { [void]$s.SpeakAsync($l) } }")
@@ -99,9 +103,11 @@ def screen_line(screen: dict) -> str:
 
 
 class Announcer:
-    def __init__(self, say: Callable[[str], None]):
+    def __init__(self, say: Callable[[str], None], clock: Callable[[], float] = time.monotonic):
         self.say = say
-        self._asking: Optional[tuple] = None   # (screen key, spot) of the lock already announced
+        self.clock = clock
+        self._asking: Optional[tuple] = None   # (screen key, spot) of the current lock
+        self._said_lock: dict = {}             # (screen key, spot) -> when it was last announced
         self._screen: Optional[tuple] = None
 
     def update(self, screen: dict, focus: Optional[dict], chosen: Optional[str], events=()) -> Optional[str]:
@@ -124,8 +130,11 @@ class Announcer:
         asking = (key, focus["spot"]) if focus and focus.get("state") == "asking" else None
         if asking and asking != self._asking:
             label = _label(screen, focus["spot"])
-            if label:
+            t = self.clock()
+            # gaze often drops and re-locks the same card: say it once, not every re-lock
+            if label and (chosen or t - self._said_lock.get(asking, -1e9) >= REPEAT_S):
                 parts.append(f"{label}. {RAISE}")
+                self._said_lock[asking] = t
         self._asking = asking
 
         text = " ".join(p for p in parts if p)

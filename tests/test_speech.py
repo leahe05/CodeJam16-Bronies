@@ -13,9 +13,9 @@ def screen(kind="idle", title="You're all set.", left="Room Controls", middle="T
     return s
 
 
-def announcer():
+def announcer(t=None):
     said = []
-    return Announcer(said.append), said
+    return Announcer(said.append, clock=(lambda: t[0]) if t else (lambda: 0.0)), said
 
 
 def test_lock_says_label_and_raise_once():
@@ -28,12 +28,18 @@ def test_lock_says_label_and_raise_once():
     assert said == [f"Room Controls. {RAISE}"]          # said once per lock, not every frame
 
 
-def test_looking_away_and_back_says_it_again():
-    a, said = announcer()
+def test_relocking_the_same_card_is_not_repeated_right_away():
+    t = [0.0]
+    a, said = announcer(t)
     idle = screen()
     a.update(idle, {"spot": "left", "state": "asking"}, None)
     a.update(idle, None, None)
-    a.update(idle, {"spot": "left", "state": "asking"}, None)
+    t[0] = 3.0
+    a.update(idle, {"spot": "left", "state": "asking"}, None)     # gaze flicker: quiet
+    assert len(said) == 1
+    a.update(idle, None, None)
+    t[0] = 12.0
+    a.update(idle, {"spot": "left", "state": "asking"}, None)     # much later: said again
     assert len(said) == 2
 
 

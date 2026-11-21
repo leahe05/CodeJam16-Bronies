@@ -78,7 +78,8 @@ class Live:
                 return []
             out = list(self.sm.tick(now, busy=self.machine.busy))
             self.chosen = None                    # label chosen this frame (operator feedback)
-            for action in self.machine.step(now, spot, events, face, self.sm.active_spots()):
+            holding = bool(self.brow.get("up"))   # a raise in progress: wait for it to come down
+            for action in self.machine.step(now, spot, events, face, self.sm.active_spots(), holding=holding):
                 if action[0] == "call_nurse":
                     out += self.sm.call_nurse(now)
                 elif action[0] == "select":
@@ -159,7 +160,7 @@ class Live:
         return {"v": 1, **v, "focus": None if self.calibration else self.machine.view(),
                 "clock": {"time": clock.hhmm(), "demo": clock.demo},
                 "room": {k: r[k] for k in ("temp_c", "setpoint_c", "lamp_on", "fan_on")},
-                "face": self.face,
+                "face": self.face, "ask_s": config.ASK_TIMEOUT_S,
                 "brow": {"up": bool(self.brow.get("up")), "held_s": round(float(self.brow.get("held_s", 0.0)), 2),
                          "long_s": config.EMERGENCY_S}}
 

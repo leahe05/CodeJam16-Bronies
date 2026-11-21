@@ -84,7 +84,8 @@
   /** The hint line; turns into "Raise your eyebrows" while that spot is asking. */
   const hintTag = (o, spot) => `<small data-hint="${esc(hint(o, spot))}">${esc(hint(o, spot))}</small>`;
   // ---------------- countdown: a light that drains around the asking option's border ----------------
-  const ASK_S = 3;   // config.ASK_TIMEOUT_S: the patient has 3 s to raise their eyebrows
+  const ASK_S = 4;   // default for config.ASK_TIMEOUT_S; the backend sends the real value as d.ask_s
+  let askS = ASK_S;
 
   function roundedPath(w, h, r, i) {   // rounded rect starting at top-center, clockwise, inset by i
     const x = i, y = i, W = w - 2 * i, H = h - 2 * i;
@@ -109,7 +110,7 @@
     const c = document.createElement("span");
     c.className = "countdown";
     c.setAttribute("aria-hidden", "true");
-    c.style.setProperty("--ask", ASK_S + "s");
+    c.style.setProperty("--ask", askS + "s");
     c.innerHTML = '<svg class="ring"><path class="ring-track"/><path class="ring-left" pathLength="100"/></svg>'
       + '<span class="tank"><i class="liquid"><svg class="wave" viewBox="0 0 200 12" preserveAspectRatio="none"><path d="M0 6 Q25 0 50 6 T100 6 T150 6 T200 6 V12 H0 Z"/></svg></i></span>';
     el.appendChild(c);
@@ -197,6 +198,7 @@
       try {
         const r = await fetch(url, { cache: "no-store" });
         const raw = await r.json();
+        if (raw && raw.ask_s > 0) askS = raw.ask_s;
         let d = raw;
         if (opts && opts.view) { try { d = opts.view(raw) || raw; } catch (e) { console.error(e); } }
         fails = 0;

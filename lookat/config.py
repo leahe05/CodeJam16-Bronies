@@ -20,7 +20,8 @@ def saved_env(name: str, default: Optional[str] = None) -> Optional[str]:
 # Interaction timing (seconds)
 DWELL_S = 1.0          # look at a spot this long -> it is highlighted and locked
 CONFIRM_S = 0.3        # eyebrow raise held this long = choose
-ASK_TIMEOUT_S = 3.0    # the raise must come within this time after the spot locks
+ASK_TIMEOUT_S = 4.0    # the raise must START within this time after the spot locks (the voice
+                       # names the card first); a raise already in progress is waited for
 COOLDOWN_S = 1.0       # pause after a choice (then the patient must look away before choosing again)
 EMERGENCY_S = 2.0      # eyebrow held this long = Call Nurse, on any screen
 MOUTH_CONFIRM_S = 0.7  # backup confirm: jaw open held this long
