@@ -73,6 +73,16 @@ p, li { line-height: 1.5; overflow-wrap: anywhere; }
 .connection[data-state="partial"] { background: #f8ebd0; color: #725117; }
 .panel { background: white; border: 1px solid var(--line); border-radius: 1rem; padding: clamp(1rem, 3vw, 1.5rem); }
 .intervention { border-top: 4px solid #53779d; }
+.request-queue { border-top: 4px solid #335579; }
+.request-list:has(.alert-card) { grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr)); }
+.request-list .alert-card { display: flex; flex-direction: column; }
+.request-list .alert-actions { margin-top: auto; padding-top: .75rem; }
+.request-list .alert-card h3 { font-size: 1.12rem; line-height: 1.35; }
+.priority-label { border-radius: 2rem; padding: .18rem .55rem; background: #dfeaf6; color: #294b6b; font-weight: 750; }
+.alert-card[data-priority="urgent"] { background: #fff0f1; border-left-color: var(--urgent); }
+.alert-card[data-priority="urgent"] .priority-label { background: #f4d4d9; color: #7a1f2b; }
+.alert-card[data-priority="soon"] { background: #fff7e6; border-left-color: #a16a15; }
+.alert-card[data-priority="soon"] .priority-label { background: #f5e1b7; color: #65440f; }
 .supervisor { border-top: 4px solid var(--blue); }
 .proposal-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr)); gap: .75rem; margin-top: .9rem; }
 .proposal { display: flex; flex-direction: column; }
@@ -88,6 +98,9 @@ p, li { line-height: 1.5; overflow-wrap: anywhere; }
 .shift-feed li + li { border-top: 1px solid var(--line); }
 .shift-feed time { color: var(--muted); font-size: .8rem; font-variant-numeric: tabular-nums; }
 .shift-response { display: block; color: var(--blue); font-size: .85rem; margin-top: .15rem; }
+.demo-camera { display: block; margin: .5rem 0 .75rem; padding: .55rem .7rem; border-radius: .5rem; background: #e6eef8; color: #244a76; font-weight: 650; }
+.demo-camera:hover { background: #d9e7f6; }
+.demo-camera small { display: block; font-weight: 400; color: var(--muted); }
 .simulation { display: grid; justify-items: start; gap: .6rem; }
 .simulation a.button { text-decoration: none; }
 .alert-list { display: grid; gap: .7rem; margin-top: .9rem; }
@@ -98,8 +111,6 @@ p, li { line-height: 1.5; overflow-wrap: anywhere; }
   border-radius: .65rem;
   background: #f7fafc;
 }
-.alert-card[data-urgent="true"] { background: #fff2f2; border-left-color: var(--urgent); }
-.alert-card[data-urgent="true"] .alert-kind { background: #f8dce0; color: #86232e; }
 .alert-meta { justify-content: flex-start; font-size: .875rem; color: var(--muted); }
 .alert-origin { font-weight: 650; }
 .patient-link {

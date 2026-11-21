@@ -7,7 +7,7 @@ import time
 from lookat import nurse_ai
 from lookat.fake_api import Fake, opt, screen
 from lookat.nurse_link import NurseLink
-from lookat.nurse_shift import ShiftPlayback
+from lookat.nurse_shift import SHIFT_CAMERAS, ShiftPlayback
 from lookat.nurse_supervisor import DEFAULT_INTERVAL_S, NurseSupervisor
 from lookat.server import make_app
 
@@ -179,16 +179,18 @@ class SimulatedPatient(Fake):
             request = body.get("request")
             reason = body.get("reason")
             urgent = body.get("urgent", False)
+            time_sensitive = body.get("time_sensitive", False)
             request_id = body.get("request_id")
             if (not isinstance(request, str) or not request.strip() or len(request) > 300
                     or (reason is not None and (not isinstance(reason, str) or len(reason) > 300))
                     or not isinstance(urgent, bool)
+                    or not isinstance(time_sensitive, bool)
                     or (request_id is not None and (not isinstance(request_id, str) or not request_id or len(request_id) > 100))):
                 return {"ok": False, "error": "Enter a request and valid optional reason, urgency and request ID."}
             with self.lock:
                 alert_id, created = self.supervisor.receive_request(
                     self.patient_id, request.strip(), at=self.interaction_time(),
-                    reason=reason, urgent=urgent, request_id=request_id,
+                    reason=reason, urgent=urgent, time_sensitive=time_sensitive, request_id=request_id,
                 )
                 if created:
                     self._interaction("Patient agent", "Requested help", request.strip())
@@ -353,7 +355,8 @@ class ShiftPatient(SimulatedPatient):
             self._interaction("Patient agent", "Reported status", update.status)
             if update.delivery == "proactive":
                 self.supervisor.receive_request(self.patient_id, update.request, at=entry["time"],
-                                                reason=update.status)
+                                                reason=update.status, urgent=update.urgent,
+                                                time_sensitive=update.time_sensitive)
                 entry["response"] = "Supervisor alerted the nurse"
                 self._interaction("Nurse supervisor", "Forwarded to nurse", update.request)
             elif update.delivery in ("scheduled", "question"):
@@ -373,7 +376,8 @@ class ShiftPatient(SimulatedPatient):
                     self._interaction("Nurse supervisor", "Queued for review", steps[0]["question"])
                 else:
                     requests.append({"request": update.request, "at": entry["time"],
-                                     "reason": update.status, "request_id": event_id})
+                                     "reason": update.status, "request_id": event_id,
+                                     "urgent": update.urgent, "time_sensitive": update.time_sensitive})
                     entry["response"] = "Supervisor alerted the nurse at check-in"
                     self._interaction("Nurse supervisor", "Forwarded to nurse", update.request)
             self._pending_updates.clear()
@@ -395,6 +399,7 @@ class ShiftPatient(SimulatedPatient):
         return {
             **super().nurse_json(),
             "shift": {"state": self.playback.state, "feed": self.shift_feed,
+                      "camera": SHIFT_CAMERAS[self.patient_id],
                       "queued_questions": len(self.supervisor.pending_questions(self.patient_id))},
         }
 

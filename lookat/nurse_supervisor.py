@@ -84,17 +84,25 @@ class NurseSupervisor:
         with self._lock:
             return self._receive_request(patient_id, request, **details)
 
-    def _receive_request(self, patient_id, request, *, at, reason=None, urgent=False,
+    def _receive_request(self, patient_id, request, *, at, reason=None, urgent=False, time_sensitive=False,
                          request_id=None, kind="page", delivery="proactive"):
         requests = self._requests[patient_id]
         if request_id is not None:
             previous = next((item for item in requests if item["_request_id"] == request_id), None)
             if previous:
                 return previous["id"], False
-        alert_id = f"agent-{next(self._ids)}"
+        order = next(self._ids)
+        alert_id = f"agent-{order}"
+        if kind == "call" or urgent:
+            priority, rank = "urgent", 2
+        elif time_sensitive:
+            priority, rank = "soon", 1
+        else:
+            priority, rank = "routine", 0
         requests.appendleft({
             "id": alert_id, "_request_id": request_id, "time": at, "kind": kind,
-            "urgency": "urgent" if urgent else "normal", "source": "patient",
+            "urgency": "urgent" if priority == "urgent" else "normal", "source": "patient",
+            "priority": {"level": priority, "rank": rank, "order": order},
             "request": None if kind == "call" else request, "text": request, "reason": reason,
             "delivery": delivery, "done": False, "actions": [{"id": "ack", "label": "On my way"}],
         })
@@ -102,7 +110,10 @@ class NurseSupervisor:
 
     def alerts(self, patient_id):
         with self._lock:
-            return [dict(alert) for alert in self._requests[patient_id]]
+            ordered = sorted(self._requests[patient_id], key=lambda alert: (
+                alert["done"], -alert["priority"]["rank"], alert["priority"]["order"],
+            ))
+            return [dict(alert) for alert in ordered]
 
     def acknowledge(self, patient_id, alert_id):
         with self._lock:

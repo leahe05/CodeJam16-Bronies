@@ -21,6 +21,14 @@
       <p id="connection-summary" class="connection" role="status">Connecting to LookAt…</p>
     </div>
 
+    <section id="request-queue" class="panel request-queue" aria-labelledby="request-heading">
+      <div class="section-heading">
+        <h2 id="request-heading">Patient requests</h2>
+        <span id="queue-count" class="count" role="status">Checking for requests…</span>
+      </div>
+      <div id="alerts" class="alert-list request-list"><p class="empty">Waiting for agent updates.</p></div>
+    </section>
+
     <section id="shift-panel" class="panel shift-panel" aria-labelledby="shift-heading" hidden>
       <div class="section-heading">
         <div>
@@ -48,8 +56,8 @@
     </div>
     <p id="alert-announcement" class="visually-hidden" role="alert"></p>
     <section id="attention" class="panel intervention" role="tabpanel" aria-labelledby="attention-tab" tabindex="0" hidden>
-      <h2>Open requests</h2>
-      <div id="alerts" class="alert-list"><p class="empty">Checking for alerts…</p></div>
+      <h2>Request history</h2>
+      <p id="handled-empty" class="empty">No handled requests yet.</p>
       <details id="history" class="history" hidden>
         <summary id="history-label">Handled alerts</summary>
         <div id="handled" class="alert-list"></div>

@@ -4,7 +4,13 @@ const nursePath = "/api/nurse";
 const savedAgentsKey = "lookat.nurse.agents";
 const $ = id => document.getElementById(id);
 const list = value => Array.isArray(value) ? value.filter(item => item != null) : [];
-const urgent = alert => alert.kind === "call" || alert.urgency === "urgent";
+const priorityLevels = { urgent: { label: "Urgent", rank: 2 }, soon: { label: "Soon", rank: 1 },
+  routine: { label: "Routine", rank: 0 } };
+const priorityLevel = alert => {
+  if (alert.kind === "call" || alert.urgency === "urgent") return "urgent";
+  return Object.hasOwn(priorityLevels, alert.priority?.level) ? alert.priority.level : "routine";
+};
+const urgent = alert => priorityLevel(alert) === "urgent";
 const alertKinds = { call: "Nurse call", page: "Intervention requested", flag: "Patient preference", info: "Update" };
 const agents = new Map();
 let selected = "";
@@ -277,8 +283,10 @@ function openPatient(origin) {
 
 function alertCard({ agent, alert }, handled) {
   const card = element("article", "alert-card");
-  card.dataset.urgent = String(urgent(alert) && !handled);
+  const priority = priorityLevel(alert);
+  card.dataset.priority = handled ? "handled" : priority;
   const meta = element("div", "alert-meta");
+  if (!handled) meta.append(element("span", "priority-label", priorityLevels[priority].label));
   meta.append(element("span", "alert-kind", alertKinds[alert.kind] || "Alert"),
     element("span", "alert-origin", alertOrigin(alert)),
     button([agentName(agent), agent.data?.patient?.room].filter(Boolean).join(" · "), "patient-link", () =>
@@ -307,19 +315,27 @@ function alertCard({ agent, alert }, handled) {
 function renderAlerts() {
   const entries = [...agents.values()].flatMap(agent => list(agent.data?.alerts).map(alert => ({ agent, alert })));
   const pending = entries.filter(entry => !entry.alert.done)
-    .sort((left, right) => Number(urgent(right.alert)) - Number(urgent(left.alert)));
+    .sort(({ alert: left }, { alert: right }) => {
+      const priority = priorityLevels[priorityLevel(right)].rank - priorityLevels[priorityLevel(left)].rank;
+      const time = (left.time || "").localeCompare(right.time || "");
+      return priority || time || (left.priority?.order ?? 0) - (right.priority?.order ?? 0);
+    });
   const handled = entries.filter(entry => entry.alert.done);
   const signature = ({ agent, alert }) => [agent.origin, agentName(agent), agent.data?.patient?.room, agent.state, agent.busy, alert];
   const complete = [...agents.values()].every(agent => agent.state === "online" && agent.data.connected !== false);
-  const empty = complete ? "No open alerts." : "Waiting for agent updates.";
+  const empty = complete ? "No open requests." : "Waiting for agent updates.";
   updateRegion($("alerts"), [empty, pending.map(signature)], () =>
     pending.length ? pending.map(entry => alertCard(entry, false)) : [element("p", "empty", empty)]);
   updateRegion($("handled"), handled.map(signature), () => handled.map(entry => alertCard(entry, true)));
   $("history").hidden = !handled.length;
+  $("handled-empty").hidden = Boolean(handled.length);
   updateText($("history-label"), `Handled alerts (${handled.length})`);
   $("alert-count").hidden = !pending.length;
   updateText($("alert-count"), String(pending.length));
-  $("alert-count").dataset.urgent = String(pending.some(entry => urgent(entry.alert)));
+  const hasUrgent = pending.some(entry => urgent(entry.alert));
+  $("alert-count").dataset.urgent = String(hasUrgent);
+  $("queue-count").dataset.urgent = String(hasUrgent);
+  updateText($("queue-count"), complete || pending.length ? `${pending.length} open` : "Checking for requests…");
 }
 
 function renderShift(roster) {
@@ -335,10 +351,22 @@ function renderShift(roster) {
   }[state]);
   $("start-shift").hidden = state !== "ready";
   $("start-shift").disabled = first.busy || first.state !== "online";
-  updateRegion($("shift-feeds"), patients.map(agent => [agentName(agent), agent.data.patient.room, agent.data.shift.feed]),
+  updateRegion($("shift-feeds"), patients.map(agent => [
+    agentName(agent), agent.data.patient.room, agent.data.shift.camera, agent.data.shift.feed
+  ]),
     () => patients.map(agent => {
       const card = element("article", "shift-feed");
       card.append(element("h3", "", [agentName(agent), agent.data.patient.room].filter(Boolean).join(" · ")));
+      const camera = agent.data.shift.camera;
+      if (typeof camera?.url === "string" && camera.url.startsWith("https://")) {
+        const link = element("a", "demo-camera", camera.name);
+        link.id = "demo-camera-" + encodeURIComponent(agent.origin);
+        link.href = camera.url;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        link.append(element("small", "", "Demo camera · Opens in new tab"));
+        card.append(link);
+      }
       const updates = list(agent.data.shift.feed);
       if (!updates.length) {
         card.append(element("p", "muted", "Waiting for the first patient-agent update."));

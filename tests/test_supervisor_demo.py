@@ -149,12 +149,15 @@ def test_shift_streams_route_requests_and_keep_patient_specific_questions_queued
     water_id = avery.nurse_json()["alerts"][0]["id"]
     assert avery.nurse_action("alert", {"id": water_id, "action": "ack"})["ok"]
     assert avery.nurse_json()["shift"]["feed"][1]["response"] == "Nurse acknowledged · On my way"
-    assert "massage" in morgan.nurse_json()["alerts"][0]["request"]
+    proactive = morgan.nurse_json()["alerts"]
+    assert [alert["priority"]["level"] for alert in proactive] == ["urgent", "routine"]
+    assert "massage" in proactive[1]["request"]
     assert not avery.proposal() and not morgan.proposal()
     assert "Waiting" in avery.nurse_json()["shift"]["feed"][2]["response"]
 
     avery.supervisor.check_patients()
     assert {alert["delivery"] for alert in morgan.nurse_json()["alerts"]} == {"check-in", "proactive"}
+    assert [alert["priority"]["level"] for alert in morgan.nurse_json()["alerts"]] == ["urgent", "soon", "routine"]
     morgan_requests = [alert["request"] for alert in morgan.nurse_json()["alerts"]]
     assert any("brief" in request for request in morgan_requests)
     assert any("sitting upright" in request for request in morgan_requests)
@@ -173,9 +176,22 @@ def test_shift_starts_on_request_and_completes_after_both_feeds():
                               ShiftUpdate(0, "morgan", "Morgan update")))
     avery, morgan = make_demo_patients(playback=playback)
     assert avery.nurse_json()["shift"]["state"] == "ready"
+    assert "Penguin Cam" in avery.nurse_json()["shift"]["camera"]["name"]
+    assert "Elephant Cam" in morgan.nurse_json()["shift"]["camera"]["name"]
     assert avery.nurse_action("shift/start", {})["ok"]
     assert morgan.nurse_json()["shift"]["state"] == "running"
     playback.run(threading.Event(), {"avery": avery, "morgan": morgan})
     assert avery.nurse_json()["shift"]["state"] == "complete"
     assert [entry["status"] for entry in avery.nurse_json()["shift"]["feed"]] == ["Avery update"]
     assert [entry["status"] for entry in morgan.nurse_json()["shift"]["feed"]] == ["Morgan update"]
+
+
+def test_supervisor_ranks_requests_with_fifo_within_priority_and_preserves_legacy_calls():
+    avery, _ = make_demo_patients()
+    avery.nurse_action("patient/request", {"request": "Water"})
+    avery.nurse_action("patient/request", {"request": "Help soon", "time_sensitive": True})
+    avery.nurse_action("patient/request", {"request": "Help now", "urgent": True, "time_sensitive": True})
+    avery.demo_action({"action": "call_nurse"})
+    alerts = avery.nurse_json()["alerts"]
+    assert [alert["text"] for alert in alerts] == ["Help now", "Patient used the call signal", "Help soon", "Water"]
+    assert [alert["priority"]["level"] for alert in alerts] == ["urgent", "urgent", "soon", "routine"]
