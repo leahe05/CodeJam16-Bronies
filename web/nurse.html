@@ -21,33 +21,23 @@
       <p id="connection-summary" class="connection" role="status">Connecting to LookAt…</p>
     </div>
 
+    <div id="shift-controls" class="shift-controls" hidden>
+      <div>
+        <p id="shift-status" role="status"></p>
+        <p id="shift-ai-status" class="muted"></p>
+      </div>
+      <button id="start-shift" class="button primary" type="button">Start shift</button>
+      <button id="end-shift" class="button" type="button" hidden>End shift</button>
+    </div>
+
     <section id="request-queue" class="panel request-queue" aria-labelledby="request-heading">
       <div class="section-heading">
         <h2 id="request-heading">Patient requests</h2>
         <span id="queue-count" class="count" role="status">Checking for requests…</span>
       </div>
-      <div id="alerts" class="alert-list request-list"><p class="empty">Waiting for agent updates.</p></div>
-    </section>
-
-    <section id="shift-panel" class="panel shift-panel" aria-labelledby="shift-heading" hidden>
-      <div class="section-heading">
-        <div>
-          <h2 id="shift-heading">Shift feeds</h2>
-          <p id="shift-status" class="muted" role="status"></p>
-          <p id="shift-ai-status" class="muted"></p>
-        </div>
-        <button id="start-shift" class="button primary" type="button">Start shift</button>
-        <button id="end-shift" class="button" type="button" hidden>End shift</button>
+      <div id="alerts" class="alert-list request-list" tabindex="0" aria-label="Open patient requests">
+        <p class="empty">Waiting for agent updates.</p>
       </div>
-      <div id="shift-feeds" class="shift-feeds"></div>
-    </section>
-
-    <section id="supervisor-panel" class="panel supervisor" aria-labelledby="supervisor-heading" hidden>
-      <div class="section-heading">
-        <h2 id="supervisor-heading">Suggested check-ins</h2>
-        <span id="supervisor-mode" class="muted">Two-patient simulation</span>
-      </div>
-      <div id="proposals" class="proposal-list" aria-live="polite"></div>
     </section>
 
     <div class="tabs" role="tablist" aria-label="Nurse dashboard views">
@@ -87,19 +77,37 @@
             <h2 id="details-heading" tabindex="-1">Patient status</h2>
             <p id="patient-status" class="muted" role="status">Waiting for patient data…</p>
           </div>
-          <button id="visit" class="button" type="button" hidden>Log visit</button>
+          <a id="patient-screen" class="button" target="_blank" rel="noopener" hidden>Open patient screen</a>
         </div>
-        <div id="notes"></div>
-        <section id="history-panel" class="note" aria-labelledby="history-heading" hidden>
-          <div class="section-heading">
-            <h3 id="history-heading">Chat history</h3>
-            <small id="history-source" class="muted" hidden></small>
-          </div>
-          <div id="chat-history"></div>
-        </section>
-        <section id="simulation" class="note simulation" hidden></section>
         <div id="patient-actions" hidden>
-          <form id="presence-form" class="note">
+          <form id="question-form" class="question-composer" aria-labelledby="composer-heading">
+            <h3 id="composer-heading">Ask the patient</h3>
+            <label for="question">Question</label>
+            <textarea id="question" rows="2" maxlength="300" required></textarea>
+            <label for="options" id="options-label">Answer choices, one per line</label>
+            <textarea id="options" rows="2" maxlength="500" required>Yes
+No</textarea>
+            <div class="form-row">
+              <button id="send-question" class="button primary" type="submit">Send question</button>
+              <button id="suggest-choices" class="button" type="button" hidden>Suggest choices</button>
+              <button id="end-session" class="button" type="button" hidden>End conversation</button>
+            </div>
+          </form>
+          <div id="latest-reply" class="latest-reply" role="status" hidden></div>
+          <section id="simulated-reply" class="note simulation" aria-label="Simulate patient reply" hidden></section>
+        </div>
+        <details id="profile-details" class="profile-details" hidden>
+          <summary>Patient profile and history</summary>
+          <div id="notes"></div>
+          <section id="history-panel" class="note" aria-labelledby="history-heading" hidden>
+            <div class="section-heading">
+              <h3 id="history-heading">Chat history</h3>
+              <small id="history-source" class="muted" hidden></small>
+            </div>
+            <div id="chat-history"></div>
+          </section>
+          <section id="simulation" class="note simulation" hidden></section>
+          <form id="presence-form" class="note" hidden>
             <label for="presence">Visitor status</label>
             <div class="form-row">
               <select id="presence">
@@ -110,22 +118,24 @@
               <button id="save-presence" class="button" type="submit">Save status</button>
             </div>
           </form>
-          <form id="question-form" class="note">
-            <h3>Message the patient</h3>
-            <label for="question">Question</label>
-            <textarea id="question" rows="2" maxlength="300" required></textarea>
-            <label for="options" id="options-label">Answer choices, one per line</label>
-            <textarea id="options" rows="3" maxlength="500" required>Yes
-No</textarea>
-            <div class="form-row">
-              <button id="suggest-choices" class="button" type="button" hidden>Suggest choices</button>
-              <button id="send-question" class="button primary" type="submit">Send question</button>
-              <button id="end-session" class="button" type="button" hidden>End conversation</button>
-            </div>
-          </form>
-        </div>
+          <button id="visit" class="button profile-visit" type="button" hidden>Log visit</button>
+        </details>
       </section>
     </div>
+
+    <section id="supervisor-panel" class="panel supervisor" aria-labelledby="supervisor-heading" hidden>
+      <div class="section-heading">
+        <h2 id="supervisor-heading">Suggested check-ins</h2>
+        <span id="supervisor-mode" class="muted">Two-patient simulation</span>
+      </div>
+      <div id="proposals" class="proposal-list" aria-live="polite"></div>
+    </section>
+
+    <section id="shift-panel" class="panel shift-panel" aria-labelledby="shift-heading" hidden>
+      <h2 id="shift-heading">Shift feeds</h2>
+      <div id="shift-feeds" class="shift-feeds"></div>
+    </section>
+
     <p id="feedback" class="feedback" role="status" hidden></p>
   </main>
 </body>

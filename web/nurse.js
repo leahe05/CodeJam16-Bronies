@@ -274,9 +274,10 @@ function alertOrigin(alert) {
   return "Source unreported";
 }
 
-function openPatient(origin) {
+function openPatient(origin, showProfile = false) {
   selected = origin;
   showTab("patients");
+  $("profile-details").open = showProfile;
   render();
   $("details-heading").focus();
 }
@@ -365,6 +366,7 @@ function cameraLink(camera, id) {
 function renderShift(roster) {
   const patients = roster.filter(agent => agent.data?.shift);
   const first = patients[0];
+  $("shift-controls").hidden = !first;
   $("shift-panel").hidden = !first;
   if (!first) return;
   const state = first.data.shift.state;
@@ -484,53 +486,43 @@ function summaryLabel(summary) {
 }
 
 function tileStatus(data) {
-  const bedside = data?.bedside;
-  const profile = data?.profile;
-  const temperature = profile?.room?.temp_c ?? data?.room?.temp_c;
-  const summary = bedside?.interaction_summary;
-  const vitals = vitalLines(profile?.vitals?.current ?? bedside?.vitals);
+  const temperature = data.profile?.room?.temp_c ?? data.room?.temp_c;
+  const openRequests = list(data.alerts).filter(alert => !alert.done).length;
   const metrics = element("span", "tile-metrics");
-  const meal = elapsedMeal(profile?.last_meal?.minutes_since);
   for (const text of [
-    awarenessLabel(profile?.awareness ?? bedside?.awareness),
-    presenceLabel(profile?.visitors_present ?? bedside?.visitors_present),
-    Number.isFinite(temperature) ? `Room ${temperature} °C` : "Room temperature unavailable",
-    meal && "Meal " + meal
+    Number.isFinite(temperature) ? `Room ${temperature} °C` : null,
+    openRequests && `${openRequests} open ${openRequests === 1 ? "request" : "requests"}`
   ].filter(Boolean)) {
     metrics.append(element("span", "metric", text));
   }
-  const vitalsLine = element("span", "tile-vitals");
-  vitalsLine.append(element("strong", "", profile?.vitals?.source === "simulated" || bedside?.vitals?.simulated ?
-    "Simulated vitals" : "Vitals"),
-    element("span", "", vitals.join(" · ") || "Unavailable"));
-  const summaryLine = element("span", "tile-summary");
-  const summaryHeading = element("span", "summary-heading");
-  summaryHeading.append(element("strong", "", summaryLabel(summary)));
-  if (summary?.time) summaryHeading.append(element("time", "", summary.time));
-  summaryLine.append(summaryHeading, element("span", "", summary?.text || "No summary from the patient AI yet."));
-  return [metrics, vitalsLine, summaryLine];
+  return metrics.childElementCount ? metrics : null;
 }
 
 function renderRoster() {
   const roster = [...agents.values()];
   updateRegion($("patients"), [selected, roster.map(agent =>
     [agent.origin, agentName(agent), agent.data?.patient?.room, agentStatus(agent), agent.busy,
-      agent.data?.bedside, agent.data?.room?.temp_c, agent.data?.profile?.vitals?.current,
-      agent.data?.profile?.last_meal])], () =>
+      agent.data?.profile?.room?.temp_c ?? agent.data?.room?.temp_c,
+      list(agent.data?.alerts).filter(alert => !alert.done).length])], () =>
     roster.map(agent => {
       const item = element("li", "patient-item");
-      const tile = button("", "patient-tile", () => openPatient(agent.origin));
+      const tile = button("", "patient-tile", () => openPatient(agent.origin, true));
       tile.id = "patient-" + encodeURIComponent(agent.origin);
       tile.setAttribute("aria-pressed", String(agent.origin === selected));
+      tile.setAttribute("aria-controls", "profile-details");
       tile.append(element("strong", "patient-name", agentName(agent)),
         element("span", "patient-meta", [agent.data?.patient?.room, agentStatus(agent)].filter(Boolean).join(" · ")));
-      if (agent.data) tile.append(...tileStatus(agent.data));
+      const status = agent.data && tileStatus(agent.data);
+      if (status) tile.append(status);
       item.append(tile);
       if (agent.origin && !agent.demo) {
         const disconnect = button("Disconnect", "disconnect", () => {
           clearTimeout(agent.timer);
           agents.delete(agent.origin);
-          if (selected === agent.origin) selected = "";
+          if (selected === agent.origin) {
+            selected = "";
+            $("profile-details").open = false;
+          }
           storeAgents();
           render();
           notify("Disconnected " + agentName(agent) + ".");
@@ -656,6 +648,7 @@ function patientNotes(data) {
         checkIn.suggested_question ? "Suggested a question" : "Nothing needs attention")
     ]),
     note("For next visit", list(data.next_visit)),
+    note("Nurse visits", [data.last_visit && "Last visit " + data.last_visit]),
     note("Conversation", [
       session.waiting ? "Waiting for a patient answer" : session.active ? "Session active" : null,
     ]),
@@ -670,6 +663,7 @@ function patientNotes(data) {
       [routine.text, routine.status, routine.evidence].filter(Boolean).join(" · "))),
     note("Recent activity", list(data.recent).slice(0, 5).map(entry =>
       [entry.time, entry.text].filter(Boolean).join(" · "))),
+    note(summaryLabel(bedside?.interaction_summary), [bedside?.interaction_summary?.text]),
     note("Shift summary", [data.summary])
   ].filter(Boolean);
 }
@@ -714,6 +708,9 @@ function renderPatientActions(agent, data) {
   $("visit").hidden = !data;
   $("visit").disabled = disabled;
   $("patient-actions").hidden = !data;
+  $("profile-details").hidden = !data;
+  $("patient-screen").hidden = !data;
+  $("patient-screen").href = agent.origin + "/patient";
   $("presence-form").hidden = !data?.bedside;
   updateText($("options-label"), data?.simulation ? "Two answer choices, one per line" : "Answer choices, one per line");
   $("presence").disabled = $("save-presence").disabled = disabled;
@@ -729,20 +726,28 @@ function renderPatientActions(agent, data) {
   if ($("options").value !== (agent.options ?? "Yes\nNo")) $("options").value = agent.options ?? "Yes\nNo";
 }
 
+function renderLatestReply(data) {
+  const region = $("latest-reply");
+  const waiting = data?.session?.waiting;
+  const latest = list(data?.session?.thread).at(-1);
+  region.hidden = !waiting && latest?.answer == null;
+  updateRegion(region, [waiting, latest], () => {
+    if (region.hidden) return [];
+    const status = element("strong", "", waiting ? "Waiting for a patient answer" : "Latest answer");
+    if (!latest || (waiting && latest.answer != null)) return [status];
+    const question = element("p", "muted", latest.question);
+    return waiting ? [status, question] : [status, element("p", "reply-answer", latest.answer), question];
+  });
+}
+
 function renderSimulation(agent, data) {
   const panel = $("simulation");
-  panel.hidden = !data;
-  const q = data?.session?.waiting ? list(data.session.thread).at(-1) : null;
+  panel.hidden = !data?.simulation;
   const choices = list(data?.profile?.care_choices);
-  updateRegion(panel, [agent.origin, data?.simulation, data?.tracked_demo, data?.agent_checkin?.interval_s, choices,
-    q, agent.state, agent.busy], () => {
-    if (!data) return [];
-    const link = element("a", "button", "Open patient screen");
-    link.href = agent.origin + "/patient";
-    link.target = "_blank";
-    link.rel = "noopener";
-    if (!data.simulation) return [link];
-    const rows = [element("h3", "", "Simulate patient input"), link];
+  updateRegion(panel, [agent.origin, data?.simulation, data?.agent_checkin?.interval_s, choices,
+    agent.state, agent.busy], () => {
+    if (panel.hidden) return [];
+    const rows = [element("h3", "", "Simulate patient input")];
     if (choices.length) {
       const label = element("label", "", "Care topic");
       label.htmlFor = "demo-care-choice";
@@ -769,17 +774,26 @@ function renderSimulation(agent, data) {
       push.disabled = agent.busy || agent.state !== "online";
       rows.push(push);
     }
-    if (q) {
-      const controls = element("div", "form-row");
-      for (const [spot, label] of [["left", "Left · " + q.options[0]], ["middle", "Center · Call nurse"], ["right", "Right · " + q.options[1]]]) {
-        const control = button(label, "button", () =>
-          act(agent, "/simulate/choose", { spot, qid: q.qid }, "Patient input sent."));
-        control.disabled = agent.busy || agent.state !== "online";
-        controls.append(control);
-      }
-      rows.push(controls);
-    }
     return rows;
+  });
+}
+
+function renderSimulatedReply(agent, data) {
+  const panel = $("simulated-reply");
+  const question = data?.simulation && data.session?.waiting ? list(data.session.thread).at(-1) : null;
+  panel.hidden = !question || question.answer != null;
+  updateRegion(panel, [agent.origin, question, agent.state, agent.busy], () => {
+    if (panel.hidden) return [];
+    const controls = element("div", "form-row");
+    for (const [spot, label] of [["left", "Left · " + question.options[0]],
+      ["middle", "Center · Call nurse"], ["right", "Right · " + question.options[1]]]) {
+      const control = button(label, "button", () =>
+        act(agent, "/simulate/choose", { spot, qid: question.qid }, "Patient input sent."));
+      control.id = "simulated-reply-" + spot;
+      control.disabled = agent.busy || agent.state !== "online";
+      controls.append(control);
+    }
+    return [element("h3", "", "Simulate patient reply"), controls];
   });
 }
 
@@ -799,12 +813,13 @@ function render() {
   const data = agent?.data;
   updateText($("details-heading"), data ? agentName(agent) : "Patient status");
   updateText($("patient-status"), [data?.patient?.room, agentStatus(agent),
-    data?.last_visit ? "Last visit " + data.last_visit : null,
     data && agent.state !== "online" ? "Showing last received status" : null].filter(Boolean).join(" · "));
   renderPatientActions(agent, data);
+  renderLatestReply(data);
+  renderSimulatedReply(agent, data);
   renderSimulation(agent, data);
   renderHistory(data);
-  updateRegion($("notes"), [selected, data?.profile, data?.bedside, data?.agent_checkin, data?.next_visit, data?.session, data?.facts, data?.room,
+  updateRegion($("notes"), [selected, data?.profile, data?.bedside, data?.agent_checkin, data?.next_visit, data?.session, data?.facts, data?.room, data?.last_visit,
     data?.routines, data?.recent, data?.summary], () => {
     const notes = data ? patientNotes(data) : [];
     return notes.length ? notes : [element("p", "empty note", data ? "No status notes yet." : "Waiting for patient data…")];
@@ -927,6 +942,7 @@ $("connect-form").addEventListener("submit", event => {
     const origin = agentOrigin(input.value.trim());
     addAgent(origin);
     selected = origin;
+    $("profile-details").open = false;
     storeAgents();
     input.value = "";
     const setup = event.currentTarget.closest("details");
