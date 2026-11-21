@@ -3,18 +3,15 @@
 Run:  py -3.11 -m lookat.fake_api [--port 8000] [--still SCREEN]
 Then open http://localhost:8000/patient , /nurse , /panel
 
-Serves web/patient.html, web/nurse.html, web/panel.html (and web/* at /web/*),
-with fake JSON that changes every few seconds. Every POST in docs/API.md works
+Serves Lea's pages from web/ exactly like the real program (lookat/server.py
+finds them), with fake JSON that changes every few seconds. Every POST in docs/API.md works
 (in memory). The real program serves the same URLs and the same JSON shapes.
 """
 import argparse
 import itertools
-import os
 import threading
 import time
 
-WEB_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web")
-PAGES = ("patient", "nurse", "panel")
 CYCLE_S = 3.0
 
 
@@ -270,76 +267,10 @@ class Fake:
             return {"ok": True}
 
 
-def _public(data):
-    """Drop private keys (starting with _) before sending JSON."""
-    if isinstance(data, dict):
-        return {k: _public(v) for k, v in data.items() if not k.startswith("_")}
-    if isinstance(data, list):
-        return [_public(v) for v in data]
-    return data
-
-
 def make_app(fake: Fake):
-    from fastapi import FastAPI, Request
-    from fastapi.responses import FileResponse, HTMLResponse
-    from fastapi.staticfiles import StaticFiles
-
-    app = FastAPI(title="LookAt fake API")
-    os.makedirs(WEB_DIR, exist_ok=True)
-    app.mount("/web", StaticFiles(directory=WEB_DIR), name="web")
-
-    def page(name):
-        path = os.path.join(WEB_DIR, f"{name}.html")
-        if os.path.exists(path):
-            return FileResponse(path, headers={"Cache-Control": "no-store"})
-        return HTMLResponse(f"<h1>Create web/{name}.html</h1><p>Its data: <a href='/api/{name if name != 'patient' else 'screen'}'>"
-                            f"/api/{name if name != 'patient' else 'screen'}</a> (see docs/API.md)</p>")
-
-    for name in PAGES:
-        app.add_api_route(f"/{name}", (lambda n: lambda: page(n))(name), methods=["GET"])
-
-    @app.get("/api/screen")
-    def api_screen():
-        with fake.lock:
-            return _public(fake.screen_json())
-
-    @app.get("/api/nurse")
-    def api_nurse():
-        with fake.lock:
-            return _public(fake.nurse_json())
-
-    @app.get("/api/panel")
-    def api_panel():
-        with fake.lock:
-            return _public(fake.panel_json())
-
-    @app.post("/api/nurse/{path:path}")
-    async def api_nurse_post(path: str, request: Request):
-        body = await _json(request)
-        return _public(_safe(lambda: fake.nurse_action(path, body)))
-
-    @app.post("/api/demo")
-    async def api_demo(request: Request):
-        body = await _json(request)
-        return _safe(lambda: fake.demo_action(body))
-
-    return app
-
-
-def _safe(handler):
-    """Bad input (e.g. "setpoint_c": "abc") -> {"ok": false}, never a server error."""
-    try:
-        return handler()
-    except (TypeError, ValueError) as e:
-        return {"ok": False, "error": f"bad value: {e}"}
-
-
-async def _json(request):
-    try:
-        body = await request.json()
-        return body if isinstance(body, dict) else {}
-    except Exception:
-        return {}
+    """The same server the real program uses (lookat/server.py)."""
+    from lookat.server import make_app as server_app
+    return server_app(fake, title="LookAt fake API")
 
 
 def main():
