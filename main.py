@@ -451,6 +451,9 @@ def main() -> None:
     agent = Agent(live, memory, profile=args.profile)
     print(f"Patient profile: {PROFILES[args.profile]['name']} ({len(memory.data['facts'])} facts in memory)")
     agent.start()
+    from lookat.nurse_bridge import NurseBridge
+    live.nurse = NurseBridge(live)      # Paco's nurse dashboard on the real patient (Claude triage of pages)
+    live.nurse.start()
     print(f"Agent: {'Claude ' + MODEL if agent.client else 'rules only (no ANTHROPIC_API_KEY)'}")
     server = start_server(live, args.port)
     print_urls(args.port)

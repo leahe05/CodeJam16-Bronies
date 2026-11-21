@@ -57,6 +57,7 @@ class Live:
         self.switch_profile: Optional[Callable] = None   # the agent: switch to another demo patient
         self.reset_memory: Optional[Callable] = None     # the agent: every profile back to its chart
         self.profile: Optional[str] = None         # the demo patient the agent cares for (memory.PROFILES)
+        self.nurse = None                          # lookat.nurse_bridge.NurseBridge: Paco's nurse dashboard (main.py)
         self._reset_state()
 
     def _reset_state(self) -> None:
@@ -138,6 +139,8 @@ class Live:
             self.add_alert("call", "Patient used the call signal", urgency="urgent",
                            reason="Long eyebrow raise" + (" during your conversation" if self.session["active"] else ""),
                            actions=[{"id": "ack", "label": "On my way"}])
+            if self.nurse is not None:
+                self.nurse.record("Patient", "Called nurse", "Long eyebrow raise")
         elif kind == "nurse_answer":
             _, qid, text = ev
             for q in self.session["thread"]:
@@ -145,6 +148,8 @@ class Live:
                     q["answer"] = text
                     q["seconds"] = round(now - q["_sent"], 1)
                     self._recent(request_text(q["question"], text))
+                    if self.nurse is not None:
+                        self.nurse.on_answer(q, text)
             self.session["waiting"] = False
 
     def _notify(self, ev: tuple) -> None:
@@ -157,6 +162,8 @@ class Live:
     # ----- shared helpers (agent + nurse) ---------------------------------
     def add_alert(self, kind: str, text: str, urgency: str = "normal", reason: Optional[str] = None,
                   actions: Optional[list] = None, ask: Optional[dict] = None) -> dict:
+        if kind == "page" and urgency != "urgent" and ask is None and self.nurse is not None:
+            return self.nurse.page(text, reason)   # the nurse supervisor (Claude) ranks it on the dashboard
         with self.lock:
             a = {"id": f"a{next(self._ids)}", "time": clock.hhmm(), "kind": kind, "urgency": urgency,
                  "text": text, "reason": reason, "actions": actions or [{"id": "ack", "label": "OK"}],
@@ -177,6 +184,8 @@ class Live:
             self.feed.append({"id": next(self._ids), "time": clock.hhmm(), "stage": stage, "text": text,
                               "why": why, "fallback": fallback})
             del self.feed[:-200]
+        if self.nurse is not None:
+            self.nurse.on_feed(stage, text)
 
     def _recent(self, text: str) -> None:
         self.recent.insert(0, {"time": clock.hhmm(), "text": text})
@@ -204,12 +213,13 @@ class Live:
     # ----- GET /api/nurse ---------------------------------------------------
     def nurse_json(self) -> dict:
         r = self.room.state()
-        return {"v": 1, "patient": {"name": self.patient, "room": "Room 12"}, "connected": True,
+        out = {"v": 1, "patient": {"name": self.patient, "room": "Room 12"}, "connected": True,
                 "alerts": self.alerts[:30], "next_visit": self.next_visit, "session": self.session,
                 "room": {"temp_c": r["temp_c"], "setpoint_c": r["setpoint_c"], "lamp_on": r["lamp_on"],
                          "fan_on": r["fan_on"], "fan_simulated": r["fan"]["simulated"]},
                 "facts": self.facts, "routines": [], "recent": self.recent, "last_visit": self.last_visit,
                 "summary": self.summary}
+        return self.nurse.extend(out) if self.nurse is not None else out
 
     # ----- GET /api/panel ---------------------------------------------------
     def panel_json(self) -> dict:
@@ -242,6 +252,10 @@ class Live:
 
     # ----- POST /api/nurse/... ---------------------------------------------
     def nurse_action(self, path: str, body: dict) -> dict:
+        if self.nurse is not None:       # the dashboard's request reviews, check-ins, visitors... (lookat/nurse_bridge.py)
+            res = self.nurse.action(path, body)
+            if res is not None:
+                return res
         if path == "suggest":            # may call the AI: never hold the lock here
             q = str(body.get("question") or "").strip()
             if not q:
@@ -323,7 +337,8 @@ class Live:
     def _suggest(self, question: str) -> dict:
         try:
             from lookat import ask   # C3; until it exists the fallback is used
-            res = ask.make_options(question, "")
+            context = "; ".join(self.nurse.profile()["preferences"]) if self.nurse is not None else ""
+            res = ask.make_options(question, context)
             return {"options": list(res["options"]), "source": res.get("source", "ai")}
         except Exception:   # noqa: BLE001 - no ask.py yet, no key, or an AI error
             return {"options": fallback_options(question), "source": "fallback"}
@@ -395,6 +410,8 @@ class Live:
                 clock.reset()
                 self._reset_state()
                 self.room.set_temp(22.0)
+                if self.nurse is not None:
+                    self.nurse.reset()
                 log_event("demo_reset")
             if self.reset_memory is not None:    # outside the lock: the agent rewrites the memory files
                 self.reset_memory()              # every profile back to its chart; the AI's history is deleted
