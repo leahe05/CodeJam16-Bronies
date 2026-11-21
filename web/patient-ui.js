@@ -93,9 +93,14 @@
       case "suggestion":
         return `${chip(d)}<h1>${esc(d.title)}</h1>${sub(d)}`
           + (d.middle ? `<div class="engage" data-spot="middle">${icon(optIcon(d.middle) || "target")}<span>${esc(d.middle.label)}</span></div>` : "");
-      case "nurse":
-        return `<h1>${esc(d.title)}</h1>${sub(d)}${cards(d, "row")}`
-          + `<div class="instr" ${d.middle ? 'data-spot="middle"' : ""}>${icon("brows", "instr-i")}<span>${esc(d.footer || "Look left or right and raise your eyebrows to choose.")}</span></div>${dots(d.page)}`;
+      case "nurse": {
+        // no answers on screen = waiting for the nurse's question / after an answer: no "choose" instruction
+        const hasChoice = d.left || d.right || d.middle;
+        const instr = hasChoice
+          ? `<div class="instr" ${d.middle ? 'data-spot="middle"' : ""}>${icon("brows", "instr-i")}<span>${esc(d.footer || "Look left or right and raise your eyebrows to choose.")}</span></div>`
+          : "";
+        return `<h1>${esc(d.title)}</h1>${sub(d)}${cards(d, "row")}${instr}${dots(d.page)}`;
+      }
       case "checkin": {
         const pic = d.icon && d.icon !== "sparkle" && !d.page ? `<div class="illus">${icon(d.icon)}</div>` : "";
         return `${chip(d)}<h1>${esc(d.title)}</h1>${sub(d)}${pic}${cards(d, "row")}${center(d)}${dots(d.page)}`;
