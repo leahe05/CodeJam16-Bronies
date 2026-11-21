@@ -5,7 +5,9 @@
     lamp.is_on, lamp.online, lamp.simulated, lamp.last_ms
 
 Each worker has its own thread + asyncio loop. Credentials come from the
-KASA_USER / KASA_PASSWORD environment variables (never printed). An offline plug
+KASA_USER / KASA_PASSWORD environment variables (never printed). After a TP-Link password
+change, a plug that hasn't picked up the new password yet still accepts the old one:
+KASA_OLD_PASSWORD (optional) is tried when a plug refuses KASA_PASSWORD. An offline plug
 logs "PLUG <name> OFFLINE", retries every RETRY_S and never crashes anything.
 Self-test: py -3.11 -m lookat.plugs --ip 172.20.10.2
 """
@@ -87,11 +89,27 @@ class PlugWorker:
                   'Run setx KASA_USER "..." and setx KASA_PASSWORD "..." once.')
         dev = None
         try:
-            dev = await Discover.discover_single(self.ip, discovery_timeout=TIMEOUT_S, timeout=TIMEOUT_S,
-                                                 username=user, password=password)
-            if dev is None:
-                raise ConnectionError("no answer")
-            await dev.update()
+            old = saved_env("KASA_OLD_PASSWORD")
+            tries = [password] + ([old] if old and old != password else [])
+            for i, pw in enumerate(tries):
+                try:
+                    dev = await Discover.discover_single(self.ip, discovery_timeout=TIMEOUT_S, timeout=TIMEOUT_S,
+                                                         username=user, password=pw)
+                    if dev is None:
+                        raise ConnectionError("no answer")
+                    await dev.update()
+                    if i:
+                        print(f"PLUG {self.name}: accepted KASA_OLD_PASSWORD (it hasn't picked up the new one yet)")
+                    break
+                except Exception as e:   # noqa: BLE001
+                    if "Authentication" not in type(e).__name__ or i == len(tries) - 1:
+                        raise
+                    if dev is not None:   # refused: close this session, try the old password
+                        try:
+                            await dev.disconnect()
+                        except Exception:   # noqa: BLE001
+                            pass
+                        dev = None
             self._dev = dev
             self._set(bool(dev.is_on))
             self.online = True
