@@ -452,6 +452,7 @@ class ShiftPatient(SimulatedPatient):
         alerts = {alert["id"]: alert for alert in data["alerts"]}
         responses = {
             "analyzing": "Claude is reviewing the request",
+            "local_reviewed": "Ranked by local rules",
             "needs_review": "Waiting for nurse review",
             "question_queued": "Claude drafted a question for approval",
             "waiting_answer": "Question sent. Waiting for the patient",

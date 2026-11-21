@@ -172,7 +172,8 @@ def test_independent_random_streams_start_and_stop_without_needing_a_key(monkeyp
     assert avery.nurse_json()["shift"]["state"] == "complete"
     for patient in (avery, morgan):
         assert len({alert["request"] for alert in patient.nurse_json()["alerts"]}) >= 2
-        assert all(alert["review"] == "needs_review" and alert["priority"]["level"] == "unrated"
+        assert all(alert["review"] == "local_reviewed" and alert["priority_source"] == "local_rules"
+                   and alert["priority"]["level"] in {"urgent", "soon", "routine"}
                    for alert in patient.nurse_json()["alerts"])
         assert not patient.proposal()
 
@@ -198,6 +199,7 @@ def test_supervisor_uses_ai_priority_and_queues_clarification_for_approval():
         eventually(lambda: avery.nurse_json()["alerts"][0]["review"] == "ai_reviewed")
         eventually(morgan.proposal)
         assert avery.nurse_json()["alerts"][0]["priority"]["level"] == "urgent"
+        assert avery.nurse_json()["alerts"][0]["priority_source"] == "claude"
         assert morgan.nurse_json()["alerts"][0]["priority"]["level"] == "soon"
         assert "fan" in morgan.nurse_json()["alerts"][0]["recommendation"]
         proposal = morgan.proposal()
@@ -222,13 +224,29 @@ def test_invalid_claude_decision_is_rejected_and_calls_still_bypass_review(monke
     worker.start()
     try:
         avery.nurse_action("patient/request", {"request": "Water"})
-        eventually(lambda: avery.nurse_json()["alerts"][0]["review"] == "needs_review")
+        eventually(lambda: avery.nurse_json()["alerts"][0]["review"] == "local_reviewed")
         avery.demo_action({"action": "call_nurse"})
         assert avery.nurse_json()["alerts"][0]["priority"]["level"] == "urgent"
-        assert avery.nurse_json()["alerts"][1]["priority"]["level"] == "unrated"
+        assert avery.nurse_json()["alerts"][1]["priority"]["level"] == "routine"
+        assert avery.nurse_json()["alerts"][1]["priority_source"] == "local_rules"
     finally:
         stop.set()
         worker.join(2)
+
+
+def test_shift_ranks_requests_without_a_claude_key(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    avery, _ = make_demo_patients(playback=ShiftPlayback())
+    for request in (
+        "A glass of water, not urgent.",
+        "Could someone come soon to adjust my pillow?",
+        "I need help right away to sit up.",
+    ):
+        assert avery.nurse_action("patient/request", {"request": request})["ok"]
+    alerts = avery.nurse_json()["alerts"]
+    assert [alert["priority"]["level"] for alert in alerts] == ["urgent", "soon", "routine"]
+    assert all(alert["priority_source"] == "local_rules" for alert in alerts)
+    assert all(alert["priority_basis"] for alert in alerts)
 
 
 def test_supervisor_ranks_requests_with_fifo_within_priority_and_preserves_legacy_calls():

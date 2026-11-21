@@ -298,6 +298,9 @@ function alertCard({ agent, alert }, handled) {
   if (alert.reason) card.append(element("p", "muted", alert.reason));
   if (alert.recommendation) card.append(element("p", "request-recommendation", alert.recommendation));
   if (alert.ai_rationale) card.append(element("p", "muted", "Claude: " + alert.ai_rationale));
+  if (alert.priority_source === "local_rules" && alert.priority_basis) {
+    card.append(element("p", "muted", "Local rules: " + alert.priority_basis));
+  }
   const review = {
     analyzing: "Claude is reviewing",
     needs_review: "Nurse review needed",
@@ -375,7 +378,8 @@ function renderShift(roster) {
   $("end-shift").hidden = state !== "running";
   $("end-shift").disabled = first.busy || first.state !== "online";
   updateText($("shift-ai-status"), first.data.shift.ai_enabled ?
-    "Claude reviews incoming requests" : "Claude is not configured. Requests go to the nurse for review.");
+    "Claude reviews incoming requests. Local rules provide an initial priority." :
+    "Local rules rank requests. Set a Claude API key to enable AI review.");
   updateRegion($("shift-feeds"), patients.map(agent => [
     agentName(agent), agent.data.patient.room, agent.data.shift.camera, agent.data.shift.feed
   ]),

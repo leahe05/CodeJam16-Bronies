@@ -2,6 +2,7 @@
 import itertools
 import logging
 import math
+import re
 import threading
 import time
 from collections import deque
@@ -13,8 +14,19 @@ CHECK_IN_PROMPT = (
     "Include the patient's current status and relevant preferences."
 )
 DEFAULT_INTERVAL_S = 30.0
-PRIORITY_RANKS = {"urgent": 2, "soon": 1, "routine": 0, "unrated": -1}
+PRIORITY_RANKS = {"urgent": 2, "soon": 1, "routine": 0}
 log = logging.getLogger(__name__)
+
+
+def reported_priority(request, reason, time_sensitive):
+    """Rank explicit urgency signals in the demo while Claude is unavailable or reviewing."""
+    clauses = re.split(r"[.!?;,]", " ".join(filter(None, (request, reason))).lower())
+    signals = " ".join(clause for clause in clauses if not re.search(r"\b(?:not|no|n't|doesn['’]t|don['’]t)\b", clause))
+    if re.search(r"\b(?:right away|immediately|help now|come now|urgent)\b", signals):
+        return "urgent", "The patient asked for immediate help."
+    if time_sensitive or re.search(r"\b(?:soon|time[- ]sensitive)\b", signals):
+        return "soon", "The patient agent asked for help soon."
+    return "routine", "The request did not include an urgency signal."
 
 
 class NurseSupervisor:
@@ -148,10 +160,11 @@ class NurseSupervisor:
             if alert is None or alert["done"]:
                 return
             if decision is None:
-                alert["review"] = "needs_review"
+                alert["review"] = "local_reviewed"
                 return
             level = decision["priority"]
             alert["priority"] = {**alert["priority"], "level": level, "rank": PRIORITY_RANKS[level]}
+            alert["priority_source"] = "claude"
             alert["urgency"] = "urgent" if level == "urgent" else "normal"
             alert["ai_rationale"] = decision["rationale"]
             alert["recommendation"] = decision["recommendation"]
@@ -181,7 +194,7 @@ class NurseSupervisor:
         order = next(self._ids)
         alert_id = f"agent-{order}"
         if review:
-            priority = "unrated"
+            priority, basis = reported_priority(request, reason, time_sensitive)
         elif kind == "call" or urgent:
             priority = "urgent"
         elif time_sensitive:
@@ -196,7 +209,12 @@ class NurseSupervisor:
             "delivery": delivery, "done": False, "actions": [{"id": "ack", "label": "On my way"}],
         }
         if review:
-            alert["review"] = "analyzing" if self.ai_enabled else "needs_review"
+            alert.update(
+                review="analyzing" if self.ai_enabled else "local_reviewed",
+                priority_source="local_rules",
+                priority_basis=basis,
+                recommendation="Review the request promptly." if priority == "urgent" else "Review the patient’s request.",
+            )
         requests.appendleft(alert)
         return alert_id, True
 
