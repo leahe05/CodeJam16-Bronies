@@ -43,8 +43,14 @@ COMFORT_OPTIONS = ["Adjust pillows", "Change position", "Water", "Too warm", "To
 TEMP_CHANGE_C = 1.0          # a room change worth a look: the temperature moved this much since Claude last looked
 CHANGE_GAP_S = 60            # at most one room-change look per minute
 PERIODS = [(7, "morning"), (12, "afternoon"), (17, "evening"), (22, "night")]
-MENU_EVERY_S = 600           # the Talk to AI menu is rewritten by Claude this often (and after each episode)
-MENU_MAX = 4                 # options Claude writes; "Something else" is always added last
+MENU_MAX = 3                 # options Claude writes; "Quiet for 2 hours" and "Something else" are always added
+QUIET_OPTION = "Quiet for 2 hours"
+# Respecting silence (all on the demo clock):
+AFTER_EPISODE_MIN = 3        # after any episode, wait this long before speaking first again
+IGNORED_HUSH_MIN = 10        # a suggestion the patient ignored: nothing new for this long
+IGNORED_BACKOFF_MIN = 30     # ...and that topic waits 30, then 60, 120, 240 min after each ignore in a row
+DECLINED_BACKOFF_MIN = 60    # "No, thanks." / Return to main menu: that topic waits an hour
+OWN_CHOICE_MIN = 30          # never offer to undo a switch the patient chose themselves this recently
 
 SYSTEM = """You are LookAt, an assistant for a patient who cannot speak or move and answers only by \
 looking left/center/right at a screen and raising their eyebrows. You speak first so they need fewer \
@@ -63,20 +69,34 @@ Never give medical advice.
 - What a nurse must do but can wait (water, pillows, position) -> page_nurse "normal" with a short \
 explanation the nurse can act on, e.g. "Wants repositioning. Not temperature-related. Last visit 3h ago." \
 Use defer only for things that can wait for the next visit.
-- If a question is ignored or dismissed, stop: respect silence. Do not repeat it.
-- remember() durable preferences you learn (e.g. "Prefers the fan at night").
-- Write every suggestion text as a short question the patient can answer with their eyes, e.g. \
-"Feeling cold? Turn the fan off?" - never a bare statement.
+- Speak first only when it clearly helps. Every question costs the patient effort; an odd or wrong one \
+costs trust. If you are not confident they need something right now, call finish without asking.
+- If a question is ignored or dismissed, stop: respect silence. Do not repeat it, and do not bring up a \
+topic they ignored or declined recently (RECENT SUGGESTIONS in get_context).
+- Never contradict what the patient chose themselves (PATIENT'S OWN CHOICES in get_context): if they turned \
+the fan on, do not offer to turn it off unless they are now clearly cold and a while has passed.
+- What you can fix: the fan cools the room only 1-2 °C, the lamp gives light. A blanket, water, position, \
+pillows, pain or anything else needs the nurse.
+- remember() only a durable preference the patient has shown at least twice, on different occasions, or \
+chose to tell you. One or two switches are not a preference (the team also tests the room).
+- A suggestion has two parts. text: one short plain sentence about what you noticed, e.g. "It's getting \
+warm in here." question: the offer, e.g. "Turn the fan on?", with the answers "Yes, please." and \
+"No, thanks.". Plain words, no jargon; a number only if it helps (say "warm", not "24.3 °C").
 - If memory holds few facts, you do not know this patient yet: say so in your "why", offer the common needs \
 of a bedbound patient (comfort, position, water, temperature, light, rest, company), and remember() what they pick.
 - End with finish(): one sentence on what happened. Every tool takes a short "why" for the reasoning panel.
 """
 
 MENU_SYSTEM = """You write the "Talk to AI" menu for a patient who cannot speak or move and picks options by \
-looking at a screen. Give 3 or 4 options, each 2 to 4 words, the most likely need first, that fit the moment \
-(time of day, room, what they picked before, what was just offered). If you know little about the patient, \
-offer common needs of a bedbound patient. Do not include "Something else" (it is always added). Do not repeat \
-an option the patient just declined. Plain words, no emojis."""
+looking at a screen. Give exactly 3 options, each 2 to 4 words, written as what the patient would say \
+("I'm too warm", "Change my position", "Some water"), the most likely need first, fitting the moment (time of \
+day, room, what they picked before). If you know little about the patient, offer common needs of a bedbound \
+patient (comfort, position, water, temperature, light, company).
+Rules: the screen already has Room Controls (lamp and fan switches) and Call Nurse (long eyebrow raise), so do \
+not offer bare switches ("Turn fan on") or "Call the nurse". "Quiet for 2 hours" and "Something else" are \
+always added: do not include them. Do not repeat an option the patient just declined. The menu should feel \
+steady: keep options from the CURRENT MENU that still fit, in the same order; change only what the moment \
+changed. Plain words, no emojis."""
 
 
 def _tool(name: str, description: str, props: dict, required: list) -> dict:
@@ -192,7 +212,11 @@ class Agent:
         self.quiet_until = None           # clock datetime
         self.last_change_look = -1e9
         self.seen: Optional[dict] = None   # the room as Claude last looked at it (room-change triggers)
-        self.last_menu = -1e9
+        self.menu_sig = None              # the situation the Talk to AI menu was written for
+        self.hush_until = 0.0             # clock timestamp: no speaking first before this
+        self.backoff: dict = {}           # trigger -> clock timestamp it may run again
+        self.ignored_streak: dict = {}    # trigger -> suggestions ignored in a row
+        self.answers: list = []           # this episode's answers
         self.choice: Optional[str] = None
         self._stop = False
         self.memory.load_chart(DEMO_CHART)
@@ -231,7 +255,7 @@ class Agent:
         if ev is not None:
             self._on_patient_event(ev)
             return
-        if self.client is not None and time.monotonic() - self.last_menu >= MENU_EVERY_S and self.can_speak():
+        if self.client is not None and self.can_speak() and self.situation() != self.menu_sig:
             self.refresh_menu()
         trig = self.trigger(self.perceive())
         if trig:
@@ -278,9 +302,31 @@ class Agent:
         quiet = self.quiet_until and clock.now().timestamp() < self.quiet_until
         return (live.calibration is None and live.sm.can_interrupt() and not live.machine.busy
                 and not live.session.get("active") and not quiet
+                and clock.now().timestamp() >= self.hush_until
                 and time.monotonic() - self.last_choice >= SETTLE_S)
 
+    def _backed_off(self, name: str) -> bool:
+        """True while the patient's last answer to this topic (ignored / declined) still says: not now."""
+        return clock.now().timestamp() < self.backoff.get(name, 0)
+
+    def own_choice(self, device: str, cmd: str) -> Optional[str]:
+        """When the patient themselves switched device to cmd within OWN_CHOICE_MIN ("HH:MM"), else None.
+        by="agent" counts too: the agent only acts on the patient's Yes."""
+        for a in reversed(self.memory.data["actions"]):
+            if a.get("device") != device:
+                continue
+            if a.get("cmd") != cmd or a.get("by") not in ("patient", "agent"):
+                return None
+            try:
+                mins = (clock.now() - clock.now().fromisoformat(a["time"])).total_seconds() / 60
+            except (KeyError, ValueError, TypeError):
+                return None
+            return a["time"][11:16] if 0 <= mins < OWN_CHOICE_MIN else None
+        return None
+
     def _cooled_down(self, name: str) -> bool:
+        if self._backed_off(name):
+            return False
         last = self.last_run.get(name)
         if last is None:
             return True
@@ -328,15 +374,17 @@ class Agent:
         L = self.memory.learn()
         comfort = L["comfort"]
         if (p["night"] and comfort.get("runs_warm") and p["temp_c"] >= L["warm_above_c"]
-                and L["night_checkins_enabled"] and self._cooled_down("warm_night")):
+                and L["night_checkins_enabled"] and self._cooled_down("warm_night")
+                and not self.own_choice("fan", "off")):
             return "warm_night", (f"Night ({p['time']}), eyes open {int((p['eyes_open_ratio'] or 1) * 100)}%, "
                                   f"room {p['temp_c']} °C >= {L['warm_above_c']} °C, memory: runs warm at night")
         cold = comfort.get("cold_below_c")
-        if cold is not None and p["temp_c"] <= cold and self._cooled_down("cold"):
+        if (cold is not None and p["temp_c"] <= cold and self._cooled_down("cold")
+                and not self.own_choice("fan", "on")):
             return "cold", f"Room {p['temp_c']} °C <= {cold} °C, memory: feels cold below {cold} °C"
         changes = self.room_changes(p)
         if changes and self.client is not None and time.monotonic() - self.last_change_look >= CHANGE_GAP_S \
-                and (L["night_checkins_enabled"] or not p["night"]):
+                and not self._backed_off("room_change") and (L["night_checkins_enabled"] or not p["night"]):
             self.last_change_look = time.monotonic()
             return "room_change", ("The room changed: " + "; ".join(changes) + ". If that is worth offering the "
                                    "patient something right now, make ONE suggestion (a short question); otherwise "
@@ -349,6 +397,7 @@ class Agent:
         self.last_run[name] = clock.now()
         self.approved: Optional[tuple] = approved
         self.questions = 0
+        self.answers = []
         self.night = clock.is_night()
         self.trigger_name = name
         log_event("agent_episode", trigger=name, reason=reason)
@@ -362,7 +411,8 @@ class Agent:
                 self.feed("decided", "AI unavailable, using rules", type(e).__name__, fallback=True)
         if not done and self.questions == 0 and name != "room_change":
             self._rules(name)
-        if self.client is not None:
+        self._respect_silence(name)
+        if self.client is not None and self.situation() != self.menu_sig:
             self.refresh_menu()
         self.seen = None                 # the room as it is now becomes the new baseline (not a "change")
         self.room_changes(self.perceive())
@@ -471,11 +521,63 @@ class Agent:
             c("finish", {"summary": f"Fixed ({action['device']} {action['cmd']}); no nurse needed" if ans == "Yes"
                          else f"Better now? -> {ans}", "why": "checked"})
 
+    # ----- respecting silence ---------------------------------------------------------------------
+    def _respect_silence(self, name: str) -> None:
+        """After an episode the agent speaking first was ignored or declined, it backs off (code, not AI)."""
+        if name == "patient":                     # the patient asked: their answers are not a "not now"
+            return
+        now = clock.now().timestamp()
+        self.hush_until = max(self.hush_until, now + AFTER_EPISODE_MIN * 60)
+        if "ignored" in self.answers:
+            n = self.ignored_streak.get(name, 0) + 1
+            self.ignored_streak[name] = n
+            mins = min(IGNORED_BACKOFF_MIN * 2 ** (n - 1), 240)
+            self.backoff[name] = now + mins * 60
+            self.hush_until = max(self.hush_until, now + IGNORED_HUSH_MIN * 60)
+            self.feed("learned", f"Ignored: no '{name}' suggestions for {mins} min", "respect silence")
+            return
+        self.ignored_streak[name] = 0
+        declined = [a for a in self.answers if a == "dismissed" or str(a).lower().startswith("no")]
+        if declined:
+            self.backoff[name] = now + DECLINED_BACKOFF_MIN * 60
+            self.feed("learned", f"Declined: no '{name}' suggestions for {DECLINED_BACKOFF_MIN} min", "respect the answer")
+
+    def situation(self) -> tuple:
+        """What the Talk to AI menu depends on; it is rewritten only when this changes."""
+        p = self.perceive()
+        return (self.period(p["time"]), int(p["temp_c"] // 2), p["fan_on"], p["lamp_on"], bool(p["awake"]),
+                len(self.memory.data["facts"]))
+
+    def _agent_context(self) -> str:
+        """Extra lines for get_context: what was offered lately and what the patient chose themselves."""
+        now = clock.now()
+        lines = []
+
+        def ago(iso):
+            try:
+                return f"{int((now - now.fromisoformat(iso)).total_seconds() // 60)} min ago"
+            except (ValueError, TypeError):
+                return "?"
+        sug = self.memory.data["suggestions"][-5:]
+        if sug:
+            lines.append("RECENT SUGGESTIONS: " + "; ".join(f"'{s.get('text')}' -> {s.get('outcome')} ({ago(s.get('time'))})"
+                                                             for s in sug))
+        own = [a for a in self.memory.data["actions"] if a.get("by") in ("patient", "agent")][-4:]
+        if own:
+            lines.append("PATIENT'S OWN CHOICES: " + "; ".join(f"{a.get('device')} {a.get('cmd')} ({ago(a.get('time'))})"
+                                                                for a in own))
+        quiet = [k for k in self.backoff if self._backed_off(k)]
+        if quiet:
+            lines.append("TOPICS ON HOLD (ignored or declined): " + ", ".join(quiet))
+        return "\n".join(lines)
+
     # ----- the tools (the only way the agent changes anything) ----------------------------------
     def call(self, name: str, a: dict) -> str:
         why = a.get("why", "")
         if name == "get_context":
             out = self.memory.context_text(self.perceive())
+            extra = self._agent_context()
+            out = out + ("\n" + extra if extra else "")
             self.feed("noticed", "Read memory + room", why)
             return out
         if name in ("suggest", "ask"):
@@ -492,6 +594,7 @@ class Agent:
                 self.feed("decided", f'Ask: "{a["question"]}" {opts}', why)
                 ans = self.screens.ask(a["question"], opts)
                 q = a["question"]
+            self.answers.append(ans)
             self._log_question(self.trigger_name, q, opts, ans if ans in opts else None)
             if self.trigger_name == "warm_night" or (self.night and name == "suggest"):
                 self.memory.log("checkins", {"night": self.night, "outcome": "ignored" if ans == "ignored" else "answered"})
@@ -534,6 +637,9 @@ class Agent:
             self.feed("outcome", f"For the next visit: {a['note']}", why)
             return "saved for the next visit"
         if name == "remember":
+            known = {f["text"].strip().lower() for f in self.memory.data["facts"]}
+            if a["fact"].strip().lower() in known:
+                return "already known"
             self.memory.add_fact(a["fact"], "preference", "agent")
             self.feed("learned", f"Remembered: {a['fact']}", why)
             return "remembered"
@@ -546,11 +652,13 @@ class Agent:
     def refresh_menu(self) -> None:
         """Claude writes the menu options for this moment; the screen shows them when the patient opens it.
         Any failure keeps the current menu (the default list until Claude has written one)."""
-        self.last_menu = time.monotonic()
+        self.menu_sig = self.situation()
+        current = [o for o in self.live.sm.assistant["options"] if o not in (QUIET_OPTION, "Something else")]
         try:
             resp = self.client.messages.parse(
                 model=MODEL, max_tokens=2048, system=MENU_SYSTEM, output_format=Menu,
-                messages=[{"role": "user", "content": self.memory.context_text(self.perceive())}])
+                messages=[{"role": "user", "content": self.memory.context_text(self.perceive())
+                           + "\nCURRENT MENU: " + " · ".join(current)}])
             menu = resp.parsed_output
         except Exception as e:   # noqa: BLE001 - keep the current menu
             log_event("agent_menu_error", error=repr(e))
@@ -558,11 +666,11 @@ class Agent:
         opts = []
         for o in menu.options:
             o = " ".join(str(o).split()[:5]).strip(" .")
-            if o and o.lower() != "something else" and o not in opts:
+            if o and o.lower() not in ("something else", QUIET_OPTION.lower()) and o not in opts:
                 opts.append(o)
         if len(opts) < 2:
             return
-        opts = opts[:MENU_MAX] + ["Something else"]
+        opts = opts[:MENU_MAX] + [QUIET_OPTION, "Something else"]
         with self.live.lock:
             self.live.sm.show_assistant(opts)
         self.feed("decided", "Talk to AI menu: " + " · ".join(opts), menu.why, fallback=False)

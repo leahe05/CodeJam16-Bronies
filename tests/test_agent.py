@@ -126,11 +126,11 @@ def test_rules_not_better_pages_nurse_with_explanation(tmp_path):
 
 def test_three_ignored_night_checkins_stop_them(tmp_path):
     agent, live, *_ = make(tmp_path, answers=["ignored"] * 3)
-    for _ in range(3):
-        agent.last_run.clear()
+    for _ in range(3):                              # three nights: the back-off has run out each time
+        agent.last_run.clear(); agent.backoff.clear(); agent.hush_until = 0
         agent.episode(*agent.trigger(agent.perceive()))
     assert any("Stopping night check-ins" in t for _, t in stages(live))
-    agent.last_run.clear()
+    agent.last_run.clear(); agent.backoff.clear(); agent.hush_until = 0
     assert agent.trigger(agent.perceive()) is None
 
 
@@ -229,7 +229,8 @@ def test_claude_writes_the_talk_to_ai_menu(tmp_path):
     client = MenuClient(["Cool the room down", "Something else", "Dim the lamp please now ok", "Water"])
     agent, live, *_ = make(tmp_path, client=client)
     agent.refresh_menu()
-    assert live.sm.assistant["options"] == ["Cool the room down", "Dim the lamp please now", "Water", "Something else"]
+    assert live.sm.assistant["options"] == ["Cool the room down", "Dim the lamp please now", "Water",
+                                            "Quiet for 2 hours", "Something else"]
     assert any(t.startswith("Talk to AI menu") for _, t in stages(live))
 
 
@@ -324,3 +325,71 @@ def test_own_fix_is_not_a_room_change(tmp_path):
     agent.episode(*agent.trigger(agent.perceive()))                   # fan on, room cools ~2 °C
     agent.last_change_look = -1e9
     assert agent.room_changes(agent.perceive()) == []
+
+
+# ----- respecting silence -------------------------------------------------------------------
+def test_ignored_suggestion_backs_off_and_hushes(tmp_path):
+    agent, live, *_ = make(tmp_path, answers=["ignored"])
+    agent.episode(*agent.trigger(agent.perceive()))
+    agent.last_run.clear()                          # even without the usual cooldown...
+    assert agent.trigger(agent.perceive()) is None  # ...10 min of quiet, and warm_night waits 30 min
+    agent.hush_until = 0
+    assert agent.trigger(agent.perceive()) is None
+    assert any("Ignored: no 'warm_night' suggestions for 30 min" in t for _, t in stages(live))
+
+
+def test_second_ignore_doubles_the_backoff(tmp_path):
+    agent, live, *_ = make(tmp_path, answers=["ignored", "ignored"])
+    for _ in range(2):
+        agent.last_run.clear(); agent.backoff.clear(); agent.hush_until = 0
+        agent.episode(*agent.trigger(agent.perceive()))
+    assert any("for 60 min" in t for _, t in stages(live))
+
+
+def test_declined_suggestion_waits_an_hour(tmp_path):
+    agent, live, *_ = make(tmp_path, answers=["No, thanks."])
+    agent.episode(*agent.trigger(agent.perceive()))
+    assert any("Declined: no 'warm_night' suggestions for 60 min" in t for _, t in stages(live))
+
+
+def test_never_undo_the_patients_own_choice(tmp_path):
+    agent, live, room, _ = make(tmp_path, temp=19.0, at="10:00")
+    room.execute("fan", "on", by="patient")          # they want the fan, even though it is cool
+    assert agent.own_choice("fan", "on")
+    assert agent.trigger(agent.perceive()) is None   # no "Feeling cold? Fan off?"
+    clock.set_time("10:45")
+    assert agent.trigger(agent.perceive())[0] == "cold"
+
+
+def test_patient_requests_do_not_back_off(tmp_path):
+    agent, live, *_ = make(tmp_path, answers=["ignored"], at="10:00", temp=22.0)
+    agent._on_patient_event(("assistant_choice", "Get more comfortable"))
+    assert agent.backoff == {} and agent.hush_until == 0
+
+
+def test_context_lists_recent_suggestions_and_own_choices(tmp_path):
+    agent, live, room, _ = make(tmp_path, answers=["ignored"])
+    room.execute("lamp", "on", by="patient")
+    agent.episode(*agent.trigger(agent.perceive()))
+    ctx = agent.call("get_context", {"why": ""})
+    assert "RECENT SUGGESTIONS" in ctx and "-> ignored" in ctx
+    assert "PATIENT'S OWN CHOICES: lamp on" in ctx and "TOPICS ON HOLD" in ctx
+
+
+def test_remember_skips_known_facts(tmp_path):
+    agent, *_ = make(tmp_path)
+    assert agent.call("remember", {"fact": "runs warm at night", "why": ""}) == "already known"
+
+
+def test_menu_rewritten_only_when_the_situation_changes(tmp_path):
+    client = MenuClient(["Some water", "Change my position", "I'm too warm"])
+    agent, live, room, _ = make(tmp_path, client=client, at="10:00", temp=22.0)
+    calls = []
+    agent.refresh_menu = lambda: (calls.append(1), setattr(agent, "menu_sig", agent.situation()))
+    agent.step(); agent.step()
+    assert len(calls) == 1                            # written once, then steady
+    room.execute("lamp", "on", by="patient")
+    agent.events.get_nowait() if not agent.events.empty() else None
+    agent.last_choice = -1e9
+    agent.step()
+    assert len(calls) == 2                            # the lamp changed: rewritten

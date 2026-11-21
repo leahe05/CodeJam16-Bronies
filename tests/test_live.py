@@ -3,7 +3,7 @@ import pytest
 
 from lookat import config
 from lookat.clock import clock
-from lookat.devices import FLOOR_C, Room, SimPlug
+from lookat.devices import FAN_DROP_C, FLOOR_C, Room, SimPlug
 from lookat.live import Live, fallback_options
 
 DT = 0.1
@@ -32,20 +32,24 @@ def test_fan_cools_and_room_warms_back():
     room = make_room()
     room.set_temp(24.5)
     room.execute("fan", "on", by="patient")
-    for i in range(101):
+    for i in range(301):
         room.tick(i * 0.1)
     assert room.state()["temp_c"] < 23.5
     room.execute("fan", "off", by="patient")
-    for i in range(101, 2000):
+    for i in range(301, 3000):
         room.tick(i * 0.1)
     assert room.state()["temp_c"] == pytest.approx(24.5, abs=0.05)
 
 
-def test_cooling_stops_at_floor():
+def test_fan_cools_a_degree_or_two_never_below_floor():
     room = make_room()
-    room.set_temp(21.0)
+    room.set_temp(22.0)
     room.execute("fan", "on", by="patient")
-    for i in range(1000):
+    for i in range(2000):
+        room.tick(i * 0.1)
+    assert room.state()["temp_c"] == pytest.approx(22.0 - FAN_DROP_C, abs=0.05)
+    room.set_temp(20.0)
+    for i in range(2000, 4000):
         room.tick(i * 0.1)
     assert room.state()["temp_c"] == FLOOR_C
 
@@ -54,10 +58,10 @@ def test_thermostat_runs_fan_to_setpoint_and_person_overrides():
     room = make_room()
     room.set_temp(22.0)
     room.set_setpoint(20.0, by="nurse", apply=True)
-    for i in range(300):
+    for i in range(900):
         room.tick(i * 0.1)
     assert 19.9 <= room.state()["temp_c"] <= 20.4      # held near the setpoint (0.3 °C band)
-    assert room.fan.sent.count("on") <= 3                # no plug chatter
+    assert room.fan.sent.count("on") <= 6                # no plug chatter (a few cycles in 90 s)
     room.execute("fan", "on", by="patient")
     assert room.thermostat is False
 
