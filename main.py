@@ -199,8 +199,10 @@ def run_camera(args, live: Live) -> None:
     from lookat.narrator import Narrator
     from lookat.gestures import GestureDetector, load_settings
     from lookat.vision import FaceTracker
+    from lookat.awake import AwakeDetector
 
     speaker = LocalSpeaker()
+    awake = AwakeDetector()
     tracker = FaceTracker(args.camera)
     live.camera_ok = True
     try:
@@ -224,6 +226,8 @@ def run_camera(args, live: Live) -> None:
             spot, conf = gaze.predict(f)
             events = det.update(f, now)
             brow = {"up": det.above_since is not None, "held_s": det.held(now)}
+            awake.set_override(live.eyes_override)
+            live.awake_state = awake.update(f, now)
             out = live.frame(now, spot, events, face=f is not None, confidence=conf, brow=brow)
             flash = describe(events, out, live.chosen, flash)
             narrate(narrator, live, speaker)
@@ -282,6 +286,8 @@ def _keyboard_loop(live: Live, speaker, narrator) -> None:
         elif key == ord("e"):
             events = ["emergency"]
         live.frame(now, spot, events, face=True, confidence=1.0 if spot else 0.0)
+        is_open = live.eyes_override != "closed"   # keyboard: no camera, the patient counts as awake
+        live.awake_state = {"eyes_open": is_open, "open_ratio": 1.0 if is_open else 0.0, "awake": is_open}
         narrate(narrator, live, speaker)
         fps = 0.9 * fps + 0.1 / max(now - last, 1e-3)
         last = now
@@ -300,6 +306,11 @@ def main() -> None:
     check_wifi()
     room = Room()
     live = Live(room, patient=args.patient)
+    from lookat.agent import MODEL, Agent
+    from lookat.memory import Memory
+    agent = Agent(live, Memory(args.patient))
+    agent.start()
+    print(f"Agent: {'Claude ' + MODEL if agent.client else 'rules only (no ANTHROPIC_API_KEY)'}")
     server = start_server(live, args.port)
     print_urls(args.port)
     print(f"Lamp: {room.lamp.ip or 'simulated'}   Fan: {room.fan.ip or 'simulated (set FAN_IP for plug 2)'}")
