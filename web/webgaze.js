@@ -21,9 +21,9 @@
   const params = new URLSearchParams(location.search);
   if (params.get("gaze") !== "web") return;
 
-  const SMOOTH = 12;            // predictions in the median (~0.4 s at 30 fps)
+  const SMOOTH = 6;             // predictions in the median (~0.2 s at 30 fps; more = steadier but laggier)
   const DEAD = 0.04;            // dead band around a zone border, share of the screen width
-  const SEND_MS = 100;          // POST the zone this often
+  const SEND_MS = 50;           // POST the zone this often
   const LOST_MS = 600;          // no prediction this long = no gaze (null)
   // 9-point grid, then the far left/right edges and the middle row again: left/right is all that matters.
   const POINTS = [[.1, .12], [.5, .12], [.9, .12], [.1, .5], [.5, .5], [.9, .5], [.1, .88], [.5, .88], [.9, .88],
@@ -39,6 +39,7 @@
 
   let borders = [1 / 3, 2 / 3];   // zone borders, share of the screen width (set by the check)
   let probe = null;               // predictions collected during the check
+  let dotX = null, dotY = null;   // the ring's position (moved every animation frame, not every POST)
   let xs = [], ys = [], lastPred = 0, zone = null, running = false, calibrating = false;
   let showDot = params.get("dot") !== "0";
   // eyebrows: value = brow-to-eyelid distance / face height (smoothed); thr/rel from calibration
@@ -65,9 +66,12 @@
       box-shadow: 0 0 4vh #22d3ee; transition: left .45s cubic-bezier(.2,.8,.2,1), top .45s cubic-bezier(.2,.8,.2,1); }
     #wg-target.rec { animation: wg-pulse .6s ease-in-out infinite alternate; }
     @keyframes wg-pulse { to { transform: scale(.7); } }
-    #wg-dot { position: fixed; width: 7vh; height: 7vh; margin: -3.5vh 0 0 -3.5vh; border-radius: 50%; z-index: 9;
-      pointer-events: none; border: 2px solid rgba(165, 243, 252, .55); background: rgba(103, 232, 249, .10);
-      transition: left .12s linear, top .12s linear, opacity .3s; }
+    #wg-dot { position: fixed; left: 0; top: 0; width: 9vh; height: 9vh; margin: -4.5vh 0 0 -4.5vh; border-radius: 50%; z-index: 9;
+      pointer-events: none; border: .6vh solid #22d3ee; background: rgba(34, 211, 238, .22); will-change: transform;
+      box-shadow: 0 0 0 .4vh rgba(0, 10, 40, .45), 0 0 3.5vh rgba(34, 211, 238, .9), inset 0 0 2vh rgba(34, 211, 238, .5);
+      transition: opacity .3s; }
+    #wg-dot::after { content: ""; position: absolute; left: 50%; top: 50%; width: 1.6vh; height: 1.6vh; margin: -.8vh 0 0 -.8vh;
+      border-radius: 50%; background: #fff; box-shadow: 0 0 0 .3vh #0891b2; }
     .wg-col { position: fixed; top: 12vh; bottom: 12vh; width: 28vw; margin-left: -14vw; border-radius: 3vh; z-index: 21;
       border: 2px dashed var(--card-border, rgba(165,243,252,.35)); display: flex; align-items: center; justify-content: center;
       font-size: 4vh; font-weight: 600; color: var(--hint, #a9c6ff); opacity: .6; transition: all .3s; }
@@ -127,6 +131,8 @@
       if (data && probe) { probe.push(data.x / innerWidth); return; }
       if (!data || calibrating || frozen()) return;    // eyebrows up: ignore the jumpy predictions
       xs.push(data.x); ys.push(data.y);
+      dotX = dotX == null ? data.x : dotX + 0.55 * (data.x - dotX);   // the ring follows each prediction
+      dotY = dotY == null ? data.y : dotY + 0.55 * (data.y - dotY);
       if (xs.length > SMOOTH) { xs.shift(); ys.shift(); }
       lastPred = performance.now();
     });
@@ -139,6 +145,11 @@
     running = true;
     setInterval(browTick, 33);
     setInterval(send, SEND_MS);
+    const ring = el("wg-dot");
+    (function frame() {
+      if (dotX != null) ring.style.transform = `translate(${dotX}px, ${dotY}px)`;
+      requestAnimationFrame(frame);
+    })();
   }
 
   // ---------------- face points -> eyebrows + eyes open ----------------
@@ -328,7 +339,6 @@
     }
     const dot = el("wg-dot"), band = el("wg-zone");
     dot.style.opacity = showDot && fresh ? "1" : "0";
-    if (fresh) { dot.style.left = x + "px"; dot.style.top = y + "px"; }
     band.style.opacity = showDot && zone ? "1" : "0";
     band.style.left = zone === "left" ? "0" : zone === "middle" ? "33.33vw" : "66.66vw";
     fetch("/api/gaze", { method: "POST", headers: { "Content-Type": "application/json" },

@@ -4,3 +4,4 @@
 16:15 webgazer: gaze frozen while the eyebrows rise (+0.7 s after), so a raise no longer moves the selection; Room Controls = one switch per device (Turn the lamp on/off, Turn the fan on/off, label follows the state); 172 tests pass
 16:25 webgazer: big cards fill the screen height; background dims while a card is selected
 16:32 webgazer: longer dot calibration (17 points) + left/centre/right check that sets the zone borders
+16:36 webgazer: bolder gaze ring moved every frame; less smoothing lag (median 6, POST every 50 ms)
