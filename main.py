@@ -425,6 +425,8 @@ def run_keyboard(args, live: Live) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description="LookAt")
     ap.add_argument("--patient", default="demo")
+    ap.add_argument("--profile", default="margaret", choices=("margaret", "james"),
+                    help="the demo patient whose memory the agent uses (switch on the panel)")
     ap.add_argument("--recalibrate", action="store_true")
     ap.add_argument("--camera", type=int, default=0)
     ap.add_argument("--keyboard", action="store_true", help="no camera: test with the keyboard")
@@ -443,10 +445,11 @@ def main() -> None:
     live = Live(room, patient=args.patient)
     live.gaze_mode = "camera" if args.keyboard else args.gaze   # web: /patient opens with WebGazer
     from lookat.agent import MODEL, Agent
-    from lookat.memory import Memory
-    memory = Memory(args.patient)
+    from lookat.memory import PROFILES, profile_memory
+    memory = profile_memory(args.profile)   # the demo patient (switch on the panel); --patient = calibration only
     live.memory = memory          # the shift summary reads it (lookat/summary.py)
-    agent = Agent(live, memory)
+    agent = Agent(live, memory, profile=args.profile)
+    print(f"Patient profile: {PROFILES[args.profile]['name']} ({len(memory.data['facts'])} facts in memory)")
     agent.start()
     print(f"Agent: {'Claude ' + MODEL if agent.client else 'rules only (no ANTHROPIC_API_KEY)'}")
     server = start_server(live, args.port)
