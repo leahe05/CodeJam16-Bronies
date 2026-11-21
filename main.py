@@ -186,8 +186,17 @@ def describe(events, out, chosen, flash: tuple) -> tuple:
     return text, time.monotonic()
 
 
+def narrate(narrator, live: Live, speaker) -> None:
+    """Speak what the patient screen shows (new screen, locked option, nurse called)."""
+    with live.lock:
+        screen = live.screen_json()
+    for text, interrupt in narrator.update(screen):
+        speaker.say(text, interrupt=interrupt)
+
+
 def run_camera(args, live: Live) -> None:
     from lookat.gaze import GazeModel, LocalSpeaker
+    from lookat.narrator import Narrator
     from lookat.gestures import GestureDetector, load_settings
     from lookat.vision import FaceTracker
 
@@ -204,6 +213,7 @@ def run_camera(args, live: Live) -> None:
         print(f"Ready. Eyebrow threshold {det.threshold:.2f} ({settings['gesture']}). "
               f"Watch the '{WINDOW}' window; press q in it to quit.")
         fps, last, raised, flash = 0.0, time.monotonic(), False, ("", 0.0)
+        narrator = Narrator()
         while True:
             frame, f = tracker.read()
             if frame is None:
@@ -216,6 +226,7 @@ def run_camera(args, live: Live) -> None:
             brow = {"up": det.above_since is not None, "held_s": det.held(now)}
             out = live.frame(now, spot, events, face=f is not None, confidence=conf, brow=brow)
             flash = describe(events, out, live.chosen, flash)
+            narrate(narrator, live, speaker)
             fps = 0.9 * fps + 0.1 / max(now - last, 1e-3)
             last = now
             if f is not None and f["face_px"] < config.MIN_FACE_PX:
@@ -244,6 +255,16 @@ def run_camera(args, live: Live) -> None:
 
 def run_keyboard(args, live: Live) -> None:
     """No camera: drive the real screens, lamp and fan from the keyboard."""
+    from lookat.gaze import LocalSpeaker
+    from lookat.narrator import Narrator
+    speaker, narrator = LocalSpeaker(), Narrator()
+    try:
+        _keyboard_loop(live, speaker, narrator)
+    finally:
+        speaker.close()
+
+
+def _keyboard_loop(live: Live, speaker, narrator) -> None:
     spot, look = None, {ord("a"): "left", ord("s"): "middle", ord("d"): "right"}
     fps, last = 0.0, time.monotonic()
     while True:
@@ -261,6 +282,7 @@ def run_keyboard(args, live: Live) -> None:
         elif key == ord("e"):
             events = ["emergency"]
         live.frame(now, spot, events, face=True, confidence=1.0 if spot else 0.0)
+        narrate(narrator, live, speaker)
         fps = 0.9 * fps + 0.1 / max(now - last, 1e-3)
         last = now
         draw_operator(np.zeros((480, 1000, 3), np.uint8), live, 1.0 if spot else 0.0, None, fps, keyboard=True)
