@@ -206,16 +206,18 @@ class SystemVoice:
     MAC_VOICES = ["Ava (Premium)", "Zoe (Premium)", "Ava (Enhanced)", "Zoe (Enhanced)",
                   "Allison (Enhanced)", "Susan (Enhanced)", "Samantha (Enhanced)", "Samantha"]
     MAC_RATE = "175"   # words per minute; default is ~185
+    FAST_RATE = "205"  # calibration: short, quick prompts
 
-    def __init__(self):
+    def __init__(self, fast: bool = False):
         self.proc = None
         self.mac_voice = None
+        self.rate = self.FAST_RATE if fast else self.MAC_RATE
         if sys.platform == "win32":
             script = ("Add-Type -AssemblyName System.Speech; "
                       "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
                       "try { $s.SelectVoiceByHints([System.Speech.Synthesis.VoiceGender]::Female, "
                       "[System.Speech.Synthesis.VoiceAge]::Adult) } catch {}; "
-                      "$s.Rate = -1; "
+                      f"$s.Rate = {1 if fast else -1}; "
                       "while ($null -ne ($l = [Console]::In.ReadLine())) { $s.Speak($l); [Console]::Out.WriteLine('done') }")
             self.proc = subprocess.Popen(["powershell", "-NoProfile", "-Command", script],
                                          stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
@@ -238,7 +240,7 @@ class SystemVoice:
             self.proc.stdout.readline()
         elif shutil.which("say"):
             voice = ["-v", self.mac_voice] if self.mac_voice else []
-            subprocess.run(["say", *voice, "-r", self.MAC_RATE, text])
+            subprocess.run(["say", *voice, "-r", self.rate, text])
 
     def close(self) -> None:
         if self.proc is not None:
@@ -312,13 +314,15 @@ class LocalSpeaker:
     spoken one after another by a worker thread. Uses Ava (AvaVoice) when it works, otherwise the
     computer's own female voice (SystemVoice), so the prompts are never silent."""
 
-    def __init__(self):
-        self.system = SystemVoice()
-        try:
-            self.ava = AvaVoice()
-        except Exception as e:   # edge-tts missing / blocked, or no audio player
-            print(f"[voice] Ava unavailable ({type(e).__name__}); using the system voice")
-            self.ava = None
+    def __init__(self, ava: bool = True, fast: bool = False):
+        """ava=False, fast=True: the instant, offline computer voice, a bit quicker (calibration)."""
+        self.system = SystemVoice(fast=fast)
+        self.ava = None
+        if ava:
+            try:
+                self.ava = AvaVoice()
+            except Exception as e:   # edge-tts missing / blocked, or no audio player
+                print(f"[voice] Ava unavailable ({type(e).__name__}); using the system voice")
         self.q: "queue.Queue" = queue.Queue()
         self.worker = threading.Thread(target=self._run, daemon=True, name="voice")
         self.worker.start()
