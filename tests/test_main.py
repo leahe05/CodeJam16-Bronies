@@ -41,8 +41,7 @@ def test_lamp_on_by_gaze_and_eyebrows():
     b = make_live()
     _, t = choose(b, "left", 0.0)           # Room Controls
     assert b.sm.kind == "room"
-    _, t = choose(b, "left", t)             # Adjust the lights
-    ev, t = choose(b, "left", t)            # Lamp on
+    ev, t = choose(b, "left", t)            # Turn the lamp on (one switch)
     assert ("device", "lamp", "on") in ev and b.room.state()["lamp_on"]
 
 

@@ -75,7 +75,7 @@ def test_execute_logs_hooks_and_rejects_unknown():
 def test_gaze_turns_the_lamp_on():
     live = Live(make_room(), now=lambda: 0.0)
     t = 0.0
-    for spot in ("left", "left", "left"):      # Room Controls -> Adjust the lights -> Lamp on
+    for spot in ("left", "left"):              # Room Controls -> Turn the lamp on
         ev, t = choose(live, t, spot)
     assert ("device", "lamp", "on") in ev and live.room.lamp.is_on
     assert live.recent[0]["text"].startswith("Patient: Lamp ON")

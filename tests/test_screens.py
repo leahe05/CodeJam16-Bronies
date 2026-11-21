@@ -28,18 +28,23 @@ def test_room_controls_navigation_and_devices():
     m = sm()
     assert m.select("left", 1) == []
     assert m.view(1)["badge"] == "ROOM CONTROLS"
-    assert labels(m) == ["Adjust the lights", RETURN, "Adjust the temperature"]
-    m.select("right", 2)
-    assert m.view(2)["title"] == "The room is 24.5 °C"
-    assert m.select("left", 3) == [("device", "fan", "on")]
-    assert m.select("right", 4) == [("device", "fan", "off")]
-    m.select("middle", 5)                        # Back
-    m.select("left", 6)                          # Adjust the lights
-    assert labels(m) == ["Lamp on", "Back", "Lamp off"] and m.view(6)["title"] == "The lamp is OFF"
-    assert m.select("left", 7) == [("device", "lamp", "on")]
-    m.select("middle", 8)
-    m.select("middle", 9)
+    # one switch per device; the label says what choosing it will do (the room fixture: lamp off, fan off)
+    assert labels(m) == ["Turn the lamp on", RETURN, "Turn the fan on"]
+    assert m.view(1)["subtitle"] == "Lamp off · Fan off"
+    assert m.select("left", 2) == [("device", "lamp", "on")] and m.kind == "room"
+    assert m.select("right", 3) == [("device", "fan", "on")] and m.kind == "room"
+    m.select("middle", 4)                        # Return to main menu
     assert m.kind == "idle"
+
+
+def test_room_switch_labels_follow_the_room():
+    state = {"lamp_on": False, "fan_on": True}
+    m = ScreenManager(room=lambda: state)
+    m.select("left", 0)
+    assert labels(m) == ["Turn the lamp on", RETURN, "Turn the fan off"]
+    assert m.select("right", 1) == [("device", "fan", "off")]
+    state["fan_on"] = False
+    assert labels(m)[2] == "Turn the fan on"
 
 
 def test_talk_to_ai_assistant():

@@ -143,9 +143,13 @@ class ScreenManager:
             s.update(badge="AI ASSISTANT", title="How can I help you?", icon="sparkle",
                      left=_opt("a", opts[i], "left"), right=right, middle=_opt("home", RETURN, "middle", icon="home"))
         elif k == "room":
+            # one switch per device: the label says what choosing it will do, and flips after
+            r = self.room()
+            lamp, fan = bool(r.get("lamp_on")), bool(r.get("fan_on"))
             s.update(badge="ROOM CONTROLS", title="What would you like to adjust?", icon="sparkle",
-                     left=_opt("lights", "Adjust the lights", "left", icon="bulb"),
-                     right=_opt("temperature", "Adjust the temperature", "right", icon="thermometer"),
+                     subtitle=f"Lamp {'on' if lamp else 'off'} · Fan {'on' if fan else 'off'}",
+                     left=_opt("lamp", "Turn the lamp off" if lamp else "Turn the lamp on", "left", icon="bulb"),
+                     right=_opt("fan", "Turn the fan off" if fan else "Turn the fan on", "right", icon="fan"),
                      middle=_opt("home", RETURN, "middle", icon="home"))
         elif k == "lights":
             on = self.room().get("lamp_on")
@@ -223,7 +227,14 @@ class ScreenManager:
             self._go("idle", now)
             return [("assistant_choice", label)]
         if k == "room":
-            self._go({"lights": "lights", "temperature": "temperature", "home": "idle"}[oid], now)
+            if oid in ("lamp", "fan"):           # a switch: stay here, the label flips to the new state
+                self.since = now
+                on = bool(self.room().get(f"{oid}_on"))
+                return [("device", oid, "off" if on else "on")]
+            if oid in ("lights", "temperature"):   # old submenus (still reachable from older clients)
+                self._go(oid, now)
+                return []
+            self._go("idle", now)
             return []
         if k in ("lights", "temperature"):
             self.since = now

@@ -33,7 +33,13 @@
   let xs = [], ys = [], lastPred = 0, zone = null, running = false, calibrating = false;
   let showDot = params.get("dot") !== "0";
   // eyebrows: value = brow-to-eyelid distance / face height (smoothed); thr/rel from calibration
-  const brow = { value: 0, thr: null, rel: null, since: null, longSent: false, events: [], face: false, eyesOpen: null };
+  const brow = { value: 0, thr: null, rel: null, start: null, since: null, longSent: false, events: [],
+                  face: false, eyesOpen: null, frozenUntil: 0 };
+  // Raising the eyebrows changes how the eyes look, so WebGazer's estimate jumps. From the moment the
+  // brows START to rise until FREEZE_AFTER_MS after they come down, the gaze is frozen on the option the
+  // patient was already looking at, and those predictions are thrown away.
+  const FREEZE_AFTER_MS = 700;
+  const frozen = () => brow.start != null && (brow.value >= brow.start || performance.now() < brow.frozenUntil);
 
   // ---------------- UI ----------------
   document.documentElement.classList.add("gaze-web");
@@ -104,7 +110,7 @@
     wg.saveDataAcrossSessions(false);                // a fresh calibration every start
     wg.setRegression("ridge").applyKalmanFilter(true);
     wg.setGazeListener((data) => {
-      if (!data || calibrating) return;
+      if (!data || calibrating || frozen()) return;    // eyebrows up: ignore the jumpy predictions
       xs.push(data.x); ys.push(data.y);
       if (xs.length > SMOOTH) { xs.shift(); ys.shift(); }
       lastPred = performance.now();
@@ -146,6 +152,7 @@
     brow.value = brow.value ? 0.6 * brow.value + 0.4 * m.brow : m.brow;
     if (brow.thr == null || calibrating) return;
     const now = performance.now();
+    if (brow.value >= brow.start) brow.frozenUntil = now + FREEZE_AFTER_MS;
     if (brow.since == null) {
       if (brow.value >= brow.thr) { brow.since = now; brow.longSent = false; }
     } else if (brow.value < brow.rel) {   // released
@@ -187,6 +194,7 @@
       if (rest != null && peak != null && peak - rest > 0.012) {
         brow.thr = rest + 0.5 * (peak - rest);
         brow.rel = brow.thr - 0.3 * (brow.thr - rest);
+        brow.start = rest + 0.2 * (peak - rest);           // starting to rise: freeze the gaze from here
         console.log("WG brows", { rest, peak, thr: brow.thr });
         break;
       }
@@ -250,9 +258,12 @@
   }
   function send() {
     if (calibrating || !running) return;
-    const fresh = performance.now() - lastPred < LOST_MS && xs.length >= 3;
+    const hold = frozen() && zone;                    // eyebrows up: keep the option they were looking at
+    const fresh = hold || (performance.now() - lastPred < LOST_MS && xs.length >= 3);
     let x = null, y = null;
-    if (fresh) {
+    if (hold) {
+      x = median(xs); y = median(ys);
+    } else if (fresh) {
       x = median(xs); y = median(ys);
       zone = zoneOf(x);
     } else {
