@@ -128,3 +128,17 @@ def test_live_speaks_while_choosing_the_lamp():
                     "Adjust the lights.", "+" + RAISE, "Adjust the lights. The lamp is OFF",
                     "Lamp on.", "+" + RAISE, "Lamp on."]
     assert live.room.state()["lamp_on"]
+
+
+def test_mac_queue_interrupt_drops_waiting_lines():
+    import queue
+    from lookat.speech import Speech
+    s = Speech(enabled=False)
+    s._mac_q, s._mac_now = queue.Queue(), None      # the macOS path, without running `say`
+    s("Look at the LEFT card")
+    s("Raise your eyebrows")
+    s.say("Lamp on.")                                # interrupts: the waiting lines are dropped
+    s("Raise your eyebrows.")                        # queued after it
+    assert [s._mac_q.get_nowait() for _ in range(2)] == ["Lamp on.", "Raise your eyebrows."]
+    s.say("")                                        # just stop
+    assert s._mac_q.empty()

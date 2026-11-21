@@ -18,18 +18,23 @@ What the Announcer says, following the gaze:
 Not spoken: timeouts back to the home screen, live numbers in titles (the temperature
 title changes every second), the calibration overlay (calibration speaks itself).
 
-Windows: one persistent PowerShell System.Speech process reading lines from stdin.
-A line starting with "!" cancels whatever is being said first. Elsewhere: print only.
+Voice (Lea's choice, PR #8): a calm, natural female voice, slightly slower than default.
+Windows: one persistent PowerShell System.Speech process reading lines from stdin, first
+installed female voice (usually Zira), Rate -1; a line starting with "!" cancels first.
+macOS: the `say` command with the best installed female voice (gaze.LocalSpeaker.MAC_VOICES),
+one line at a time from a queue; interrupting kills the current `say`. Elsewhere: print only.
 """
+import queue
+import shutil
 import subprocess
 import sys
+import threading
 import time
 from typing import Callable, Optional
 
 RAISE = "Raise your eyebrows."
 NAME_AFTER_S = 0.3      # look at a card this long before its name is said (skips gaze flicker)
 RENAME_S = 2.0          # the same card's name is not repeated within this time
-VOICE = "Microsoft Zira Desktop"   # calmer than the default David; falls back if missing
 NURSE_CALLED = "Calling your nurse. Help is on the way."
 # screens whose title is the news (a question or a suggestion); on the others it's a live
 # status like "The room is 23.4 °C" that must not be read out again every time it changes
@@ -37,7 +42,8 @@ TITLE_IS_NEWS = ("suggestion", "checkin", "assistant", "nurse", "room")
 
 _SCRIPT = ("[Console]::InputEncoding = [Text.Encoding]::UTF8; Add-Type -AssemblyName System.Speech; "
            "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
-           f"try {{ $s.SelectVoice('{VOICE}') }} catch {{ }}; $s.Rate = 0; $s.Volume = 100; "
+           "try { $s.SelectVoiceByHints([System.Speech.Synthesis.VoiceGender]::Female, "
+           "[System.Speech.Synthesis.VoiceAge]::Adult) } catch { }; $s.Rate = -1; $s.Volume = 100; "
            "while ($null -ne ($l = [Console]::In.ReadLine())) { "
            "if ($l.StartsWith('!')) { $s.SpeakAsyncCancelAll(); $l = $l.Substring(1) }; "
            "if ($l.Length -gt 0) { [void]$s.SpeakAsync($l) } }")
@@ -50,36 +56,78 @@ def speakable(text: str) -> str:
 
 class Speech:
     def __init__(self, enabled: bool = True):
-        self.proc = None
-        if enabled and sys.platform == "win32":
+        self.proc = None                 # Windows: the voice process
+        self._mac_q = None               # macOS: lines waiting for `say`
+        self._mac_now = None             # macOS: the `say` process speaking now
+        if not enabled:
+            return
+        if sys.platform == "win32":
             try:
                 self.proc = subprocess.Popen(["powershell", "-NoProfile", "-Command", _SCRIPT],
                                              stdin=subprocess.PIPE, text=True, encoding="utf-8")
             except OSError as e:
                 print(f"[voice off: {e}]")
+        elif sys.platform == "darwin" and shutil.which("say"):
+            from lookat.gaze import LocalSpeaker
+            self._mac_voice = LocalSpeaker._pick_mac_voice()
+            self._mac_rate = LocalSpeaker.MAC_RATE
+            self._mac_q = queue.Queue()
+            threading.Thread(target=self._mac_run, name="voice", daemon=True).start()
 
     def __call__(self, text: str) -> None:
         """Queued after anything already being said (calibration prompts)."""
         print(f"[say] {text}")
-        self._send(speakable(text))
+        self._send(speakable(text), interrupt=False)
 
     def say(self, text: str) -> None:
         """Stops what is being said and says this instead ("" = just stop)."""
         if text:
             print(f"[voice] {text}")
-        self._send("!" + speakable(text))
+        self._send(speakable(text), interrupt=True)
 
-    def _send(self, line: str) -> None:
+    def _send(self, line: str, interrupt: bool) -> None:
+        if self._mac_q is not None:
+            if interrupt:
+                self._mac_stop()
+            if line:
+                self._mac_q.put(line)
+            return
         if self.proc is None:
             return
         try:
-            self.proc.stdin.write(line + "\n")
+            self.proc.stdin.write(("!" if interrupt else "") + line + "\n")
             self.proc.stdin.flush()
         except (OSError, ValueError) as e:   # the voice process died: keep running silently
             print(f"[voice failed: {e}]")
             self.proc = None
 
+    # ----- macOS -------------------------------------------------------------
+    def _mac_stop(self) -> None:
+        try:
+            while True:
+                self._mac_q.get_nowait()
+        except queue.Empty:
+            pass
+        p = self._mac_now
+        if p is not None and p.poll() is None:
+            p.terminate()
+
+    def _mac_run(self) -> None:
+        while True:
+            line = self._mac_q.get()
+            if line is None:
+                return
+            voice = ["-v", self._mac_voice] if self._mac_voice else []
+            try:
+                self._mac_now = subprocess.Popen(["say", *voice, "-r", self._mac_rate, line])
+                self._mac_now.wait()
+            except OSError as e:
+                print(f"[say failed: {e}]")
+
     def close(self) -> None:
+        if self._mac_q is not None:
+            self._mac_stop()
+            self._mac_q.put(None)
         if self.proc is not None:
             try:
                 self.proc.stdin.close()
