@@ -82,7 +82,8 @@ def make_app(backend, title: str = "LookAt", web_dir: str = WEB_DIR):
     def patient(request: Request):
         # main.py --gaze web (the default): /patient opens with the page's own eye tracking (WebGazer)
         if getattr(backend, "gaze_mode", None) == "web" and "gaze" not in request.query_params:
-            q = "&".join(f"{k}={v}" for k, v in request.query_params.items())
+            from urllib.parse import urlencode
+            q = urlencode(request.query_params.multi_items())
             return RedirectResponse("/patient?gaze=web" + ("&" + q if q else ""))
         return page("patient")
 

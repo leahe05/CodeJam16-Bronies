@@ -340,7 +340,7 @@ def main() -> None:
     print(f"Agent: {'Claude ' + MODEL if agent.client else 'rules only (no ANTHROPIC_API_KEY)'}")
     server = start_server(live, args.port)
     print_urls(args.port)
-    if args.gaze == "web":
+    if live.gaze_mode == "web":
         print(f"  WEB GAZE: open http://localhost:{args.port}/patient on the patient screen, click once,\n"
               f"  follow the dot, then raise your eyebrows when asked (R = redo gaze, B = redo eyebrows,\n"
               f"  D = hide the gaze ring). Python does not use the camera in this mode.\n")
