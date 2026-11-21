@@ -17,13 +17,22 @@ Shared CSS/JS/SVG files go here too and load from `/web/<file>`.
 - Match the mockups (deep navy, glassy glowing cards, big white text, light-blue hints, LookAt eye logo). Readable from 2-3 m.
 
 ## Patient screen designs
-`patient.html` is the default design ("Glow", matches the mockups). Alternatives in `designs/`, all on the same `/api/screen` data and the same shared logic in `lookat.js` (icons, gaze focus, call-nurse overlay, face hint, demo tag):
+How the patient screen is built (one structure, several looks):
 
-| Design | Open | For |
-|---|---|---|
-| Glow (default) | `/patient` | the mockups |
-| Directions | `/web/designs/directions.html` | 3 equal columns where the patient looks; biggest gaze targets |
-| Daylight | `/web/designs/daylight.html` | bright rooms (a dark screen washes out on a projector) |
-| High contrast | `/web/designs/contrast.html` | low vision, glare, a confused patient |
+| File | What |
+|---|---|
+| `patient.html` | the default design, "Glow" (the mockups) |
+| `patient-ui.js` | the screens and behaviour, shared by every design: home, room menus, and pop-ups that open as a **window** in the middle over the blurred home screen (a suggestion opens as a small notification window that grows into the check-in) |
+| `patient-base.css` | shared layout, window, countdown, call-nurse alert; designs restyle it through CSS variables |
+| `lookat.js` | polling, icons, gaze highlight, the 3 s countdown, overlay / face hint / demo tag |
 
-Compare them side by side: `/web/designs/index.html`. To switch the default, copy a design over `patient.html` (fix its `/web/lookat.js` path if needed).
+Alternative looks in `designs/` (all blue, same features, same red call-nurse alert):
+
+| Design | Open | Window opens | Countdown |
+|---|---|---|---|
+| Glow (default) | `/patient` | glass window sharpens into place | light drains around the option |
+| Aurora | `/web/designs/aurora.html` | blooms out of a glowing orb | bright cyan light |
+| Tide | `/web/designs/tide.html` | ripple from the center | water drains out of the option |
+| Midnight | `/web/designs/midnight.html` | unfolds from a line of light | fine thread of light, glow fades |
+
+Compare them side by side: `/web/designs/index.html`. Add `?noanim` to any page URL to turn animation off (screenshots).

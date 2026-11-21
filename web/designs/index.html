@@ -32,32 +32,32 @@
 <body>
 <header>
   <h1>Patient screen designs</h1>
-  <p>All four read the same live data (<code>/api/screen</code>) and share the same behaviour (<code>/web/lookat.js</code>), so the team can pick a look without changing any backend code. Tip: run <code>py -3.11 -m lookat.fake_api --still checkin</code> to compare one screen.</p>
+  <p>All four are the same screens with the same features (<code>patient-ui.js</code>), only the look differs. They read the same live data (<code>/api/screen</code>) so the team can pick a look without changing any backend code. The red call-nurse alert is the same in all four. Tip: run <code>py -3.11 -m lookat.fake_api --still checkin</code> to compare one screen.</p>
 </header>
 <div class="grid">
   <figure>
     <div class="frame"><iframe src="/patient" title="Glow design" loading="lazy"></iframe></div>
     <figcaption><b>Glow</b> (default, <code>web/patient.html</code>)
-      <p>Matches the LookAt mockups: deep navy, glassy glowing cards, light-blue hints.</p>
+      <p>The LookAt mockups: deep navy, glassy glowing cards. Pop-ups open as a glass window over the blurred home screen; the countdown is a light draining around the option.</p>
       <a href="/patient" target="_blank">Open full screen →</a></figcaption>
   </figure>
   <figure>
-    <div class="frame"><iframe src="/web/designs/directions.html" title="Directions design" loading="lazy"></iframe></div>
-    <figcaption><b>Directions</b>
-      <p>Three equal columns placed exactly where the patient looks. Biggest targets for coarse gaze, flat and calm.</p>
-      <a href="/web/designs/directions.html" target="_blank">Open full screen →</a></figcaption>
+    <div class="frame"><iframe src="/web/designs/aurora.html" title="Aurora design" loading="lazy"></iframe></div>
+    <figcaption><b>Aurora</b> 
+      <p>Frosted glass over slowly drifting blue light. Pop-ups bloom out of a glowing orb; the countdown is a bright cyan light.</p>
+      <a href="/web/designs/aurora.html" target="_blank">Open full screen →</a></figcaption>
   </figure>
   <figure>
-    <div class="frame"><iframe src="/web/designs/daylight.html" title="Daylight design" loading="lazy"></iframe></div>
-    <figcaption><b>Daylight</b>
-      <p>Warm light theme for daytime: projects cleanly when the room lights are on.</p>
-      <a href="/web/designs/daylight.html" target="_blank">Open full screen →</a></figcaption>
+    <div class="frame"><iframe src="/web/designs/tide.html" title="Tide design" loading="lazy"></iframe></div>
+    <figcaption><b>Tide</b> 
+      <p>Calm ocean blues with slow waves. Pop-ups open like a ripple from the center; the countdown is water draining out of the option.</p>
+      <a href="/web/designs/tide.html" target="_blank">Open full screen →</a></figcaption>
   </figure>
   <figure>
-    <div class="frame"><iframe src="/web/designs/contrast.html" title="High contrast design" loading="lazy"></iframe></div>
-    <figcaption><b>High contrast</b>
-      <p>Black, white and yellow with the largest text. For low vision, glare or a confused patient.</p>
-      <a href="/web/designs/contrast.html" target="_blank">Open full screen →</a></figcaption>
+    <div class="frame"><iframe src="/web/designs/midnight.html" title="Midnight design" loading="lazy"></iframe></div>
+    <figcaption><b>Midnight</b> 
+      <p>The calmest, for night use: near-black blue, thin lines, a few stars. Pop-ups unfold from a single line of light; the countdown is a fine thread of light.</p>
+      <a href="/web/designs/midnight.html" target="_blank">Open full screen →</a></figcaption>
   </figure>
 </div>
 <script>

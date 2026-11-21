@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LookAt · Tide</title>
+<!-- Design "Tide": calm ocean blues with slow waves. Pop-ups open like a ripple from the center
+     (a ring spreads out, the window opens as a growing circle); the countdown is water draining out
+     of the option. Same structure and features as /patient (patient-ui.js); only the look differs. -->
+<link rel="stylesheet" href="/web/patient-base.css">
+<style>
+  :root {
+    --bg: linear-gradient(180deg, #03122b 0%, #05254d 55%, #083d74 100%);
+    --hint: #9fd4ff; --icon: #d6f0ff; --brand-icon: #5cc8ff;
+    --card-bg: linear-gradient(180deg, rgba(40, 130, 220, .32), rgba(10, 55, 125, .42)); --card-border: rgba(120, 200, 255, .3); --card-r: calc(var(--u) * 3);
+    --card-shadow: inset 0 calc(var(--u) * .3) 0 rgba(255, 255, 255, .08), 0 calc(var(--u) * 1.2) calc(var(--u) * 3) rgba(0, 10, 40, .35);
+    --dwell-border: #8fd8ff; --dwell-glow: 0 0 calc(var(--u) * 3) rgba(80, 190, 255, .55), inset 0 calc(var(--u) * .3) 0 rgba(255, 255, 255, .12);
+    --ask-bg: linear-gradient(180deg, rgba(30, 110, 200, .4), rgba(8, 45, 110, .5)); --ask-border: #bfe8ff; --ask-glow: 0 0 calc(var(--u) * 4) rgba(90, 200, 255, .55);
+    --chosen-flash: rgba(170, 230, 255, .9);
+    --liquid: rgba(90, 200, 255, .5);
+    --panel-bg: rgba(8, 40, 90, .5); --panel-border: rgba(120, 200, 255, .3); --panel-r: calc(var(--u) * 4);
+    --panel-shadow: 0 calc(var(--u) * 2) calc(var(--u) * 8) rgba(0, 10, 40, .4);
+    --win-bg: linear-gradient(180deg, rgba(20, 95, 180, .62), rgba(5, 34, 82, .78)); --win-border: rgba(140, 215, 255, .55); --win-blur: 10px;
+    --win-shadow: 0 0 calc(var(--u) * 7) rgba(60, 170, 255, .35), 0 calc(var(--u) * 3) calc(var(--u) * 9) rgba(0, 8, 30, .5);
+    --home-behind: blur(9px) brightness(.5);
+    --pulse: rgba(120, 210, 255, .8);
+    --chip-bg: rgba(60, 170, 255, .18); --chip-border: rgba(120, 210, 255, .45); --chip-text: #cdeeff;
+    --pill-bg: linear-gradient(180deg, rgba(56, 170, 250, .42), rgba(14, 80, 170, .45)); --pill-border: #a8e1ff;
+    --pill-glow: 0 0 calc(var(--u) * 3) rgba(60, 170, 255, .4);
+    --bar-bg: rgba(4, 30, 70, .55); --bar-border: rgba(120, 200, 255, .3);
+    --dot: rgba(120, 200, 255, .35); --dot-on: #e0f4ff;
+    --moon-a: #f0f9ff; --moon-b: #38bdf8; --moon-glow: rgba(56, 189, 248, .7);
+  }
+  /* countdown: water drains out of the option instead of a ring */
+  .countdown .ring { display: none; }
+  .countdown .tank { display: block; }
+
+  /* slow waves at the bottom */
+  .waves svg { position: absolute; left: 0; bottom: 0; width: 200vw; }
+  .waves .w1 { height: 30vh; fill: rgba(30, 110, 200, .18); animation: tide 38s linear infinite; }
+  .waves .w2 { height: 22vh; fill: rgba(40, 140, 230, .16); animation: tide 26s linear infinite reverse; }
+  .waves .w3 { height: 14vh; fill: rgba(70, 170, 245, .14); animation: tide 18s linear infinite; }
+  @keyframes tide { to { transform: translateX(-100vw); } }
+  .waves .shine { position: absolute; left: 50%; top: 38%; width: 70vw; height: 50vh; transform: translate(-50%, -50%);
+    background: radial-gradient(ellipse, rgba(80, 170, 255, .14), transparent 65%); }
+
+  /* pop-ups open like a ripple */
+  @keyframes win-open { 0% { clip-path: circle(0% at 50% 50%); transform: scale(.97); } 100% { clip-path: circle(120% at 50% 50%); } }
+  @keyframes win-close { to { clip-path: circle(0% at 50% 50%); opacity: .6; } }
+  body[data-mode="window"] #stage::before {
+    content: ""; position: absolute; left: 50%; top: 50%; width: calc(var(--u) * 24); height: calc(var(--u) * 24); margin: calc(var(--u) * -12);
+    border-radius: 50%; border: 2px solid rgba(150, 220, 255, .7); opacity: 0; pointer-events: none; z-index: 1;
+    animation: ripple 1.3s ease-out;
+  }
+  @keyframes ripple { 0% { transform: scale(.2); opacity: .9; } 100% { transform: scale(7); opacity: 0; } }
+</style>
+</head>
+<body>
+<div class="bg waves" aria-hidden="true">
+  <div class="shine"></div>
+  <svg class="w1" viewBox="0 0 3200 200" preserveAspectRatio="none"><path d="M0 90 Q200 30 400 90 T800 90 T1200 90 T1600 90 T2000 90 T2400 90 T2800 90 T3200 90 V200 H0 Z"/></svg>
+  <svg class="w2" viewBox="0 0 3200 200" preserveAspectRatio="none"><path d="M0 110 Q266 50 533 110 T1066 110 T1600 110 T2133 110 T2666 110 T3200 110 V200 H0 Z"/></svg>
+  <svg class="w3" viewBox="0 0 3200 200" preserveAspectRatio="none"><path d="M0 100 Q160 60 320 100 T640 100 T960 100 T1280 100 T1600 100 T1920 100 T2240 100 T2560 100 T2880 100 T3200 100 V200 H0 Z"/></svg>
+</div>
+<script src="/web/lookat.js"></script>
+<script src="/web/patient-ui.js"></script>
+<script>PatientUI.start();</script>
+</body>
+</html>

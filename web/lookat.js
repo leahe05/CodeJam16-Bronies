@@ -5,7 +5,9 @@
  *   - polls GET /api/screen every 150 ms (docs/API.md, section 1)
  *   - calls render(data) only when the screen content changes
  *   - gaze focus: every element with data-spot="left|middle|right" gets the class
- *     dwell / asking / chosen; its <small data-hint> turns into "Raise your eyebrows" while asking
+ *     dwell / asking / chosen; its <small data-hint> turns into "Raise your eyebrows" while asking,
+ *     and it gets a .countdown (a light that drains around its border in ASK_S seconds, or a draining
+ *     .tank of liquid; each design's CSS picks which one shows)
  *   - #overlay (call nurse), #facehint ("Move into view of the camera"), #demotag (DEMO TIME)
  *   - body[data-conn="lost"] after 3 failed polls
  * Never crashes on null or unknown fields.
@@ -78,7 +80,50 @@
   const hint = (o, spot) => (o && o.hint) || DEFAULT_HINT[spot] || "";
   /** The hint line; turns into "Raise your eyebrows" while that spot is asking. */
   const hintTag = (o, spot) => `<small data-hint="${esc(hint(o, spot))}">${esc(hint(o, spot))}</small>`;
-  const bar = '<i class="bar"></i>';   // the 3 s "raise now" timer under an asking option (styled by each design)
+  // ---------------- countdown: a light that drains around the asking option's border ----------------
+  const ASK_S = 3;   // config.ASK_TIMEOUT_S: the patient has 3 s to raise their eyebrows
+
+  function roundedPath(w, h, r, i) {   // rounded rect starting at top-center, clockwise, inset by i
+    const x = i, y = i, W = w - 2 * i, H = h - 2 * i;
+    r = Math.max(0, Math.min(r - i, W / 2, H / 2));
+    return `M${x + W / 2},${y} H${x + W - r} A${r},${r} 0 0 1 ${x + W},${y + r} V${y + H - r} A${r},${r} 0 0 1 ${x + W - r},${y + H}`
+      + ` H${x + r} A${r},${r} 0 0 1 ${x},${y + H - r} V${y + r} A${r},${r} 0 0 1 ${x + r},${y} Z`;
+  }
+  function drawRing(el, c) {   // (re)fit the ring to the element's current size
+    const cs = getComputedStyle(el);
+    const bw = parseFloat(cs.borderTopWidth) || 0, r = parseFloat(cs.borderTopLeftRadius) || 0;
+    const w = el.offsetWidth, h = el.offsetHeight;
+    if (!w || !h) return;
+    const sw = parseFloat(cs.getPropertyValue("--ring-w")) || 3;
+    const d = roundedPath(w, h, r, sw / 2);
+    c.style.inset = `${-bw}px`;
+    const svg = c.querySelector(".ring");
+    svg.setAttribute("width", w); svg.setAttribute("height", h); svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
+    svg.querySelectorAll("path").forEach((p) => p.setAttribute("d", d));
+  }
+  function addCountdown(el) {
+    if (el.querySelector(":scope > .countdown")) return;
+    const c = document.createElement("span");
+    c.className = "countdown";
+    c.setAttribute("aria-hidden", "true");
+    c.style.setProperty("--ask", ASK_S + "s");
+    c.innerHTML = '<svg class="ring"><path class="ring-track"/><path class="ring-left" pathLength="100"/></svg>'
+      + '<span class="tank"><i class="liquid"><svg class="wave" viewBox="0 0 200 12" preserveAspectRatio="none"><path d="M0 6 Q25 0 50 6 T100 6 T150 6 T200 6 V12 H0 Z"/></svg></i></span>';
+    el.appendChild(c);
+    drawRing(el, c);
+    if (window.ResizeObserver) {
+      el._ringObs = new ResizeObserver(() => drawRing(el, c));
+      el._ringObs.observe(el);
+    }
+  }
+  function removeCountdown(el) {
+    const c = el.querySelector(":scope > .countdown");
+    if (c) c.remove();
+    if (el._ringObs) { el._ringObs.disconnect(); el._ringObs = null; }
+  }
+
+  // ?noanim in the URL turns off all animation (screenshots, testing)
+  if (/[?&]noanim\b/.test(location.search)) document.documentElement.classList.add("noanim");
 
   function dots(page) {
     if (!page || !(page.count > 1)) return "";
@@ -100,6 +145,7 @@
       el.classList.toggle("dwell", state === "dwell");
       el.classList.toggle("asking", state === "asking");
       el.classList.toggle("chosen", state === "chosen");
+      if (state === "asking") addCountdown(el); else removeCountdown(el);
       const sm = el.querySelector("small[data-hint]");
       if (sm) sm.textContent = state === "asking" ? "Raise your eyebrows" : sm.dataset.hint;
     });
@@ -153,5 +199,5 @@
     poll();
   }
 
-  window.LookAt = { ICONS, icon, iconFor, optIcon, esc, hint, hintTag, bar, dots, start };
+  window.LookAt = { ICONS, ASK_S, icon, iconFor, optIcon, esc, hint, hintTag, dots, start };
 })();
