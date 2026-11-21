@@ -1,0 +1,1 @@
+13:09 M2-1 (first version): main.py drives the patient screen from the camera (gaze dwell + eyebrow confirm, long raise = call nurse); room simulated, plugs/agent/nurse page not wired; 6 tests in tests/test_main.py, 90 pass; live camera test still to do
