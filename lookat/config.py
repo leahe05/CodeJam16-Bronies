@@ -1,5 +1,21 @@
 """All LookAt constants. Change numbers here, nowhere else."""
 import os
+from typing import Optional
+
+
+def saved_env(name: str, default: Optional[str] = None) -> Optional[str]:
+    """os.environ first; on Windows also the value `setx` saved for the user, so a
+    terminal that was opened before setx still works. Values are never printed."""
+    value = os.environ.get(name)
+    if value or os.name != "nt":
+        return value or default
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as key:
+            return winreg.QueryValueEx(key, name)[0] or default
+    except OSError:
+        return default
+
 
 # Interaction timing (seconds)
 DWELL_S = 1.0          # look at a spot this long -> it is highlighted and locked
@@ -32,5 +48,5 @@ MODEL_PATH = "models/face_landmarker.task"
 # Network
 PAGE_PORT = 8000
 WIFI_NAME = os.environ.get("LOOKAT_WIFI", "lea")   # the plugs only work on this network
-LAMP_IP = os.environ.get("LAMP_IP", "172.20.10.2")
-FAN_IP = os.environ.get("FAN_IP", "")  # empty = simulated fan
+LAMP_IP = saved_env("LAMP_IP", "172.20.10.2")
+FAN_IP = saved_env("FAN_IP", "")  # empty = simulated fan (setx FAN_IP "172.20.10.x")

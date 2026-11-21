@@ -16,25 +16,12 @@ import threading
 import time
 from typing import Callable, Optional
 
+from lookat.config import saved_env   # noqa: F401 - re-exported: plugs.saved_env
 from lookat.state import log_event
 
 COMMANDS = ("on", "off", "toggle", "flash")
 RETRY_S = 5.0
 TIMEOUT_S = 5
-
-
-def saved_env(name: str) -> Optional[str]:
-    """os.environ first; on Windows also the value `setx` saved for the user, so a
-    terminal that was opened before setx still works. The value is never printed."""
-    value = os.environ.get(name)
-    if value or os.name != "nt":
-        return value
-    try:
-        import winreg
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as key:
-            return winreg.QueryValueEx(key, name)[0] or None
-    except OSError:
-        return None
 
 
 class PlugWorker:
