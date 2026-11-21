@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#12243b">
+  <title>Nurse dashboard | LookAt</title>
+  <link rel="stylesheet" href="/web/nurse.css">
+  <script defer src="/web/nurse.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="wrap topbar-inner">
+      <div class="brand"><span class="brand-mark" aria-hidden="true"></span>LookAt</div>
+      <button id="sound" class="button sound" type="button" aria-pressed="false">Enable alert sound</button>
+    </div>
+  </header>
+  <main class="wrap dashboard">
+    <div class="page-heading">
+      <h1>Nurse dashboard</h1>
+      <p id="connection-summary" class="connection" role="status">Connecting to LookAt…</p>
+    </div>
+
+    <section id="supervisor-panel" class="panel supervisor" aria-labelledby="supervisor-heading" hidden>
+      <div class="section-heading">
+        <h2 id="supervisor-heading">Suggested check-ins</h2>
+        <span id="supervisor-mode" class="muted">Two-patient simulation</span>
+      </div>
+      <div id="proposals" class="proposal-list" aria-live="polite"></div>
+    </section>
+
+    <div class="tabs" role="tablist" aria-label="Nurse dashboard views">
+      <button id="patients-tab" type="button" role="tab" aria-selected="true" aria-controls="overview">Patients</button>
+      <button id="attention-tab" type="button" role="tab" aria-selected="false" aria-controls="attention" tabindex="-1">
+        Needs attention <span id="alert-count" class="count" hidden></span>
+      </button>
+    </div>
+    <p id="alert-announcement" class="visually-hidden" role="alert"></p>
+    <section id="attention" class="panel intervention" role="tabpanel" aria-labelledby="attention-tab" tabindex="0" hidden>
+      <h2>Open requests</h2>
+      <div id="alerts" class="alert-list"><p class="empty">Checking for alerts…</p></div>
+      <details id="history" class="history" hidden>
+        <summary id="history-label">Handled alerts</summary>
+        <div id="handled" class="alert-list"></div>
+      </details>
+    </section>
+
+    <div id="overview" class="patient-grid" role="tabpanel" aria-labelledby="patients-tab" tabindex="0">
+      <section class="roster" aria-labelledby="patient-heading">
+        <div class="section-heading">
+          <h2 id="patient-heading">Assigned patients</h2>
+          <details class="agent-setup">
+            <summary>Connect another agent</summary>
+            <form id="connect-form">
+              <label for="agent-url">LookAt server URL</label>
+              <input id="agent-url" name="agent-url" type="url" placeholder="http://room-device:8000" required>
+              <button class="button primary" type="submit">Connect agent</button>
+            </form>
+          </details>
+        </div>
+        <ul id="patients" class="patient-list"></ul>
+      </section>
+      <section class="panel details" aria-labelledby="details-heading">
+        <div class="section-heading">
+          <div>
+            <h2 id="details-heading" tabindex="-1">Patient status</h2>
+            <p id="patient-status" class="muted" role="status">Waiting for patient data…</p>
+          </div>
+          <button id="visit" class="button" type="button" hidden>Log visit</button>
+        </div>
+        <div id="notes"></div>
+        <section id="history-panel" class="note" aria-labelledby="history-heading" hidden>
+          <div class="section-heading">
+            <h3 id="history-heading">Chat history</h3>
+            <small id="history-source" class="muted" hidden></small>
+          </div>
+          <div id="chat-history"></div>
+        </section>
+        <section id="simulation" class="note simulation" hidden></section>
+        <div id="patient-actions" hidden>
+          <form id="presence-form" class="note">
+            <label for="presence">Visitor status</label>
+            <div class="form-row">
+              <select id="presence">
+                <option value="unknown">Unknown</option>
+                <option value="present">Visitors present</option>
+                <option value="absent">No visitors</option>
+              </select>
+              <button id="save-presence" class="button" type="submit">Save status</button>
+            </div>
+          </form>
+          <form id="question-form" class="note">
+            <h3>Message the patient</h3>
+            <label for="question">Question</label>
+            <textarea id="question" rows="2" maxlength="300" required></textarea>
+            <label for="options" id="options-label">Answer choices, one per line</label>
+            <textarea id="options" rows="3" maxlength="500" required>Yes
+No</textarea>
+            <div class="form-row">
+              <button id="suggest-choices" class="button" type="button" hidden>Suggest choices</button>
+              <button id="send-question" class="button primary" type="submit">Send question</button>
+              <button id="end-session" class="button" type="button" hidden>End conversation</button>
+            </div>
+          </form>
+        </div>
+      </section>
+    </div>
+    <p id="feedback" class="feedback" role="status" hidden></p>
+  </main>
+</body>
+</html>
