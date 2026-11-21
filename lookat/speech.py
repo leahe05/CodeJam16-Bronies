@@ -21,10 +21,11 @@ title changes every second), the calibration overlay (calibration speaks itself)
 Voice (Lea's choice, PR #8): a calm, natural female voice, slightly slower than default.
 Windows: one persistent PowerShell System.Speech process reading lines from stdin, first
 installed female voice (usually Zira), Rate -1; a line starting with "!" cancels first.
-macOS: the `say` command with the best installed female voice (gaze.LocalSpeaker.MAC_VOICES),
+macOS: the `say` command with the best installed female voice (gaze.SystemVoice.MAC_VOICES),
 one line at a time from a queue; interrupting kills the current `say`. Elsewhere: print only.
 """
 import itertools
+import os
 import queue
 import shutil
 import subprocess
@@ -32,6 +33,8 @@ import sys
 import threading
 import time
 from typing import Callable, Optional
+
+from lookat.state import log_event
 
 RAISE = "Raise your eyebrows."
 NAME_AFTER_S = 0.3      # look at a card this long before its name is said (skips gaze flicker)
@@ -75,9 +78,9 @@ class Speech:
             except OSError as e:
                 print(f"[voice off: {e}]")
         elif sys.platform == "darwin" and shutil.which("say"):
-            from lookat.gaze import LocalSpeaker
-            self._mac_voice = LocalSpeaker._pick_mac_voice()
-            self._mac_rate = LocalSpeaker.MAC_RATE
+            from lookat.gaze import SystemVoice
+            self._mac_voice = SystemVoice._pick_mac_voice()
+            self._mac_rate = SystemVoice.MAC_RATE
             self._mac_q = queue.Queue()
             threading.Thread(target=self._mac_run, name="voice", daemon=True).start()
 
@@ -178,6 +181,129 @@ class WebVoice:
         pass
 
 
+class EdgeVoice:
+    """Microsoft Edge's natural neural voice (edge-tts, needs internet), played on this laptop.
+    Same API as Speech: voice(text) queues, voice.say(text) interrupts ("" = stop).
+
+    Same voice, settings and cache (cache/voice/) as Lea's gaze.AvaVoice, which speaks the
+    calibration-tool prompts; this one can also stop a line mid-sentence (say), which the
+    selection prompts need. Fetching a new line takes ~1 s over the hotspot, so prewarm()
+    fetches the menu lines at start: in use they play at once. No internet -> the line is
+    said with the laptop voice (Speech) instead, so nothing goes silent."""
+
+    VOICE = "en-US-AvaNeural"           # keep these three equal to gaze.AvaVoice (shared cache)
+    RATE, PITCH = "-8%", "-2Hz"
+    TIMEOUT_S = 8
+    CACHE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "cache", "voice")
+
+    def __init__(self, voice: str = VOICE):
+        self.voice = voice
+        self._q: "queue.Queue" = queue.Queue()
+        self._gen = 0                    # bumped by say(): anything older is dropped / stopped
+        self._fallback = None
+        os.makedirs(self.CACHE, exist_ok=True)
+        threading.Thread(target=self._run, name="edge-voice", daemon=True).start()
+
+    def __call__(self, text: str) -> None:
+        print(f"[say] {text}")
+        self._q.put((self._gen, speakable(text)))
+
+    def say(self, text: str) -> None:
+        if text:
+            print(f"[voice] {text}")
+        self._gen += 1
+        try:
+            while True:
+                self._q.get_nowait()
+        except queue.Empty:
+            pass
+        if text:
+            self._q.put((self._gen, speakable(text)))
+
+    def prewarm(self, lines) -> None:
+        """Fetch these lines in the background so they play instantly later."""
+        def run():
+            got = sum(1 for t in dict.fromkeys(lines) if t and self._file(speakable(t)))
+            print(f"Voice: {got} lines ready ({self.voice})")
+        threading.Thread(target=run, name="edge-prewarm", daemon=True).start()
+
+    def close(self) -> None:
+        self.say("")
+        self._q.put(None)
+
+    # ----- worker ------------------------------------------------------------
+    def _file(self, text: str) -> Optional[str]:
+        import hashlib
+        key = hashlib.sha1(f"{self.voice}|{self.RATE}|{self.PITCH}|{text}".encode()).hexdigest()[:16]
+        path = os.path.join(self.CACHE, key + ".mp3")
+        if os.path.isfile(path) and os.path.getsize(path) > 0:
+            return path
+        try:
+            import asyncio
+            import edge_tts
+            tmp = path + ".part"
+            comm = edge_tts.Communicate(text, self.voice, rate=self.RATE, pitch=self.PITCH)
+            asyncio.run(asyncio.wait_for(comm.save(tmp), self.TIMEOUT_S))
+            os.replace(tmp, path)
+            return path
+        except Exception as e:   # noqa: BLE001 - offline, blocked, or edge-tts missing
+            log_event("voice_offline", error=type(e).__name__)
+            return None
+
+    def _run(self) -> None:
+        while True:
+            item = self._q.get()
+            if item is None:
+                return
+            gen, text = item
+            if gen != self._gen:
+                continue
+            path = self._file(text)
+            if gen != self._gen:
+                continue                  # interrupted while fetching
+            if path is None:
+                if self._fallback is None:
+                    self._fallback = Speech()
+                self._fallback(text)
+                continue
+            self._play(path, gen)
+
+    def _play(self, path: str, gen: int) -> None:
+        """Windows MCI (winmm): play the mp3, stop at once if say() was called meanwhile."""
+        if sys.platform != "win32":
+            subprocess.run(["afplay", path]) if shutil.which("afplay") else None
+            return
+        import ctypes
+        mci = ctypes.windll.winmm.mciSendStringW
+        buf = ctypes.create_unicode_buffer(32)
+        mci(f'open "{path}" type mpegvideo alias lookat_voice', None, 0, None)
+        mci("play lookat_voice", None, 0, None)
+        try:
+            while gen == self._gen:
+                mci("status lookat_voice mode", buf, 32, None)
+                if buf.value != "playing":
+                    break
+                time.sleep(0.02)
+        finally:
+            mci("stop lookat_voice", None, 0, None)
+            mci("close lookat_voice", None, 0, None)
+
+
+def known_lines() -> list:
+    """Every fixed line the Announcer can say on the built-in menus (for EdgeVoice.prewarm):
+    card names and screen titles; each is said as its own line, so each can be fetched ahead."""
+    from lookat.screens import ScreenManager
+    lines = [RAISE, NURSE_CALLED]
+    for lamp_on in (False, True):
+        sm = ScreenManager(room=lambda lamp_on=lamp_on: {"lamp_on": lamp_on, "temp_c": None})
+        for kind in ("idle", "room", "lights", "temperature", "assistant"):
+            sm._go(kind, 0.0)
+            v = sm.view(0.0)
+            lines += [sentence(v[spot]["label"]) for spot in ("left", "middle", "right") if v.get(spot)]
+            lines.append(screen_line(v))
+    return [x for x in dict.fromkeys(lines) if x]
+
+
 def _label(screen: dict, spot: Optional[str]) -> Optional[str]:
     opt = screen.get(spot) if spot else None
     return opt.get("label") if isinstance(opt, dict) else None
@@ -192,10 +318,14 @@ def screen_key(screen: dict) -> tuple:
 
 
 def screen_line(screen: dict) -> str:
-    title = screen.get("title") or ""
-    if screen.get("screen") == "nurse" and title:
-        return f"Your nurse asks: {title}"
-    return title
+    """A new screen, read out the way Lea's narrator does: the title, then each option with its
+    direction ("Left: Yes, please. Right: No, thanks. Center: Return to main menu."), so the
+    patient knows the choices without turning to read them."""
+    from lookat.narrator import describe
+    line = describe(screen)
+    if screen.get("screen") == "nurse" and screen.get("title"):
+        return f"Your nurse asks: {line}"
+    return line
 
 
 class Announcer:
@@ -242,12 +372,14 @@ class Announcer:
         cue = state == "asking" and target != self._cued
         self._cued = target if state == "asking" else None
 
-        text = " ".join(p for p in parts if p)
-        if text:
-            self.say(text)                          # news or a new card's name: replaces the old
+        parts = [p for p in parts if p]
+        if parts:
+            self.say(parts[0])                      # news or a new card's name: replaces the old
+            for p in parts[1:]:
+                self.queue(p)                       # e.g. the new screen's title, right after
         if cue:
             self.queue(RAISE)                       # right after the name, never over it
-        return " ".join(p for p in (text, RAISE if cue else "") if p) or None
+        return " ".join(parts + ([RAISE] if cue else [])) or None
 
     def _named_target(self, t: float) -> Optional[tuple]:
         """The current target if its name was said recently (so it isn't repeated), else None."""

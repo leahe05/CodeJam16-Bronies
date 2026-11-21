@@ -73,7 +73,7 @@ def test_choice_says_label_and_new_screen():
     room = screen("room", "What would you like to adjust?", "Adjust the lights", "Return to main menu",
                   "Adjust the temperature")
     a.update(room, {"spot": "left", "state": "chosen"}, "Room Controls")
-    assert said == ["Room Controls. What would you like to adjust?"]
+    assert said == ["Room Controls.", "+What would you like to adjust? Left: Adjust the lights. Right: Adjust the temperature. Center: Return to main menu."]   # the whole screen, as Lea's narrator reads it
 
 
 def test_live_numbers_in_a_title_are_not_reread():
@@ -90,7 +90,7 @@ def test_nurse_question_and_call_nurse():
     a.update(screen(), None, None)
     a.update(screen("nurse", "Did you sleep okay?", "Yes", None, "No"), None, None)
     a.update(screen("nurse", "Did you sleep okay?", "Yes", None, "No"), None, None, [("call_nurse",)])
-    assert said == ["Your nurse asks: Did you sleep okay?", NURSE_CALLED]
+    assert said == ["Your nurse asks: Did you sleep okay? Left: Yes. Right: No.", NURSE_CALLED]
 
 
 def test_back_home_by_timeout_is_silent():
@@ -124,8 +124,8 @@ def test_live_speaks_while_choosing_the_lamp():
     choose("left")      # Room Controls
     choose("left")      # Adjust the lights
     choose("left")      # Lamp on
-    assert said == ["Room Controls.", "+" + RAISE, "Room Controls. What would you like to adjust?",
-                    "Adjust the lights.", "+" + RAISE, "Adjust the lights. The lamp is OFF",
+    assert said == ["Room Controls.", "+" + RAISE, "Room Controls.", "+What would you like to adjust? Left: Adjust the lights. Right: Adjust the temperature. Center: Return to main menu.",
+                    "Adjust the lights.", "+" + RAISE, "Adjust the lights.", "+The lamp is OFF. Left: Lamp on. Right: Lamp off. Center: Back.",
                     "Lamp on.", "+" + RAISE, "Lamp on."]
     assert live.room.state()["lamp_on"]
 
@@ -174,3 +174,19 @@ def test_labels_ending_in_a_period_get_no_second_one():
     a.update(screen("checkin", "Pillows?", "Yes, please.", "Return to main menu", "No, thanks."),
              {"spot": "left", "state": "asking"}, None, now=0.0)
     assert said[0] == "Yes, please."
+
+
+def test_known_lines_cover_the_menus():
+    from lookat.speech import known_lines
+    lines = known_lines()
+    for line in (RAISE, "Room Controls.", "Lamp on.", "Cooler.", "Return to main menu."):
+        assert line in lines
+    for start in ("The lamp is OFF. Left: Lamp on.", "The lamp is ON. Left: Lamp on.",
+                  "What would you like to adjust? Left: Adjust the lights."):
+        assert any(x.startswith(start) for x in lines), start
+
+
+def test_edge_voice_shares_leas_ava_settings():
+    from lookat.gaze import AvaVoice
+    from lookat.speech import EdgeVoice
+    assert (EdgeVoice.VOICE, EdgeVoice.RATE, EdgeVoice.PITCH, EdgeVoice.CACHE) ==            (AvaVoice.VOICE, AvaVoice.RATE, AvaVoice.PITCH, AvaVoice.CACHE)
