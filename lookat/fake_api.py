@@ -39,8 +39,10 @@ def screen(screen_id, title, badge=None, subtitle=None, icon=None, left=None, mi
 SCREENS = [
     screen("idle", "You're all set.", subtitle="I'm here if you need anything.", icon="moon",
            left=ROOM_CARD, middle=opt("talk", "Talk to AI", "Look center + short eyebrow raise", "chat")),
-    screen("suggestion", "Would you like help getting comfortable?", badge="AI SUGGESTION", icon="sparkle",
-           left=ROOM_CARD, middle=opt("engage", "Look center + raise eyebrows to engage", None, "target")),
+    screen("suggestion", "It's getting cold in here.", subtitle="What would help?", badge="AI SUGGESTION", icon="sparkle",
+           left=opt("a", "Turn the fan off", "Look left + raise eyebrows", None),
+           middle=opt("dismiss", "Not now", "Look center + raise eyebrows", "x"),
+           right=opt("b", "Ask nurse for a blanket", "Look right + raise eyebrows", "nurse")),
     screen("checkin", "Would you like help adjusting your pillows?", badge="AI CHECK-IN", icon="pillow",
            left=opt("yes", "Yes, please.", "Look left + raise eyebrows", "check"), middle=HOME,
            right=opt("no", "No, thanks.", "Look right + raise eyebrows", "x")),

@@ -8,7 +8,8 @@
     mem.context_text(perception) -> short text the agent reads first
 
 learn():
-    comfort       cold_below_c / warm_above_c / runs_warm from facts (latest wins)
+    comfort       cold_below_c / warm_above_c / runs_warm from facts (latest wins);
+                  warm_night_above_c = 1 °C lower at night for someone who runs warm
     night_checkins_enabled   False after NIGHT_SILENCE ignored night check-ins in a row
     option_ranking           per question kind: options by how often they were picked
     hidden_options           shown >= HIDE_AFTER times, never picked ("Something else" never hidden)
@@ -28,9 +29,16 @@ HIDE_AFTER = 5
 NEVER_HIDE = ("Something else", "Return to main menu", "Nurse")
 WARM_DEFAULT_C = 23.0
 
+# The patient's chart (demo data, labelled "chart" on the panel). Comfort facts carry the numbers the triggers
+# use; care facts give Claude something real to work with (the Talk to AI menu, explained pages).
 DEMO_CHART = [
     {"text": "Runs warm at night", "kind": "comfort", "data": {"runs_warm": True}},
     {"text": "Feels cold below 20 °C", "kind": "comfort", "data": {"cold_below_c": 20}},
+    {"text": "Feels warm above 24 °C (23 °C at night)", "kind": "comfort", "data": {"warm_above_c": 24}},
+    {"text": "Answers only with the eyes: keep questions short", "kind": "care"},
+    {"text": "Repositioned every 2 hours (care plan)", "kind": "care"},
+    {"text": "Likes the lamp on in the evening, off to sleep", "kind": "preference"},
+    {"text": "Drinks water through a straw; the nurse helps", "kind": "care"},
 ]
 
 
@@ -67,8 +75,10 @@ class Memory:
         return self.log("facts", {"text": text, "kind": kind, "source": source, "data": data or {}})
 
     def load_chart(self, facts: list) -> None:
-        if not self.data["facts"]:
-            for f in facts:
+        """Adds every chart fact the memory doesn't have yet (so a newer chart reaches an older memory file)."""
+        known = {f["text"] for f in self.data["facts"]}
+        for f in facts:
+            if f["text"] not in known:
                 self.add_fact(f["text"], f.get("kind", "comfort"), "chart", f.get("data"))
 
     # ----- learning (deterministic) ------------------------------------------
@@ -100,8 +110,10 @@ class Memory:
             ranking[kind] = sorted(seen, key=lambda o: (-got[o], list(seen).index(o)))
             hidden[kind] = [o for o, n in seen.items() if n >= HIDE_AFTER and not got[o] and o not in NEVER_HIDE]
 
+        warm = comfort.get("warm_above_c", WARM_DEFAULT_C)
         return {"comfort": comfort,
-                "warm_above_c": comfort.get("warm_above_c", WARM_DEFAULT_C),
+                "warm_above_c": warm,
+                "warm_night_above_c": warm - 1 if comfort.get("runs_warm") else warm,
                 "night_ignored_streak": streak,
                 "night_checkins_enabled": streak < NIGHT_SILENCE,
                 "option_ranking": ranking, "hidden_options": hidden,
@@ -122,7 +134,8 @@ class Memory:
         L = self.learn()
         lines = ["NOW: " + ", ".join(f"{k}={v}" for k, v in perception.items())]
         lines.append("COMFORT FACTS: " + ("; ".join(f"{f['text']} ({f['source']})" for f in self.data["facts"]) or "none"))
-        lines.append(f"LEARNED: warm threshold {L['warm_above_c']} °C; ignored night check-ins in a row: "
+        lines.append(f"LEARNED: warm above {L['warm_above_c']} °C ({L['warm_night_above_c']} °C at night); "
+                     f"cold below {L['comfort'].get('cold_below_c', 'unknown')} °C; ignored night check-ins in a row: "
                      f"{L['night_ignored_streak']} (stop at {NIGHT_SILENCE}); "
                      f"night check-ins {'on' if L['night_checkins_enabled'] else 'OFF'}")
         for kind, order in L["option_ranking"].items():
@@ -153,7 +166,8 @@ if __name__ == "__main__":
         L = m.learn()
         print(json.dumps(L, indent=1, ensure_ascii=False))
         print(m.context_text({"time": "02:14", "temp_c": 24.5, "awake": True}))
-        ok = (L["comfort"] == {"runs_warm": True, "cold_below_c": 20} and not L["night_checkins_enabled"]
+        ok = (L["comfort"] == {"runs_warm": True, "cold_below_c": 20, "warm_above_c": 24}
+              and L["warm_night_above_c"] == 23 and not L["night_checkins_enabled"]
               and "Fan" in L["hidden_options"]["comfort"] and "Something else" not in L["hidden_options"]["comfort"]
               and Memory("selftest", d).learn()["comfort"]["cold_below_c"] == 20)
         print("PASS" if ok else "FAIL")

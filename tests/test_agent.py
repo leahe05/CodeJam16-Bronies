@@ -61,7 +61,7 @@ def test_warm_night_trigger(tmp_path):
     assert name == "warm_night" and "runs warm" in why
 
 
-@pytest.mark.parametrize("kw", [{"awake": False}, {"awake": None}, {"at": "14:00"}, {"temp": 21.5}])
+@pytest.mark.parametrize("kw", [{"awake": False}, {"awake": None}, {"at": "14:00", "temp": 23.5}, {"temp": 21.5}])
 def test_no_trigger(tmp_path, kw):
     agent, *_ = make(tmp_path, **kw)
     assert agent.trigger(agent.perceive()) is None
@@ -109,7 +109,7 @@ def test_question_limit(tmp_path):
 
 # ----- rules fallback (no key) -------------------------------------------------------
 def test_rules_warm_night_fixed(tmp_path):
-    agent, live, room, screens = make(tmp_path, answers=["Yes, please.", "Yes"])
+    agent, live, room, screens = make(tmp_path, answers=["Turn the fan on", "Yes"])
     agent.episode(*agent.trigger(agent.perceive()))
     assert room.state()["fan_on"] and room.state()["temp_c"] < 24.5
     assert screens.seen[-1] == "Better now?"
@@ -119,7 +119,7 @@ def test_rules_warm_night_fixed(tmp_path):
 
 
 def test_rules_not_better_pages_nurse_with_explanation(tmp_path):
-    agent, live, *_ = make(tmp_path, answers=["Yes, please.", "No"])
+    agent, live, *_ = make(tmp_path, answers=["Turn the fan on", "No"])
     agent.episode(*agent.trigger(agent.perceive()))
     assert live.alerts and live.alerts[0]["kind"] == "page" and "Still warm" in live.alerts[0]["text"]
 
@@ -192,7 +192,7 @@ def test_claude_cannot_act_without_yes(tmp_path):
 
 
 def test_claude_error_falls_back_to_rules(tmp_path):
-    agent, live, room, _ = make(tmp_path, answers=["Yes, please.", "Yes"], client=FakeClient(error=TimeoutError()))
+    agent, live, room, _ = make(tmp_path, answers=["Turn the fan on", "Yes"], client=FakeClient(error=TimeoutError()))
     agent.episode(*agent.trigger(agent.perceive()))
     assert room.state()["fan_on"] and any("AI unavailable" in t for _, t in stages(live))
 
@@ -211,9 +211,8 @@ def test_live_screens_suggestion_answered(tmp_path):
             break
         time.sleep(0.02)
     assert live.sm.view(0)["title"] == "Too warm?"
-    for spot in ("middle", "left"):                 # engage, then "Yes, please."
-        for ev in live.sm.select(spot, 0.0):
-            agent.events.put(ev)
+    for ev in live.sm.select("left", 0.0):          # "Yes, please." right on the notification
+        agent.events.put(ev)
     th.join(3)
     assert out["a"] == "Yes, please." and live.sm.kind == "idle"
 
@@ -282,7 +281,7 @@ def test_patient_switches_and_no_ai_are_not_room_changes(tmp_path):
     assert agent.trigger(agent.perceive()) is None
     agent2, _, room2, _ = make(tmp_path, at="10:00", temp=22.0)     # no AI: no room-change looks
     agent2.trigger(agent2.perceive())
-    room2.set_temp(25.0)
+    room2.set_temp(23.5)                                             # a change, but not "warm" (24 °C)
     assert agent2.trigger(agent2.perceive()) is None
 
 
@@ -319,7 +318,7 @@ def test_menu_choice_fan_without_ai(tmp_path):
 
 
 def test_own_fix_is_not_a_room_change(tmp_path):
-    agent, live, room, _ = make(tmp_path, answers=["Yes, please.", "Yes"], client=None)
+    agent, live, room, _ = make(tmp_path, answers=["Turn the fan on", "Yes"], client=None)
     agent.client = MenuClient(["Water", "Rest"], turns=[])            # Claude available for room changes
     agent.client.error = TimeoutError()                               # but this episode runs on rules
     agent.episode(*agent.trigger(agent.perceive()))                   # fan on, room cools ~2 °C
@@ -432,3 +431,36 @@ def test_status_says_why_the_agent_is_quiet(tmp_path):
     assert agent.status(agent.perceive()).startswith("Watching the room")
     agent.hush_until = clock.now().timestamp() + 300
     assert agent.status(agent.perceive()).startswith("Giving the patient a break until")
+
+
+def test_daytime_warm_offers_the_fan_on_the_notification(tmp_path):
+    agent, live, room, screens = make(tmp_path, answers=["Turn the fan on", "Yes"], at="14:00", temp=25.0)
+    name, why = agent.trigger(agent.perceive())
+    assert name == "warm" and "feels warm above 24" in why
+    agent.episode(name, why)
+    assert room.state()["fan_on"]
+
+
+def test_cold_offers_fan_off_or_a_blanket_from_the_nurse(tmp_path):
+    agent, live, room, screens = make(tmp_path, answers=["Ask nurse for a blanket"], at="10:00", temp=18.0)
+    room.execute("fan", "on", by="routine")
+    agent.episode(*agent.trigger(agent.perceive()))
+    assert live.alerts[-1]["text"] == "Feels cold, would like a blanket."
+    assert room.state()["fan_on"]                      # they chose the blanket, so the fan stays as it is
+
+
+def test_choosing_a_switch_option_is_the_approval(tmp_path):
+    agent, live, room, _ = make(tmp_path, answers=["Turn the fan off"], at="10:00", temp=18.0)
+    agent.trigger_name, agent.night, agent.questions = "cold", False, 0
+    room.execute("fan", "on", by="routine")
+    agent.call("suggest", {"text": "Cold?", "question": "What would help?", "if_yes": None, "why": "",
+                           "options": ["Turn the fan off", "Ask nurse for a blanket"]})
+    assert agent.call("act", {"device": "fan", "cmd": "off", "why": ""}).startswith("Fan OFF")
+
+
+def test_chart_reaches_an_older_memory(tmp_path):
+    from lookat.memory import DEMO_CHART
+    m = Memory("old", str(tmp_path))
+    m.add_fact("Runs warm at night", "comfort", "chart", {"runs_warm": True})
+    m.load_chart(DEMO_CHART)
+    assert len(m.data["facts"]) == len(DEMO_CHART) and m.learn()["warm_night_above_c"] == 23

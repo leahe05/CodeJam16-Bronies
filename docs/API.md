@@ -53,7 +53,7 @@ Rules for both sides:
 | `badge` | small label above the title: `"AI SUGGESTION"`, `"AI CHECK-IN"`, `"AI ASSISTANT"`, `"ROOM CONTROLS"`, `"From your nurse"`, or null |
 | `title`, `subtitle` | the big text and the smaller line under it |
 | `icon` | picture for the title card (keyword, see icons below) or null |
-| `left`, `middle`, `right` | the selectable options at each spot, or null when that spot has nothing. On `idle` and `suggestion`, **`left` is the small "Room Controls" card in the top-left corner** and `middle` is the big pill ("Talk to AI" / "Look center + raise eyebrows to engage") |
+| `left`, `middle`, `right` | the selectable options at each spot, or null when that spot has nothing. On `idle`, **`left` is the small "Room Controls" card in the top-left corner** and `middle` is the big pill ("Talk to AI"). On `suggestion` with two answers, `left` / `right` are those answers right on the notification (e.g. "Turn the fan off" / "Ask nurse for a blanket"), `middle` is "Not now" (id `dismiss`) and `subtitle` the question; an open suggestion (more answers) keeps `left` = Room Controls (id `room`) and `middle` = "Look center + raise eyebrows to engage" |
 | `footer` | instruction line under the options (nurse mode), or null |
 | `page` | `{"index": 0, "count": 2}` when answers are paged 2 at a time (draw page dots), or null |
 | `show_call_nurse` | draw the bottom "Call Nurse • Long eyebrow raise anywhere" banner (false in nurse mode) |

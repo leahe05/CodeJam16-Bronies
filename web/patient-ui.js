@@ -127,7 +127,7 @@
       + `${bigOpt(h.middle, "middle", "right", live, "talk-big")}</div>`;
   }
   function bigWin(d) {
-    if (d.screen === "suggestion")
+    if (d.screen === "suggestion" && !d.right)    // open question: Room Controls left, "Open it" right
       return `${chip(d)}<h1>${esc(d.title)}</h1>${sub(d)}<div class="cols">${bigOpt(d.left, "left", "left", true)}`
         + `<div class="col" data-zone="middle"></div>${bigOpt(d.middle, "middle", "right", true, "talk-big")}</div>`;
     const instr = d.screen === "nurse" && (d.left || d.right || d.middle)
@@ -148,6 +148,8 @@
     if (BIG) return bigWin(d);
     switch (d.screen) {
       case "suggestion":
+        if (d.right)    // the two choices on the notification itself, "Not now" in the center
+          return `${chip(d)}<h1>${esc(d.title)}</h1>${sub(d)}${cards(d, "row")}${center(d)}`;
         return `${chip(d)}<h1>${esc(d.title)}</h1>${sub(d)}`
           + (d.middle ? `<div class="engage" data-spot="middle">${icon(optIcon(d.middle) || "target")}<span>${esc(d.middle.label)}</span></div>` : "");
       case "nurse": {
@@ -173,7 +175,7 @@
     if (d.screen === "nurse")
       return `${brand("start")}<div class="nursepill">${icon("nurse")}${esc(d.badge || "From your nurse")}</div>`
         + `<div class="conn"><span class="ok">Connected</span><span class="lost">Reconnecting…</span></div>`;
-    const corner = !BIG && (d.screen === "idle" || d.screen === "suggestion") && d.left
+    const corner = !BIG && (d.screen === "idle" || d.screen === "suggestion") && d.left && d.left.id === "room"
       ? `<div class="corner" data-spot="left">${icon(optIcon(d.left) || "lamp", "corner-i")}<span><b>${esc(d.left.label)}</b>${hintTag(d.left, "left")}</span></div>`
       : "<div></div>";
     return `${corner}<div></div>${brand("")}`;
@@ -184,7 +186,7 @@
     const win = $("win");
     clearTimeout(closeTimer);
     const wasOpen = win.classList.contains("open") && !win.classList.contains("closing");
-    const size = d.screen === "suggestion" && !BIG ? "notif" : "full";
+    const size = d.screen === "suggestion" && !BIG && !d.right ? "notif" : "full";
     win.className = `open ${size} kind-${d.screen}` + (wasOpen ? "" : " opening");
     win.innerHTML = `<div class="win-in${wasOpen ? " swap" : ""}">${winHTML(d)}</div>`;
     if (!wasOpen) {

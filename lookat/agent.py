@@ -2,8 +2,14 @@
 checks its work, respects silence, and explains when it pages the nurse.
 
 WHEN is decided by deterministic triggers (cheap, explainable, demo-safe):
-    warm_night   night + awake + room >= warm threshold + memory "runs warm" + night check-ins on
+    warm_night   night + awake + room >= night warm threshold + memory "runs warm" + night check-ins on
+    warm         awake + room >= memory "feels warm above" (daytime, or anyone who doesn't run warm)
     cold         awake + room <= memory "feels cold below"
+    room_change  the room changed (temperature, time of day, a switch by someone else, waking up): Claude
+                 decides whether it is worth a suggestion
+    extreme      room >= 30 or <= 16 °C: page the nurse at once (awake or not)
+A suggestion shows its 2 concrete choices on the notification ("Turn the fan off" / "Ask nurse for a blanket"),
+"Not now" in the center; ignoring it fades it. Ignored / declined topics back off (respecting silence).
     patient      the patient chose an AI ASSISTANT option ("Get more comfortable", "Something else")
 WHAT is decided by Claude through tools, inside limits enforced in code:
     get_context  suggest  ask  act  check  page_nurse  defer  remember  finish
@@ -83,9 +89,15 @@ the fan on, do not offer to turn it off unless they are now clearly cold and a w
 pillows, pain or anything else needs the nurse.
 - remember() only a durable preference the patient has shown at least twice, on different occasions, or \
 chose to tell you. One or two switches are not a preference (the team also tests the room).
-- A suggestion has two parts. text: one short plain sentence about what you noticed, e.g. "It's getting \
-warm in here." question: the offer, e.g. "Turn the fan on?", with the answers "Yes, please." and \
-"No, thanks.". Plain words, no jargon; a number only if it helps (say "warm", not "24.3 °C").
+- A suggestion shows its 2 options right on the notification ("Not now" is always in the center). \
+text: one short plain sentence about what you noticed ("It's getting cold in here."). question: a short \
+prompt ("What would help?"). options: exactly 2 concrete choices, 2 to 5 words each, that DO something: \
+what you can do yourself ("Turn the fan off", "Turn the lamp on") and/or what the nurse can do ("Ask nurse \
+for a blanket", "Ask nurse for water"). Use "Yes, please." / "No, thanks." only when there is one sensible \
+fix. Plain words, no jargon; a number only if it helps (say "cold", not "18.2 °C").
+- The patient choosing a fan or lamp option IS their approval: act() it, then check(). Choosing a nurse \
+option: page_nurse (normal) with a message the nurse can act on ("Feels cold, would like a blanket. Room 18 °C, \
+fan already off.").
 - If memory holds few facts, you do not know this patient yet: say so in your "why", offer the common needs \
 of a bedbound patient (comfort, position, water, temperature, light, rest, company), and remember() what they pick.
 - End with finish(): one sentence on what happened. Every tool takes a short "why" for the reasoning panel.
@@ -422,12 +434,16 @@ class Agent:
             return None
         L = self.memory.learn()
         comfort = L["comfort"]
-        if (p["night"] and comfort.get("runs_warm") and p["temp_c"] >= L["warm_above_c"]
-                and L["night_checkins_enabled"] and self._cooled_down("warm_night")
-                and not (self.own_choice("fan", "off") and p["temp_c"] < L["warm_above_c"] + CLEARLY_C)):
-            return "warm_night", (f"Night ({p['time']}), eyes open {int((p['eyes_open_ratio'] or 1) * 100)}%, "
-                                  f"room {p['temp_c']} °C >= {L['warm_above_c']} °C, memory: runs warm at night. "
-                                  "Make one suggestion now.")
+        warm = L["warm_night_above_c"] if p["night"] else L["warm_above_c"]
+        if (p["temp_c"] >= warm and (L["night_checkins_enabled"] or not p["night"])
+                and not (self.own_choice("fan", "off") and p["temp_c"] < warm + CLEARLY_C)):
+            if p["night"] and comfort.get("runs_warm") and self._cooled_down("warm_night"):
+                return "warm_night", (f"Night ({p['time']}), eyes open {int((p['eyes_open_ratio'] or 1) * 100)}%, "
+                                      f"room {p['temp_c']} °C >= {warm} °C, memory: runs warm at night. "
+                                      "Make one suggestion now.")
+            if not (p["night"] and comfort.get("runs_warm")) and self._cooled_down("warm"):
+                return "warm", (f"Room {p['temp_c']} °C >= {warm} °C, memory: feels warm above {warm} °C. "
+                                "Make one suggestion now.")
         cold = comfort.get("cold_below_c")
         if (cold is not None and p["temp_c"] <= cold and self._cooled_down("cold")
                 and not (self.own_choice("fan", "on") and p["temp_c"] > cold - CLEARLY_C)):
@@ -504,31 +520,38 @@ class Agent:
     def _rules(self, name: str) -> None:
         self.fallback = True
         c = self.call
-        if name == "warm_night":
-            ans = c("suggest", {"text": "You seem to be awake. Too warm?", "question": "Turn the fan on to cool the room?",
-                                "options": ["Yes, please.", "No, thanks."], "if_yes": {"device": "fan", "cmd": "on"},
-                                "why": "night + awake + warm room + runs warm"})
-            if is_yes(ans):
-                self._fix_and_check({"device": "fan", "cmd": "on"}, "Still warm after the fan")
-            else:
-                c("finish", {"summary": f"Warm-night check-in: {ans}", "why": "respect the answer"})
-        elif name == "cold":
-            fan = self.live.room.state()["fan_on"]
-            if fan:
-                ans = c("suggest", {"text": "Feeling cold?", "question": "Turn the fan off?",
-                                    "options": ["Yes, please.", "No, thanks."], "if_yes": {"device": "fan", "cmd": "off"},
-                                    "why": "room below the patient's cold threshold, fan running"})
-                if is_yes(ans):
-                    self._fix_and_check({"device": "fan", "cmd": "off"}, "Still cold with the fan off")
+        if name in ("warm_night", "warm"):
+            if not self.live.room.state()["fan_on"]:
+                ans = c("suggest", {"text": "You seem to be awake. Too warm?" if name == "warm_night"
+                                    else "It's getting warm in here.", "question": "Cool the room down?",
+                                    "options": ["Turn the fan on", "No, thanks."], "if_yes": None,
+                                    "why": "warm room, above the patient's threshold; the fan can fix it"})
+                if action_in(ans) == ("fan", "on"):
+                    self._fix_and_check({"device": "fan", "cmd": "on"}, "Still warm after the fan")
                     return
             else:
-                ans = c("suggest", {"text": "Feeling cold?", "question": "Ask your nurse for a blanket?",
-                                    "options": ["Yes, please.", "No, thanks."], "if_yes": None,
-                                    "why": "room below the patient's cold threshold, nothing to switch"})
-                if is_yes(ans):
-                    c("page_nurse", {"message": "Feels cold, would like a blanket.",
-                                     "reason": f"Room {self.live.room.state()['temp_c']} °C, below their cold threshold.",
-                                     "urgency": "normal", "why": "only a nurse can fix this"})
+                ans = c("suggest", {"text": "Still warm in here.", "question": "The fan is already on.",
+                                    "options": ["Ask nurse for help", "No, thanks."], "if_yes": None,
+                                    "why": "warm with the fan running: only a nurse can do more"})
+                if ans == "Ask nurse for help":
+                    c("page_nurse", {"message": "Feels warm with the fan already on.",
+                                     "reason": f"Room {self.live.room.state()['temp_c']} °C, above their warm threshold.",
+                                     "urgency": "normal", "why": "nothing more I can switch"})
+            c("finish", {"summary": f"Warm check-in: {ans}", "why": "respect the answer"})
+        elif name == "cold":
+            fan = self.live.room.state()["fan_on"]
+            opts = ["Turn the fan off", "Ask nurse for a blanket"] if fan else ["Ask nurse for a blanket", "No, thanks."]
+            ans = c("suggest", {"text": "It's getting cold in here.", "question": "What would help?",
+                                "options": opts, "if_yes": None,
+                                "why": "room below the patient's cold threshold" + (", fan running" if fan else ", fan off")})
+            if action_in(ans) == ("fan", "off"):
+                self._fix_and_check({"device": "fan", "cmd": "off"}, "Still cold with the fan off")
+                return
+            if ans == "Ask nurse for a blanket":
+                c("page_nurse", {"message": "Feels cold, would like a blanket.",
+                                 "reason": f"Room {self.live.room.state()['temp_c']} °C, below their cold threshold"
+                                           + ("." if fan else "; the fan is already off."),
+                                 "urgency": "normal", "why": "only a nurse can bring a blanket"})
             c("finish", {"summary": f"Cold check-in: {ans}", "why": "done"})
         elif self.approved:                                       # the patient chose a switch in the menu
             self._fix_and_check({"device": self.approved[0], "cmd": self.approved[1]}, "Still not comfortable")
@@ -653,8 +676,9 @@ class Agent:
             if self.trigger_name == "warm_night" or (self.night and name == "suggest"):
                 self.memory.log("checkins", {"night": self.night, "outcome": "ignored" if ans == "ignored" else "answered"})
                 self._silence_check()
-            act = a.get("if_yes")
-            self.approved = (act["device"], act["cmd"]) if act and is_yes(ans) else None
+            act = a.get("if_yes")       # "Yes" to if_yes, or choosing an option that names the switch itself
+            self.approved = ((act["device"], act["cmd"]) if act and is_yes(ans)
+                             else action_in(ans) if ans in opts else None)
             self.feed("checked", f"Patient: {ans}", "their answer" + (" approves " + " ".join(self.approved)
                                                                        if self.approved else ""))
             return ans
