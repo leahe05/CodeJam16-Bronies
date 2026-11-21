@@ -164,6 +164,7 @@ class SimulatedPatient(Fake):
         data["patient"] = {"id": self.patient_id, "name": self.patient, "room": self.room_name}
         report = self.supervisor.latest_report(self.patient_id)
         data.update(simulation=True, proposal=self.proposal(), next_visit=[], routines=[],
+                    request_question_branches=True,
                     profile=self.supervisor.latest_profile(self.patient_id),
                     alerts=self.supervisor.alerts(self.patient_id) + data["alerts"],
                     bedside=self.nurse_link.snapshot(time.monotonic()),
@@ -199,6 +200,8 @@ class SimulatedPatient(Fake):
         return {**data, **base}
 
     def nurse_action(self, path, body):
+        if path in ("alert/question/draft", "alert/question/send"):
+            return self._request_question(path, body)
         if path == "proposal/refine":
             return self._refine_proposal(body.get("id"))
         if path == "check-in/suggest":
@@ -271,7 +274,17 @@ class SimulatedPatient(Fake):
             try:
                 return {"ok": True, **nurse_ai.make_options(question, self.preference)}
             except Exception:
+                # Placeholder for Claude-generated choices when the API is unavailable.
                 return {"ok": True, "options": ["Yes", "No"], "source": "fallback"}
+        if path == "session/end":
+            with self.lock:
+                current = self.session["thread"][-1] if self.session["waiting"] else {}
+                alert_id = current.get("_request_alert") or self.session.get("_origin_alert")
+                if alert_id:
+                    self._update_request_question(alert_id, "needs_review")
+                self.session = {"active": False, "thread": [], "follow_ups": [], "waiting": False}
+                self.approved_steps = []
+            return {"ok": True}
         if path not in ("proposal/approve", "proposal/dismiss", "simulate/choose"):
             return super().nurse_action(path, body)
         with self.lock:
@@ -295,6 +308,47 @@ class SimulatedPatient(Fake):
                 self.supervisor.update_question_request(self.patient_id, proposal["origin_alert"], "needs_review")
             self._resolve_proposal(proposal["id"])
             return {"ok": True}
+
+    def _request_question(self, path, body):
+        question = body.get("question")
+        if not isinstance(question, str) or not 0 < len(question.strip()) <= 300:
+            return {"ok": False, "error": "Enter a question of up to 300 characters."}
+        question = question.strip()
+        with self.lock:
+            alert = next((item for item in self.supervisor.alerts(self.patient_id) + self.alerts
+                          if item["id"] == body.get("id") and not item["done"]), None)
+            if alert is None:
+                return {"ok": False, "error": "This request is no longer open."}
+            if path == "alert/question/send":
+                if self.session["waiting"]:
+                    return {"ok": False, "error": "The patient is still answering a question."}
+                try:
+                    branches = nurse_ai.validate_request_branches(body.get("branches"))
+                except ValueError as error:
+                    return {"ok": False, "error": str(error)}
+                self.approved_steps = []
+                qid = self._send_question(question, [item["label"] for item in branches])
+                self.session["thread"][-1].update(
+                    _request_alert=alert["id"], _branches=branches,
+                    _branch_source="ai" if body.get("source") == "ai" else "fallback",
+                )
+                self._update_request_question(alert["id"], "waiting_answer")
+                self.supervisor.resolve_question(self.patient_id, f'{alert["id"]}-question')
+                return {"ok": True, "qid": qid}
+            profile = self.patient_profile()
+        return {"ok": True, **nurse_ai.draft_request_branches(question, alert.get("request") or alert["text"], profile)}
+
+    def _update_request_question(self, alert_id, state, reply=None):
+        if str(alert_id).startswith("agent-"):
+            self.supervisor.update_question_request(self.patient_id, alert_id, state, reply)
+        else:
+            alert = next((item for item in self.alerts if item["id"] == alert_id), None)
+            if alert and not alert["done"]:
+                alert["review"] = state
+                if reply is not None:
+                    alert["question_reply"] = reply
+                elif state == "waiting_answer":
+                    alert.pop("question_reply", None)
 
     def _resolve_proposal(self, proposal_id):
         self.resolved_proposal = proposal_id
@@ -365,6 +419,13 @@ class SimulatedPatient(Fake):
         q["seconds"] = round(time.time() - q["_sent"], 1)
         self.session["waiting"] = False
         outcome = f'Answered "{q["answer"]}" to: {q["question"]}'
+        if q.get("_request_alert"):
+            branch = q["_branches"][0 if spot == "left" else 1]
+            q["next_step"] = branch["next_step"]
+            self._update_request_question(q["_request_alert"], "answered",
+                                          {"answer": q["answer"], "next_step": q["next_step"],
+                                           "source": q["_branch_source"]})
+            self._interaction("Nurse supervisor", "Suggested next step", q["next_step"])
         if self.approved_steps:
             step, *remaining = self.approved_steps
             self.approved_steps = []
@@ -402,6 +463,7 @@ class ShiftPatient(SimulatedPatient):
         return {"time": self.interaction_time()[:5], "demo": True}
 
     def emit_random_request(self, rng):
+        """Placeholder for live input from the patient-end agent."""
         with self.lock:
             if not self.shift_feed:
                 self.interaction_start = time.monotonic()
@@ -456,6 +518,7 @@ class ShiftPatient(SimulatedPatient):
             "needs_review": "Waiting for nurse review",
             "question_queued": "Claude drafted a question for approval",
             "waiting_answer": "Question sent. Waiting for the patient",
+            "answered": "Patient answered the nurse's question",
             "clarified": "Patient clarified the request",
         }
         feed = []
@@ -480,11 +543,6 @@ class ShiftPatient(SimulatedPatient):
         if path == "shift/end":
             self.playback.finish()
             return {"ok": True}
-        if path == "session/end":
-            with self.lock:
-                origin = self.session.pop("_origin_alert", None)
-                if origin:
-                    self.supervisor.update_question_request(self.patient_id, origin, "needs_review")
         return super().nurse_action(path, body)
 
 
@@ -552,10 +610,10 @@ def main():
     parser.add_argument("--companion-port", type=int, help="Morgan's port (defaults to --port + 1)")
     parser.add_argument("--shift-demo", action="store_true", help="enable the two live simulated shift feeds")
     parser.add_argument("--check-in-seconds", type=float,
-                        help="fixed interval between check-ins (default: 30, or 5 in the shift demo)")
+                        help="fixed interval between check-ins (default: 30, or 10 in the shift demo)")
     parser.add_argument("--seed", type=int, help="repeat a random request stream for testing")
     args = parser.parse_args()
-    interval_s = args.check_in_seconds if args.check_in_seconds is not None else (5 if args.shift_demo else DEFAULT_INTERVAL_S)
+    interval_s = args.check_in_seconds if args.check_in_seconds is not None else (10 if args.shift_demo else DEFAULT_INTERVAL_S)
     playback = ShiftPlayback(seed=args.seed) if args.shift_demo else None
     with socket.create_server((args.host, args.port)) as primary:
         port = primary.getsockname()[1]

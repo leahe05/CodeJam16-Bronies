@@ -1,6 +1,7 @@
 """Draft reviewable nurse communication with the configured Claude API."""
 import json
 import os
+import re
 
 from lookat.nurse_patient_profile import CARE_CHOICES
 
@@ -42,6 +43,57 @@ def make_options(question, context):
         {"question": question, "context": context}, 2, 60,
     )
     return {"options": options, "source": "ai"}
+
+
+def validate_request_branches(branches):
+    if not isinstance(branches, list) or len(branches) != 2 or not all(isinstance(item, dict) for item in branches):
+        raise ValueError("Provide exactly two response branches.")
+    cleaned = []
+    for item in branches:
+        label, next_step = item.get("label"), item.get("next_step")
+        if (not isinstance(label, str) or not 0 < len(label.strip()) <= 60
+                or not isinstance(next_step, str) or not 0 < len(next_step.strip()) <= 160):
+            raise ValueError("Each branch needs a short answer and a nurse next step.")
+        cleaned.append({"label": label.strip(), "next_step": next_step.strip()})
+    if cleaned[0]["label"].casefold() == cleaned[1]["label"].casefold():
+        raise ValueError("Choose two different answers.")
+    return cleaned
+
+
+def default_request_branches(question):
+    """Temporary placeholder when Claude is unavailable. The nurse reviews both defaults."""
+    alternative = re.fullmatch(r"(?:would you (?:like|prefer)|do you (?:want|prefer)) (.+?) or (.+?)[?.]?",
+                               question.strip(), flags=re.IGNORECASE)
+    if alternative:
+        labels = [option.strip() for option in alternative.groups()]
+        labels = [label[:1].upper() + label[1:] for label in labels]
+        if all(0 < len(label) <= 60 for label in labels) and len({label.casefold() for label in labels}) == 2:
+            return [{"label": label, "next_step": f"Review the patient's preference for {label}."} for label in labels]
+    if re.match(r"\b(?:what|which|where|when|how)\b", question, flags=re.IGNORECASE):
+        return [
+            {"label": "Help with this request", "next_step": "Confirm the details of the original request."},
+            {"label": "Something else", "next_step": "Ask what else the patient would like."},
+        ]
+    return [
+        {"label": "Yes", "next_step": "Review the confirmed request."},
+        {"label": "No", "next_step": "Ask what would help instead."},
+    ]
+
+
+def draft_request_branches(question, request, profile):
+    context = {key: profile[key] for key in ("room", "last_meal", "preferences", "habits") if key in profile}
+    try:
+        result = _request_json(
+            "Draft two distinct short responses to the nurse's question for a patient to choose by gaze. "
+            "Use Yes and No when the question is yes-or-no, and use the actual alternatives for an either/or question. "
+            "For each response include a short next step for the nurse to review based on that answer. "
+            "Do not diagnose, suggest medication, or claim that care was performed. "
+            'Return an array of exactly two objects with keys "label" and "next_step".',
+            {"question": question, "patient_request": request, "patient_context": context},
+        )
+        return {"branches": validate_request_branches(result), "source": "ai"}
+    except Exception:
+        return {"branches": default_request_branches(question), "source": "fallback"}
 
 
 def refine_checkin(proposal):

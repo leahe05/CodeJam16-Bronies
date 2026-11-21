@@ -19,7 +19,7 @@ log = logging.getLogger(__name__)
 
 
 def reported_priority(request, reason, time_sensitive):
-    """Rank explicit urgency signals in the demo while Claude is unavailable or reviewing."""
+    """Temporary AI placeholder for ranking explicit urgency signals while Claude is unavailable or reviewing."""
     clauses = re.split(r"[.!?;,]", " ".join(filter(None, (request, reason))).lower())
     signals = " ".join(clause for clause in clauses if not re.search(r"\b(?:not|no|n't|doesn['’]t|don['’]t)\b", clause))
     if re.search(r"\b(?:right away|immediately|help now|come now|urgent)\b", signals):
@@ -157,7 +157,7 @@ class NurseSupervisor:
     def _apply_review(self, patient_id, alert_id, request, profile, decision):
         with self._lock:
             alert = next((item for item in self._requests[patient_id] if item["id"] == alert_id), None)
-            if alert is None or alert["done"]:
+            if alert is None or alert["done"] or alert.get("review") in ("waiting_answer", "answered"):
                 return
             if decision is None:
                 alert["review"] = "local_reviewed"
@@ -176,11 +176,15 @@ class NurseSupervisor:
                     "steps": decision["steps"], "source": "ai", "origin_alert": alert_id,
                 }
 
-    def update_question_request(self, patient_id, alert_id, state):
+    def update_question_request(self, patient_id, alert_id, state, reply=None):
         with self._lock:
             alert = next((item for item in self._requests[patient_id] if item["id"] == alert_id), None)
             if alert and not alert["done"]:
                 alert["review"] = state
+                if reply is not None:
+                    alert["question_reply"] = reply
+                elif state == "waiting_answer":
+                    alert.pop("question_reply", None)
                 if state == "clarified":
                     alert["done"] = True
 

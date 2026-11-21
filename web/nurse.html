@@ -87,6 +87,7 @@
             <label for="options" id="options-label">Answer choices, one per line</label>
             <textarea id="options" rows="2" maxlength="500" required>Yes
 No</textarea>
+            <p id="options-source" class="muted option-source"></p>
             <div class="form-row">
               <button id="send-question" class="button primary" type="submit">Send question</button>
               <button id="suggest-choices" class="button" type="button" hidden>Suggest choices</button>
@@ -138,5 +139,36 @@ No</textarea>
 
     <p id="feedback" class="feedback" role="status" hidden></p>
   </main>
+  <dialog id="request-question-dialog" aria-labelledby="request-question-heading">
+    <form id="request-question-form">
+      <h2 id="request-question-heading">Ask about this request</h2>
+      <p id="request-question-context" class="muted"></p>
+      <label for="request-question">Question</label>
+      <textarea id="request-question" rows="2" maxlength="300" required autofocus></textarea>
+      <div id="request-branches" class="request-branches" hidden>
+        <p id="request-branches-source" class="muted option-source"></p>
+        <fieldset>
+          <legend>Left choice</legend>
+          <label for="request-left-label">Patient answer</label>
+          <input id="request-left-label" maxlength="60">
+          <label for="request-left-step">Nurse next step</label>
+          <input id="request-left-step" maxlength="160">
+        </fieldset>
+        <fieldset>
+          <legend>Right choice</legend>
+          <label for="request-right-label">Patient answer</label>
+          <input id="request-right-label" maxlength="60">
+          <label for="request-right-step">Nurse next step</label>
+          <input id="request-right-step" maxlength="160">
+        </fieldset>
+      </div>
+      <p id="request-question-feedback" class="muted" role="status" hidden></p>
+      <div class="form-row">
+        <button id="draft-request-branches" class="button primary" type="submit">Suggest two choices</button>
+        <button id="send-request-question" class="button primary" type="button" hidden>Send question</button>
+        <button id="cancel-request-question" class="button" type="button">Cancel</button>
+      </div>
+    </form>
+  </dialog>
 </body>
 </html>

@@ -14,7 +14,7 @@ SHIFT_CAMERAS = {
 
 
 class ShiftPlayback:
-    def __init__(self, minimum_s=4.0, maximum_s=12.0, *, seed=None):
+    def __init__(self, minimum_s=8.0, maximum_s=24.0, *, seed=None):
         if not (math.isfinite(minimum_s) and math.isfinite(maximum_s) and 0 < minimum_s < maximum_s):
             raise ValueError("Request intervals must satisfy 0 < minimum < maximum.")
         self.minimum_s = minimum_s

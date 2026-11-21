@@ -300,3 +300,47 @@ def test_all_care_topics_can_be_patient_requests_or_nurse_review_drafts():
         assert avery.nurse_action("proposal/dismiss", {"id": proposal["id"]})["ok"]
     assert len(avery.nurse_json()["alerts"]) == len(CARE_CHOICES)
     assert not morgan.nurse_json()["alerts"] and not morgan.proposal()
+
+
+def test_shift_default_arrival_intervals_are_doubled():
+    playback = ShiftPlayback()
+    assert (playback.minimum_s, playback.maximum_s) == (8, 24)
+
+
+def test_request_question_defaults_keep_two_alternatives_and_route_the_selected_branch(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    avery, morgan = make_demo_patients(playback=ShiftPlayback())
+    alert_id = avery.nurse_action("patient/request", {"request": "The patient asked for a drink."})["id"]
+    question = "Would you like water or juice?"
+    draft = avery.nurse_action("alert/question/draft", {"id": alert_id, "question": question})
+    assert draft["ok"] and draft["source"] == "fallback"
+    assert [branch["label"] for branch in draft["branches"]] == ["Water", "Juice"]
+    assert avery.screen_json()["screen"] == "idle"
+    edited = [draft["branches"][0], {**draft["branches"][1], "next_step": "Check which juice the patient prefers."}]
+    send = {"id": alert_id, "question": question, "branches": edited, "source": draft["source"]}
+    assert not morgan.nurse_action("alert/question/send", send)["ok"]
+    assert avery.nurse_action("alert/question/send", send)["ok"]
+    assert not avery.nurse_action("alert/question/send", send)["ok"]
+    assert avery.screen_json()["right"]["label"] == "Juice"
+    assert avery.nurse_json()["alerts"][0]["review"] == "waiting_answer"
+    assert choose(avery, "right")["ok"]
+    alert = avery.nurse_json()["alerts"][0]
+    assert alert["review"] == "answered" and not alert["done"]
+    assert alert["question_reply"] == {"answer": "Juice", "next_step": edited[1]["next_step"], "source": "fallback"}
+
+
+def test_request_question_uses_claude_when_available_and_falls_back_for_invalid_drafts(monkeypatch):
+    def response(instructions, payload):
+        assert payload["patient_request"] == "Patient requests a drink."
+        assert payload["question"] == "Would you like water?"
+        return [
+            {"label": "Yes", "next_step": "Review the request for water."},
+            {"label": "No", "next_step": "Ask what the patient would like instead."},
+        ]
+
+    monkeypatch.setattr(nurse_ai, "_request_json", response)
+    draft = nurse_ai.draft_request_branches("Would you like water?", "Patient requests a drink.", {})
+    assert draft["source"] == "ai"
+    assert draft["branches"][1]["next_step"] == "Ask what the patient would like instead."
+    monkeypatch.setattr(nurse_ai, "_request_json", lambda *_: [{"label": "Only one answer", "next_step": "Review."}])
+    assert nurse_ai.draft_request_branches("Would you like water?", "", {})["source"] == "fallback"

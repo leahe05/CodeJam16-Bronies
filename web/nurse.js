@@ -18,6 +18,7 @@ let activeTab = "patients";
 let audio = null;
 let soundEnabled = false;
 let feedbackTimer;
+let requestQuestion = null;
 
 function element(tag, className, text) {
   const node = document.createElement(tag);
@@ -71,7 +72,7 @@ function storeAgents() {
 async function request(origin, path = "", body) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(),
-    ["/suggest", "/proposal/refine"].includes(path) ? 12000 : 5000);
+    ["/suggest", "/proposal/refine", "/alert/question/draft"].includes(path) ? 12000 : 5000);
   try {
     const response = await fetch(origin + nursePath + path, {
       cache: "no-store",
@@ -148,6 +149,7 @@ async function poll(agent) {
       if (data?.v !== 1 || !("alerts" in data)) throw new Error("Unexpected nurse API response.");
       if (agents.get(agent.origin) !== agent || revision !== agent.revision) return;
       if (!Array.isArray(data.history)) data.observedHistory = observeHistory(agent, data);
+      attachRequestReplies(agent, data);
       agent.data = data;
       agent.state = "online";
       if (!agent.origin && data.simulation) {
@@ -173,6 +175,21 @@ async function poll(agent) {
   }
   if (agents.get(agent.origin) === agent) {
     agent.timer = setTimeout(() => poll(agent), 1000);
+  }
+}
+
+function attachRequestReplies(agent, data) {
+  for (const [qid, link] of agent.requestReplies) {
+    const question = list(data.session?.thread).find(item => item.qid === qid);
+    const branch = link.branches.find(item => item.label === question?.answer);
+    if (branch) link.reply = { answer: branch.label, next_step: branch.next_step, source: "fallback" };
+    const alert = list(data.alerts).find(item => item.id === link.alertId);
+    if (!alert || (!question && !data.session?.active && !link.reply)) {
+      agent.requestReplies.delete(qid);
+      continue;
+    }
+    if (link.reply) alert.question_reply = link.reply;
+    if (!alert.done) alert.review = link.reply ? "answered" : "waiting_answer";
   }
 }
 
@@ -220,12 +237,13 @@ function observeHistory(agent, data) {
 
 function addAgent(origin, demo = false) {
   if (agents.has(origin)) return;
-  const agent = { origin, demo, state: "connecting", data: null, pendingAlerts: new Set(), revision: 0, busy: false };
+  const agent = { origin, demo, state: "connecting", data: null, pendingAlerts: new Set(),
+    requestReplies: new Map(), revision: 0, busy: false };
   agents.set(origin, agent);
   poll(agent);
 }
 
-async function act(agent, path, body, success, onSuccess) {
+async function act(agent, path, body, success, onSuccess, onError) {
   if (agent.busy || agent.state !== "online") return;
   agent.busy = true;
   agent.revision += 1;
@@ -241,7 +259,9 @@ async function act(agent, path, body, success, onSuccess) {
     onSuccess?.(result);
     notify(typeof success === "function" ? success(result) : success);
   } catch (error) {
-    notify(error.message || "The action could not be completed.");
+    const message = error.message || "The action could not be completed.";
+    if (onError) onError(message);
+    else notify(message);
   } finally {
     agent.busy = false;
     if (agents.get(agent.origin) === agent) {
@@ -297,10 +317,18 @@ function alertCard({ agent, alert }, handled) {
   card.append(meta, element("h3", "", alert.request || alert.text || "Patient alert"));
   if (!alert.request && alert.kind === "call") card.append(element("p", "muted", "Patient did not specify what they need."));
   if (alert.reason) card.append(element("p", "muted", alert.reason));
-  if (alert.recommendation) card.append(element("p", "request-recommendation", alert.recommendation));
+  if (alert.question_reply) {
+    card.append(element("p", "", "Patient answered: " + alert.question_reply.answer),
+      element("p", "request-recommendation", alert.question_reply.next_step));
+    if (alert.question_reply.source === "fallback") {
+      card.append(element("p", "muted option-source", "Default branch placeholder for Claude."));
+    }
+  } else if (alert.recommendation) {
+    card.append(element("p", "request-recommendation", alert.recommendation));
+  }
   if (alert.ai_rationale) card.append(element("p", "muted", "Claude: " + alert.ai_rationale));
   if (alert.priority_source === "local_rules" && alert.priority_basis) {
-    card.append(element("p", "muted", "Local rules: " + alert.priority_basis));
+    card.append(element("p", "muted", "Local rules (AI placeholder): " + alert.priority_basis));
   }
   const review = {
     analyzing: "Claude is reviewing",
@@ -311,7 +339,7 @@ function alertCard({ agent, alert }, handled) {
   }[alert.review];
   if (review) card.append(element("p", "muted", review));
   const actions = handled ? [] : list(alert.actions).filter(action => action.id);
-  if (actions.length && alert.id != null) {
+  if (!handled && alert.id != null) {
     const row = element("div", "alert-actions");
     actions.forEach((action, index) => {
       const control = button(action.label || "Acknowledge", index === 0 ? "button primary" : "button", () => {
@@ -321,6 +349,10 @@ function alertCard({ agent, alert }, handled) {
       control.disabled = agent.state !== "online" || agent.busy;
       row.append(control);
     });
+    const ask = button("Ask a question", "button", () => openRequestQuestion(agent, alert));
+    ask.id = "ask-request-" + encodeURIComponent(JSON.stringify([agent.origin, alert.id]));
+    ask.disabled = agent.state !== "online" || agent.busy || agent.data?.session?.waiting === true;
+    row.append(ask);
     card.append(row);
   }
   return card;
@@ -335,7 +367,9 @@ function renderAlerts() {
       return priority || time || (left.priority?.order ?? 0) - (right.priority?.order ?? 0);
     });
   const handled = entries.filter(entry => entry.alert.done);
-  const signature = ({ agent, alert }) => [agent.origin, agentName(agent), agent.data?.patient?.room, agent.state, agent.busy, alert];
+  const signature = ({ agent, alert }) => [
+    agent.origin, agentName(agent), agent.data?.patient?.room, agent.state, agent.busy, agent.data?.session?.waiting, alert
+  ];
   const complete = [...agents.values()].every(agent => agent.state === "online" && agent.data.connected !== false);
   const empty = complete ? "No open requests." : "Waiting for agent updates.";
   updateRegion($("alerts"), [empty, pending.map(signature)], () =>
@@ -350,6 +384,43 @@ function renderAlerts() {
   $("alert-count").dataset.urgent = String(hasUrgent);
   $("queue-count").dataset.urgent = String(hasUrgent);
   updateText($("queue-count"), complete || pending.length ? `${pending.length} open` : "Checking for requests…");
+}
+
+function openRequestQuestion(agent, alert) {
+  requestQuestion = { agent, alertId: alert.id, drafted: false };
+  $("request-question-form").reset();
+  updateText($("request-question-context"), `${agentName(agent)} · ${alert.request || alert.text}`);
+  requestQuestionFeedback("");
+  renderRequestQuestion();
+  $("request-question-dialog").showModal();
+}
+
+function requestQuestionFeedback(message) {
+  $("request-question-feedback").hidden = !message;
+  updateText($("request-question-feedback"), message);
+}
+
+function renderRequestQuestion() {
+  if (!requestQuestion) return;
+  const { agent, drafted } = requestQuestion;
+  const disabled = agent.busy || agent.state !== "online" || agent.data?.session?.waiting === true;
+  $("request-branches").hidden = !drafted;
+  $("send-request-question").hidden = !drafted;
+  $("draft-request-branches").classList.toggle("primary", !drafted);
+  $("draft-request-branches").disabled = $("send-request-question").disabled = disabled;
+  $("request-question").disabled = agent.busy;
+  for (const input of $("request-branches").querySelectorAll("input")) input.disabled = agent.busy;
+}
+
+function defaultLegacyBranches(question, options, source) {
+  // Placeholder for the original live API, which returns choice labels without branch actions.
+  const alternatives = question.match(/^(?:would you (?:like|prefer)|do you (?:want|prefer)) (.+?) or (.+?)[?.]?$/i);
+  const labels = source !== "ai" && alternatives ? alternatives.slice(1).map(option => option.trim()) :
+    list(options).slice(0, 2);
+  return (labels.length === 2 ? labels : ["Yes", "No"]).map(label => ({
+    label, next_step: /^no$/i.test(label) ? "Ask what would help instead." :
+      /^yes$/i.test(label) ? "Review the confirmed request." : "Review the patient's choice of " + label + "."
+  }));
 }
 
 function cameraLink(camera, id) {
@@ -382,13 +453,14 @@ function renderShift(roster) {
   $("end-shift").disabled = first.busy || first.state !== "online";
   updateText($("shift-ai-status"), first.data.shift.ai_enabled ?
     "Claude reviews incoming requests. Local rules provide an initial priority." :
-    "Local rules rank requests. Set a Claude API key to enable AI review.");
+    "Local ranking is an AI placeholder. Set a Claude API key to enable AI review.");
   updateRegion($("shift-feeds"), patients.map(agent => [
     agentName(agent), agent.data.patient.room, agent.data.shift.camera, agent.data.shift.feed
   ]),
     () => patients.map(agent => {
       const card = element("article", "shift-feed");
       card.append(element("h3", "", [agentName(agent), agent.data.patient.room].filter(Boolean).join(" · ")));
+      card.append(element("p", "muted option-source", "Simulated requests are placeholders for live patient input."));
       const camera = cameraLink(agent.data.shift.camera, "demo-camera-" + encodeURIComponent(agent.origin));
       if (camera) card.append(camera);
       const updates = list(agent.data.shift.feed);
@@ -450,13 +522,16 @@ function renderProposals(roster) {
     actions.append(send, dismiss);
     if (proposal.source === "ai") {
       card.append(element("p", "muted", "Questions drafted with Claude."));
-    } else if (agent.data.ai_drafts) {
-      const refine = button("Draft with Claude", "button", () =>
-        act(agent, "/proposal/refine", { id: proposal.id }, "Draft ready for review.", result => {
-          agent.data.proposal = result.proposal;
-        }));
-      refine.disabled = unavailable;
-      actions.append(refine);
+    } else {
+      card.append(element("p", "muted option-source", "Question template placeholder for Claude."));
+      if (agent.data.ai_drafts) {
+        const refine = button("Draft with Claude", "button", () =>
+          act(agent, "/proposal/refine", { id: proposal.id }, "Draft ready for review.", result => {
+            agent.data.proposal = result.proposal;
+          }));
+        refine.disabled = unavailable;
+        actions.append(refine);
+      }
     }
     card.append(actions);
     return card;
@@ -725,6 +800,9 @@ function renderPatientActions(agent, data) {
   if ($("presence").value !== visitorValue) $("presence").value = visitorValue;
   if ($("question").value !== (agent.question ?? "")) $("question").value = agent.question ?? "";
   if ($("options").value !== (agent.options ?? "Yes\nNo")) $("options").value = agent.options ?? "Yes\nNo";
+  $("options-source").hidden = agent.optionsSource === "manual";
+  updateText($("options-source"), agent.optionsSource === "ai" ?
+    "Choices drafted with Claude." : "Default choices are placeholders for Claude.");
 }
 
 function renderLatestReply(data) {
@@ -748,7 +826,8 @@ function renderSimulation(agent, data) {
   updateRegion(panel, [agent.origin, data?.simulation, data?.agent_checkin?.interval_s, choices,
     agent.state, agent.busy], () => {
     if (panel.hidden) return [];
-    const rows = [element("h3", "", "Simulate patient input")];
+    const rows = [element("h3", "", "Simulate patient input"),
+      element("p", "muted option-source", "Placeholder for requests from the live patient agent.")];
     if (choices.length) {
       const label = element("label", "", "Care topic");
       label.htmlFor = "demo-care-choice";
@@ -794,7 +873,8 @@ function renderSimulatedReply(agent, data) {
       control.disabled = agent.busy || agent.state !== "online";
       controls.append(control);
     }
-    return [element("h3", "", "Simulate patient reply"), controls];
+    return [element("h3", "", "Simulate patient reply"),
+      element("p", "muted option-source", "Placeholder for a live patient response."), controls];
   });
 }
 
@@ -820,12 +900,71 @@ function render() {
   renderSimulatedReply(agent, data);
   renderSimulation(agent, data);
   renderHistory(data);
+  renderRequestQuestion();
   updateRegion($("notes"), [selected, data?.profile, data?.bedside, data?.agent_checkin, data?.next_visit, data?.session, data?.facts, data?.room, data?.last_visit,
     data?.routines, data?.recent, data?.summary], () => {
     const notes = data ? patientNotes(data) : [];
     return notes.length ? notes : [element("p", "empty note", data ? "No status notes yet." : "Waiting for patient data…")];
   });
 }
+
+$("request-question-dialog").addEventListener("close", () => { requestQuestion = null; });
+$("cancel-request-question").addEventListener("click", () => $("request-question-dialog").close());
+$("request-question").addEventListener("input", () => {
+  if (!requestQuestion) return;
+  requestQuestion.drafted = false;
+  requestQuestionFeedback("");
+  renderRequestQuestion();
+});
+$("request-question-form").addEventListener("submit", event => {
+  event.preventDefault();
+  if (!requestQuestion) return;
+  const draft = requestQuestion;
+  const question = $("request-question").value.trim();
+  if (!question) return;
+  const supported = draft.agent.data?.request_question_branches === true;
+  requestQuestionFeedback("Preparing two choices…");
+  act(draft.agent, supported ? "/alert/question/draft" : "/suggest",
+    { id: draft.alertId, question }, "Choices ready for review.", result => {
+      if (requestQuestion !== draft) return;
+      const branches = supported ? result.branches : defaultLegacyBranches(question, result.options, result.source);
+      draft.source = supported && result.source === "ai" ? "ai" : "fallback";
+      for (const [index, spot] of ["left", "right"].entries()) {
+        $("request-" + spot + "-label").value = branches[index].label;
+        $("request-" + spot + "-step").value = branches[index].next_step;
+      }
+      updateText($("request-branches-source"), draft.source === "ai" ?
+        "Both branches drafted with Claude." : "Default branch text is a placeholder for Claude.");
+      draft.drafted = true;
+      requestQuestionFeedback("");
+      renderRequestQuestion();
+      $("request-left-label").focus();
+    }, message => { if (requestQuestion === draft) requestQuestionFeedback(message); });
+});
+$("send-request-question").addEventListener("click", () => {
+  const draft = requestQuestion;
+  if (!draft?.drafted) return;
+  const question = $("request-question").value.trim();
+  const branches = ["left", "right"].map(spot => ({
+    label: $("request-" + spot + "-label").value.trim(),
+    next_step: $("request-" + spot + "-step").value.trim()
+  }));
+  if (!question || branches.some(branch => !branch.label || !branch.next_step) ||
+      branches[0].label.toLowerCase() === branches[1].label.toLowerCase()) {
+    requestQuestionFeedback("Enter two distinct answers and a next step for each.");
+    return;
+  }
+  const supported = draft.agent.data?.request_question_branches === true;
+  requestQuestionFeedback("Sending question…");
+  act(draft.agent, supported ? "/alert/question/send" : "/send",
+    { id: draft.alertId, question, branches, source: draft.source, options: branches.map(branch => branch.label) },
+    "Question sent to " + agentName(draft.agent) + ".", result => {
+      if (!supported) draft.agent.requestReplies.set(result.qid, { alertId: draft.alertId, branches });
+      if (requestQuestion !== draft) return;
+      $("request-question-dialog").close();
+      openPatient(draft.agent.origin);
+    }, message => { if (requestQuestion === draft) requestQuestionFeedback(message); });
+});
 
 $("start-shift").addEventListener("click", () => {
   const agent = [...agents.values()].find(item => item.data?.shift);
@@ -865,7 +1004,14 @@ $("presence-form").addEventListener("submit", event => {
 });
 
 for (const field of ["question", "options"]) {
-  $(field).addEventListener("input", event => { agents.get(selected)[field] = event.target.value; });
+  $(field).addEventListener("input", event => {
+    const agent = agents.get(selected);
+    agent[field] = event.target.value;
+    if (field === "options") {
+      agent.optionsSource = "manual";
+      $("options-source").hidden = true;
+    }
+  });
 }
 $("suggest-choices").addEventListener("click", () => {
   const agent = agents.get(selected);
@@ -879,6 +1025,7 @@ $("suggest-choices").addEventListener("click", () => {
     "AI answer choices ready for review." : "Suggested answer choices ready for review.", result => {
     const options = list(result.options);
     agent.options = (agent.data.simulation ? options.slice(0, 2) : options).join("\n");
+    agent.optionsSource = result.source;
   });
 });
 $("question-form").addEventListener("submit", event => {
@@ -898,6 +1045,7 @@ $("question-form").addEventListener("submit", event => {
   act(agent, "/send", { question, options }, "Question sent to " + agentName(agent) + ".", () => {
     delete agent.question;
     delete agent.options;
+    delete agent.optionsSource;
     agent.data.session = { ...agent.data.session, active: true, waiting: true };
   });
 });
