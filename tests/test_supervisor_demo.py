@@ -234,6 +234,8 @@ def test_invalid_claude_decision_is_rejected_and_calls_still_bypass_review(monke
     try:
         avery.nurse_action("patient/request", {"request": "Water"})
         eventually(lambda: avery.nurse_json()["alerts"][0]["review"] == "local_reviewed")
+        assert "invalid draft" in avery.nurse_json()["alerts"][0]["ai_failure"]
+        assert "invalid draft" in avery.nurse_json()["shift"]["feed"][0]["response"]
         avery.demo_action({"action": "call_nurse"})
         assert avery.nurse_json()["alerts"][0]["priority"]["level"] == "urgent"
         assert avery.nurse_json()["alerts"][1]["priority"]["level"] == "routine"
@@ -314,6 +316,7 @@ def test_request_question_defaults_keep_two_alternatives_and_route_the_selected_
     question = "Would you like water or juice?"
     draft = avery.nurse_action("alert/question/draft", {"id": alert_id, "question": question})
     assert draft["ok"] and draft["source"] == "fallback"
+    assert "No Claude API key" in draft["fallback_reason"]
     assert [branch["label"] for branch in draft["branches"]] == ["Water", "Juice"]
     assert avery.screen_json()["screen"] == "idle"
     edited = [draft["branches"][0], {**draft["branches"][1], "next_step": "Check which juice the patient prefers."}]
@@ -339,11 +342,29 @@ def test_request_question_uses_claude_when_available_and_falls_back_for_invalid_
         ]
 
     monkeypatch.setattr(nurse_ai, "_request_json", response)
-    draft = nurse_ai.draft_request_branches("Would you like water?", "Patient requests a drink.", {})
+    avery, _ = make_demo_patients(playback=ShiftPlayback())
+    alert_id = avery.nurse_action("patient/request", {"request": "Patient requests a drink."})["id"]
+    draft = avery.nurse_action("alert/question/draft", {"id": alert_id, "question": "Would you like water?"})
     assert draft["source"] == "ai"
     assert draft["branches"][1]["next_step"] == "Ask what the patient would like instead."
+    assert avery.screen_json()["screen"] == "idle"
     monkeypatch.setattr(nurse_ai, "_request_json", lambda *_: [{"label": "Only one answer", "next_step": "Review."}])
     assert nurse_ai.draft_request_branches("Would you like water?", "", {})["source"] == "fallback"
+
+
+def test_request_question_reports_auth_failure_without_provider_details(monkeypatch):
+    class RejectedKey(Exception):
+        status_code = 401
+        body = {"error": {"message": "Invalid x-api-key: private-provider-detail"}}
+
+    def reject(*args):
+        raise RejectedKey()
+
+    monkeypatch.setattr(nurse_ai, "_request_json", reject)
+    draft = nurse_ai.draft_request_branches("Would you like water?", "Water", {})
+    assert draft["source"] == "fallback"
+    assert "rejected the API key" in draft["fallback_reason"]
+    assert "private-provider-detail" not in str(draft)
 
 
 def test_claude_key_prompt_requires_a_terminal_and_loads_only_into_the_process(monkeypatch):

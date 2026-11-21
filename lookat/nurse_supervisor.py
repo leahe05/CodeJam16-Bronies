@@ -8,6 +8,8 @@ import time
 from collections import deque
 from queue import Empty, Queue
 
+from lookat.nurse_ai import failure_reason
+
 
 CHECK_IN_PROMPT = (
     "Is there anything the nurse should attend to, or a question the nurse should ask? "
@@ -147,20 +149,23 @@ class NurseSupervisor:
             except Empty:
                 continue
             patient_id, alert_id, request, profile, confirmed = job
+            failure = None
             try:
                 decision = self._decide(request, profile, confirmed)
-            except Exception:
-                log.warning("AI review unavailable for nurse request %s", alert_id)
+            except Exception as error:
+                failure = failure_reason(error)
+                log.warning("AI review unavailable for nurse request %s: %s", alert_id, failure)
                 decision = None
-            self._apply_review(patient_id, alert_id, request, profile, decision)
+            self._apply_review(patient_id, alert_id, request, profile, decision, failure)
 
-    def _apply_review(self, patient_id, alert_id, request, profile, decision):
+    def _apply_review(self, patient_id, alert_id, request, profile, decision, failure):
         with self._lock:
             alert = next((item for item in self._requests[patient_id] if item["id"] == alert_id), None)
             if alert is None or alert["done"] or alert.get("review") in ("waiting_answer", "answered"):
                 return
             if decision is None:
                 alert["review"] = "local_reviewed"
+                alert["ai_failure"] = failure
                 return
             level = decision["priority"]
             alert["priority"] = {**alert["priority"], "level": level, "rank": PRIORITY_RANKS[level]}

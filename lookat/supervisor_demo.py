@@ -513,8 +513,7 @@ class ShiftPatient(SimulatedPatient):
         data = super().nurse_json()
         alerts = {alert["id"]: alert for alert in data["alerts"]}
         responses = {
-            "analyzing": "Claude is reviewing the request",
-            "local_reviewed": "Ranked by local rules",
+            "analyzing": "Claude is reviewing. Priority is provisional.",
             "needs_review": "Waiting for nurse review",
             "question_queued": "Claude drafted a question for approval",
             "waiting_answer": "Question sent. Waiting for the patient",
@@ -526,6 +525,10 @@ class ShiftPatient(SimulatedPatient):
             alert = alerts.get(entry["_alert_id"], {})
             review = alert.get("review")
             response = responses.get(review) or alert.get("recommendation") or "Request received"
+            if review == "local_reviewed":
+                response = "Local ranking is a placeholder for Claude review."
+                if alert.get("ai_failure"):
+                    response += " " + alert["ai_failure"]
             if alert.get("done") and review != "clarified":
                 response = "Nurse acknowledged. On my way"
             feed.append({**entry, "response": response})

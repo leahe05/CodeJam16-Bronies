@@ -73,7 +73,7 @@ function storeAgents() {
 async function request(origin, path = "", body) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(),
-    ["/suggest", "/proposal/refine", "/alert/question/draft"].includes(path) ? 12000 : 5000);
+    ["/suggest", "/proposal/refine", "/alert/question/draft"].includes(path) ? 20000 : 5000);
   try {
     const response = await fetch(origin + nursePath + path, {
       cache: "no-store",
@@ -347,12 +347,13 @@ function alertCard({ agent, alert }, handled) {
   } else if (alert.recommendation) {
     card.append(element("p", "request-recommendation", alert.recommendation));
   }
-  if (alert.ai_rationale) card.append(element("p", "muted", "Claude: " + alert.ai_rationale));
-  if (alert.priority_source === "local_rules" && alert.priority_basis) {
-    card.append(element("p", "muted", "Local rules (AI placeholder): " + alert.priority_basis));
+  if (alert.ai_rationale) card.append(element("p", "muted", "Ranked by Claude. " + alert.ai_rationale));
+  if (alert.priority_source === "local_rules" && alert.review !== "analyzing") {
+    const details = ["Local ranking is a placeholder for Claude review.", alert.priority_basis, alert.ai_failure];
+    card.append(element("p", "muted", details.filter(Boolean).join(" ")));
   }
   const review = {
-    analyzing: "Claude is reviewing",
+    analyzing: "Claude is reviewing. Priority is provisional.",
     needs_review: "Nurse review needed",
     question_queued: "Suggested question awaiting approval",
     waiting_answer: "Waiting for the patient’s answer",
@@ -475,7 +476,7 @@ function renderShift(roster) {
   $("end-shift").hidden = state !== "running";
   $("end-shift").disabled = first.busy || first.state !== "online";
   updateText($("shift-ai-status"), first.data.shift.ai_enabled ?
-    "Claude reviews incoming requests. Local rules provide an initial priority." :
+    "Claude is configured. Each request shows its review status." :
     "Local ranking is an AI placeholder. Set a Claude API key to enable AI review.");
   updateRegion($("shift-feeds"), patients.map(agent => [
     agentName(agent), agent.data.patient.room, agent.patientColor, agent.data.shift.camera, agent.data.shift.feed
@@ -958,8 +959,9 @@ $("request-question-form").addEventListener("submit", event => {
         $("request-" + spot + "-label").value = branches[index].label;
         $("request-" + spot + "-step").value = branches[index].next_step;
       }
-      updateText($("request-branches-source"), draft.source === "ai" ?
-        "Both branches drafted with Claude." : "Default branch text is a placeholder for Claude.");
+      const sourceText = draft.source === "ai" ? "Both branches drafted with Claude." :
+        ["Default branch text is a placeholder for Claude.", result.fallback_reason].filter(Boolean).join(" ");
+      updateText($("request-branches-source"), sourceText);
       draft.drafted = true;
       requestQuestionFeedback("");
       renderRequestQuestion();
