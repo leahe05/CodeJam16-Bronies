@@ -12,6 +12,7 @@ const priorityLevel = alert => {
 };
 const urgent = alert => priorityLevel(alert) === "urgent";
 const alertKinds = { call: "Nurse call", page: "Intervention requested", flag: "Patient preference", info: "Update" };
+const patientPalette = ["blue", "teal", "violet", "indigo", "plum", "forest", "slate", "stone"];
 const agents = new Map();
 let selected = "";
 let activeTab = "patients";
@@ -98,6 +99,25 @@ function agentName(agent) {
     agent.origin ? new URL(agent.origin).host : "This LookAt server");
 }
 
+function assignPatientColor(agent, patient) {
+  if (!patient) return;
+  const identity = patient.id != null ? String(patient.id) : JSON.stringify([agent.origin, patient.name, patient.room]);
+  if (agent.patientIdentity === identity) return;
+  agent.patientIdentity = identity;
+  let hash = 2166136261;
+  for (const character of identity) hash = Math.imul(hash ^ character.codePointAt(0), 16777619);
+  const start = (hash >>> 0) % patientPalette.length;
+  const used = new Set([...agents.values()].filter(other => other !== agent).map(other => other.patientColor));
+  const colors = [...patientPalette.slice(start), ...patientPalette.slice(0, start)];
+  agent.patientColor = colors.find(color => !used.has(color)) || colors[0];
+}
+
+function markPatient(node, agent) {
+  if (agent?.patientColor) node.dataset.patientColor = agent.patientColor;
+  else delete node.dataset.patientColor;
+  return node;
+}
+
 function agentStatus(agent) {
   if (agent.state === "connecting") return "Connecting…";
   if (agent.state === "offline") return "Reconnecting";
@@ -148,6 +168,7 @@ async function poll(agent) {
       const data = await request(agent.origin);
       if (data?.v !== 1 || !("alerts" in data)) throw new Error("Unexpected nurse API response.");
       if (agents.get(agent.origin) !== agent || revision !== agent.revision) return;
+      assignPatientColor(agent, data.patient);
       if (!Array.isArray(data.history)) data.observedHistory = observeHistory(agent, data);
       attachRequestReplies(agent, data);
       agent.data = data;
@@ -303,14 +324,14 @@ function openPatient(origin, showProfile = false) {
 }
 
 function alertCard({ agent, alert }, handled) {
-  const card = element("article", "alert-card");
+  const card = markPatient(element("article", "alert-card"), agent);
   const priority = priorityLevel(alert);
   card.dataset.priority = handled ? "handled" : priority;
   const meta = element("div", "alert-meta");
   if (!handled) meta.append(element("span", "priority-label", priorityLevels[priority].label));
   meta.append(element("span", "alert-kind", alertKinds[alert.kind] || "Alert"),
     element("span", "alert-origin", alertOrigin(alert)),
-    button([agentName(agent), agent.data?.patient?.room].filter(Boolean).join(" · "), "patient-link", () =>
+    button([agentName(agent), agent.data?.patient?.room].filter(Boolean).join(" · "), "patient-link patient-marker", () =>
       openPatient(agent.origin)));
   if (alert.time) meta.append(element("span", "", alert.time));
   if (agent.state !== "online") meta.append(element("span", "", "Last received"));
@@ -368,7 +389,8 @@ function renderAlerts() {
     });
   const handled = entries.filter(entry => entry.alert.done);
   const signature = ({ agent, alert }) => [
-    agent.origin, agentName(agent), agent.data?.patient?.room, agent.state, agent.busy, agent.data?.session?.waiting, alert
+    agent.origin, agentName(agent), agent.data?.patient?.room, agent.patientColor, agent.state, agent.busy,
+    agent.data?.session?.waiting, alert
   ];
   const complete = [...agents.values()].every(agent => agent.state === "online" && agent.data.connected !== false);
   const empty = complete ? "No open requests." : "Waiting for agent updates.";
@@ -389,6 +411,7 @@ function renderAlerts() {
 function openRequestQuestion(agent, alert) {
   requestQuestion = { agent, alertId: alert.id, drafted: false };
   $("request-question-form").reset();
+  markPatient($("request-question-context"), agent);
   updateText($("request-question-context"), `${agentName(agent)} · ${alert.request || alert.text}`);
   requestQuestionFeedback("");
   renderRequestQuestion();
@@ -455,11 +478,11 @@ function renderShift(roster) {
     "Claude reviews incoming requests. Local rules provide an initial priority." :
     "Local ranking is an AI placeholder. Set a Claude API key to enable AI review.");
   updateRegion($("shift-feeds"), patients.map(agent => [
-    agentName(agent), agent.data.patient.room, agent.data.shift.camera, agent.data.shift.feed
+    agentName(agent), agent.data.patient.room, agent.patientColor, agent.data.shift.camera, agent.data.shift.feed
   ]),
     () => patients.map(agent => {
-      const card = element("article", "shift-feed");
-      card.append(element("h3", "", [agentName(agent), agent.data.patient.room].filter(Boolean).join(" · ")));
+      const card = markPatient(element("article", "shift-feed"), agent);
+      card.append(element("h3", "patient-marker", [agentName(agent), agent.data.patient.room].filter(Boolean).join(" · ")));
       card.append(element("p", "muted option-source", "Simulated requests are placeholders for live patient input."));
       const camera = cameraLink(agent.data.shift.camera, "demo-camera-" + encodeURIComponent(agent.origin));
       if (camera) card.append(camera);
@@ -488,12 +511,13 @@ function renderProposals(roster) {
   updateText($("supervisor-mode"), roster.some(agent => agent.data?.shift) ? "Simulated shift" :
     roster.some(agent => agent.data?.tracked_demo) ? "Live patient input + simulated patient" : "Two-patient simulation");
   updateRegion($("proposals"), pending.map(agent => [
-    agent.origin, agent.data.proposal, agent.state, agent.busy, agent.data.session?.active, agent.data.ai_drafts,
+    agent.origin, agentName(agent), agent.patientColor, agent.data.patient.room, agent.data.proposal,
+    agent.state, agent.busy, agent.data.session?.active, agent.data.ai_drafts,
     agent.data.shift?.queued_questions
   ]), () => pending.map(agent => {
     const proposal = agent.data.proposal;
-    const card = element("article", "alert-card proposal");
-    card.append(element("h3", "", agentName(agent) + " · " + agent.data.patient.room),
+    const card = markPatient(element("article", "alert-card proposal"), agent);
+    card.append(element("h3", "patient-marker", agentName(agent) + " · " + agent.data.patient.room),
       element("p", "muted", proposal.evidence),
       element("p", "", proposal.preference));
     if (agent.data.shift?.queued_questions > 1) {
@@ -577,16 +601,16 @@ function tileStatus(data) {
 function renderRoster() {
   const roster = [...agents.values()];
   updateRegion($("patients"), [selected, roster.map(agent =>
-    [agent.origin, agentName(agent), agent.data?.patient?.room, agentStatus(agent), agent.busy,
+    [agent.origin, agentName(agent), agent.data?.patient?.room, agent.patientColor, agentStatus(agent), agent.busy,
       agent.data?.profile?.room?.temp_c ?? agent.data?.room?.temp_c,
       list(agent.data?.alerts).filter(alert => !alert.done).length])], () =>
     roster.map(agent => {
       const item = element("li", "patient-item");
-      const tile = button("", "patient-tile", () => openPatient(agent.origin, true));
+      const tile = markPatient(button("", "patient-tile", () => openPatient(agent.origin, true)), agent);
       tile.id = "patient-" + encodeURIComponent(agent.origin);
       tile.setAttribute("aria-pressed", String(agent.origin === selected));
       tile.setAttribute("aria-controls", "profile-details");
-      tile.append(element("strong", "patient-name", agentName(agent)),
+      tile.append(element("strong", "patient-name patient-marker", agentName(agent)),
         element("span", "patient-meta", [agent.data?.patient?.room, agentStatus(agent)].filter(Boolean).join(" · ")));
       const status = agent.data && tileStatus(agent.data);
       if (status) tile.append(status);
@@ -892,6 +916,7 @@ function render() {
 
   const agent = agents.get(selected);
   const data = agent?.data;
+  markPatient($("patient-panel"), agent);
   updateText($("details-heading"), data ? agentName(agent) : "Patient status");
   updateText($("patient-status"), [data?.patient?.room, agentStatus(agent),
     data && agent.state !== "online" ? "Showing last received status" : null].filter(Boolean).join(" · "));

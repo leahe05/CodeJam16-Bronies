@@ -71,10 +71,10 @@
         </div>
         <ul id="patients" class="patient-list"></ul>
       </section>
-      <section class="panel details" aria-labelledby="details-heading">
+      <section id="patient-panel" class="panel details" aria-labelledby="details-heading">
         <div class="section-heading">
           <div>
-            <h2 id="details-heading" tabindex="-1">Patient status</h2>
+            <h2 id="details-heading" class="patient-marker" tabindex="-1">Patient status</h2>
             <p id="patient-status" class="muted" role="status">Waiting for patient data…</p>
           </div>
           <a id="patient-screen" class="button" target="_blank" rel="noopener" hidden>Open patient screen</a>
@@ -142,7 +142,7 @@ No</textarea>
   <dialog id="request-question-dialog" aria-labelledby="request-question-heading">
     <form id="request-question-form">
       <h2 id="request-question-heading">Ask about this request</h2>
-      <p id="request-question-context" class="muted"></p>
+      <p id="request-question-context" class="muted patient-marker"></p>
       <label for="request-question">Question</label>
       <textarea id="request-question" rows="2" maxlength="300" required autofocus></textarea>
       <div id="request-branches" class="request-branches" hidden>
