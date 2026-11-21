@@ -57,6 +57,7 @@ DEMO_CHART = [
     {"text": "Answers only with the eyes: keep questions short", "kind": "care"},
     {"text": "Repositioned every 2 hours (care plan)", "kind": "care"},
     {"text": "Likes the lamp on in the evening, off to sleep", "kind": "preference"},
+    {"text": "Usual bedtime around 22:00", "kind": "routine", "data": {"bedtime": "22:00"}},
     {"text": "Drinks water through a straw; the nurse helps", "kind": "care"},
 ]
 
