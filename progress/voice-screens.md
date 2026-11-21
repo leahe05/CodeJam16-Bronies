@@ -1,0 +1,1 @@
+14:36 voice: the whole app speaks in Ava's voice (lookat/narrator.py): each new screen (title + options with directions), the locked option as a question, and the call-nurse alert; stale sentences dropped when the screen moves on; camera + keyboard modes; 116 tests pass
