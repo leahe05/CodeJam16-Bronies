@@ -4,7 +4,7 @@
  *   2. Calibration without clicks (the patient can't click): a glowing dot visits 9 points; the voice
  *      says "Follow the dot"; while the patient looks at it we feed WebGazer that position
  *      (webgazer.recordScreenPosition). The mouse is never used for training.
- *   3. Live: WebGazer's x,y is smoothed (median of the last SMOOTH predictions) and turned into a ZONE:
+ *   3. Live: WebGazer's x,y is smoothed (median of the predictions of the last WINDOW_MS, wild jumps dropped) and turned into a ZONE:
  *      left third / centre third / right third of the screen, with a dead band so jitter at a border
  *      doesn't flip it. The zone is POSTed to /api/gaze ~10x a second; the backend's selection engine
  *      (dwell, eyebrow confirm, long raise = Call Nurse) does the rest, exactly as with the Python gaze.
@@ -21,8 +21,12 @@
   const params = new URLSearchParams(location.search);
   if (params.get("gaze") !== "web") return;
 
-  const SMOOTH = 6;             // predictions in the median (~0.2 s at 30 fps; more = steadier but laggier)
-  const DEAD = 0.04;            // dead band around a zone border, share of the screen width
+  // Smoothing = a median over the predictions of the last WINDOW_MS only (not a fixed count: at a low
+  // frame rate a count of 6 meant ~0.5 s of lag). WebGazer's Kalman filter is OFF: it added more lag on
+  // top. Wild predictions (far off the screen) are dropped instead of being smoothed in.
+  const WINDOW_MS = 220, MAX_KEEP = 10;
+  const OFF_SCREEN = 0.25;      // a prediction further than this (share of the width) off the screen = noise
+  const DEAD = 0.05;            // dead band around a zone border, share of the screen width
   const SEND_MS = 50;           // POST the zone this often
   const LOST_MS = 600;          // no prediction this long = no gaze (null)
   // 9-point grid, then the far left/right edges and the middle row again: left/right is all that matters.
@@ -34,13 +38,16 @@
   // still gets "right" right. If the three don't come out in order, the dot calibration runs again.
   const CHECK = [["left", 1 / 6], ["middle", .5], ["right", 5 / 6]];
   const CHECK_SETTLE_MS = 1200, CHECK_MS = 2200, MIN_SPREAD = 0.08;
+  // After the check, each column must land in its own zone at least this often, else the dot runs again.
+  const MIN_HIT = 0.75;
   const CONFIRM_S = 0.3, LONG_S = 2.0;      // config.CONFIRM_S / config.EMERGENCY_S
   const EYES_OPEN = 0.16;                  // eyelid gap / eye width above this = open
 
   let borders = [1 / 3, 2 / 3];   // zone borders, share of the screen width (set by the check)
   let probe = null;               // predictions collected during the check
   let dotX = null, dotY = null;   // the ring's position (moved every animation frame, not every POST)
-  let xs = [], ys = [], lastPred = 0, zone = null, running = false, calibrating = false;
+  let xs = [], ys = [], ts = [], lastPred = 0, zone = null, running = false, calibrating = false;
+  let predCount = 0, predRate = 0;   // predictions per second (D shows it: below ~12/s it will feel slow)
   let showDot = params.get("dot") !== "0";
   // eyebrows: value = brow-to-eyelid distance / face height (smoothed); thr/rel from calibration
   const brow = { value: 0, thr: null, rel: null, start: null, since: null, longSent: false, events: [],
@@ -79,6 +86,10 @@
       color: var(--text, #fff); box-shadow: var(--ask-glow, 0 0 5vh rgba(34,211,238,.5)); }
     #wg-zone { position: fixed; top: 0; bottom: 0; width: 33.34vw; z-index: 1; pointer-events: none;
       background: linear-gradient(180deg, transparent, rgba(103,232,249,.06) 40%, transparent); transition: left .25s ease, opacity .3s; }
+    #wg-rate { position: fixed; left: 1.5vh; bottom: 1.5vh; z-index: 30; font: 600 1.8vh system-ui, sans-serif;
+      color: var(--hint, #a9c6ff); background: rgba(0, 10, 40, .55); padding: .5vh 1.2vh; border-radius: 1vh;
+      pointer-events: none; transition: opacity .3s; }
+    #wg-cal .score { font-size: 3.2vh; margin-top: 2vh; }
     #webgazerVideoContainer { display: none !important; }`;
   document.head.appendChild(css);
 
@@ -100,7 +111,9 @@
 
   // ---------------- start (one click) ----------------
   function startScreen() {
-    const s = el("wg-start", `<h1>Eye tracking on this screen</h1><p>Click once to start the camera, then follow the dot with your eyes.</p>`);
+    const s = el("wg-start", `<h1>Eye tracking on this screen</h1><p>Click once to start the camera, then follow the dot with your eyes.</p>`
+      + `<p>For the best accuracy: face the camera 50-70 cm away, light on your face (no window behind you),`
+      + ` keep your head still, laptop on its charger.</p>`);
     s.onclick = () => { s.remove(); run(); };
   }
 
@@ -126,15 +139,20 @@
     wg.params.faceMeshSolutionPath = "/web/vendor/webgazer/mediapipe/face_mesh";   // offline
     wg.params.showVideoPreview = false;
     wg.saveDataAcrossSessions(false);                // a fresh calibration every start
-    wg.setRegression("ridge").applyKalmanFilter(true);
+    wg.setRegression("ridge").applyKalmanFilter(false);   // our own short median is enough; Kalman = lag
     wg.setGazeListener((data) => {
       if (data && probe) { probe.push(data.x / innerWidth); return; }
+      if (data) predCount++;
       if (!data || calibrating || frozen()) return;    // eyebrows up: ignore the jumpy predictions
-      xs.push(data.x); ys.push(data.y);
-      dotX = dotX == null ? data.x : dotX + 0.55 * (data.x - dotX);   // the ring follows each prediction
-      dotY = dotY == null ? data.y : dotY + 0.55 * (data.y - dotY);
-      if (xs.length > SMOOTH) { xs.shift(); ys.shift(); }
-      lastPred = performance.now();
+      const off = OFF_SCREEN * innerWidth;
+      if (data.x < -off || data.x > innerWidth + off) return;   // a wild jump, not a look
+      const now = performance.now();
+      xs.push(data.x); ys.push(data.y); ts.push(now);
+      while (xs.length > MAX_KEEP || (ts.length > 2 && now - ts[0] > WINDOW_MS)) { xs.shift(); ys.shift(); ts.shift(); }
+      const mx = median(xs), my = median(ys);
+      dotX = dotX == null ? mx : dotX + 0.8 * (mx - dotX);   // the ring sits on the smoothed gaze, almost at once
+      dotY = dotY == null ? my : dotY + 0.8 * (my - dotY);
+      lastPred = now;
     });
     const started = wg.begin();
     const timeout = new Promise((_, no) => setTimeout(() => no(new Error("the camera or the face model did not start within 25 s")), 25000));
@@ -145,6 +163,12 @@
     running = true;
     setInterval(browTick, 33);
     setInterval(send, SEND_MS);
+    setInterval(() => {                               // predictions per second, for the D overlay
+      predRate = predCount; predCount = 0;
+      const r = el("wg-rate");
+      r.textContent = `eye tracking ${predRate}/s${predRate < 12 ? " (slow: close other apps, plug in the charger)" : ""}`;
+      r.style.opacity = showDot ? "1" : "0";
+    }, 1000);
     const ring = el("wg-dot");
     (function frame() {
       if (dotX != null) ring.style.transform = `translate(${dotX}px, ${dotY}px)`;
@@ -271,7 +295,7 @@
     await wait(2000);
     cal.innerHTML = CHECK.map(([z, cx]) => `<div class="wg-col" data-z="${z}" style="left:${cx * 100}vw">`
       + `${{ left: "Left", middle: "Centre", right: "Right" }[z]}</div>`).join("");
-    const got = {};
+    const got = {}, samples = {};
     for (const [z] of CHECK) {
       const box = cal.querySelector(`[data-z="${z}"]`);
       box.classList.add("on");
@@ -280,6 +304,7 @@
       probe = [];
       await wait(CHECK_MS);
       got[z] = probe.length >= 5 ? median(probe) : null;
+      samples[z] = probe;
       probe = null;
       box.classList.remove("on");
     }
@@ -287,7 +312,20 @@
     const { left: l, middle: m, right: r } = got;
     console.log("WG check", got);
     if (l == null || m == null || r == null || !(m - l > MIN_SPREAD && r - m > MIN_SPREAD)) return false;
-    borders = [(l + m) / 2, (m + r) / 2];
+    const b = [(l + m) / 2, (m + r) / 2];
+    // how often each column's predictions land in its own zone with these borders
+    const zoneAt = (x) => (x < b[0] ? "left" : x > b[1] ? "right" : "middle");
+    const hit = {};
+    for (const [z] of CHECK) hit[z] = samples[z].filter((x) => zoneAt(x) === z).length / samples[z].length;
+    const pct = (z) => Math.round(hit[z] * 100) + "%";
+    const ok = CHECK.every(([z]) => hit[z] >= MIN_HIT);
+    console.log("WG accuracy", hit);
+    cal.innerHTML = `<div class="msg"><b>${ok ? "Eye tracking is ready" : "Not accurate enough yet"}</b>`
+      + `<p class="score">Left ${pct("left")} · Centre ${pct("middle")} · Right ${pct("right")}</p></div>`;
+    say(ok ? "Eye tracking is ready." : "Not accurate enough yet.");
+    await wait(2500);
+    if (!ok) return false;
+    borders = b;
     return true;
   }
 
@@ -297,12 +335,13 @@
     for (let round = 0; round < 3; round++) {
       await calibrate();
       if (await checkZones()) { el("wg-cal").remove(); return; }
-      const cal = el("wg-cal", `<div class="msg"><b>Let's do the dot once more</b><p>Keep your head still and follow it with your eyes.</p></div>`);
+      const cal = el("wg-cal", `<div class="msg"><b>Let's do the dot once more</b><p>Keep your head still, move only your eyes, and look right at the dot until it moves.</p></div>`);
       say("Let's do the dot once more.");
       await wait(2500);
       cal.remove();
     }
-    borders = [1 / 3, 2 / 3];                        // still not in order: plain thirds
+    borders = [1 / 3, 2 / 3];                        // still not good after 3 rounds: plain thirds
+    console.warn("WG: calibration stayed below", MIN_HIT, "- press R to redo it");
     el("wg-cal").remove();
   }
 
@@ -336,6 +375,7 @@
       zone = zoneOf(x);
     } else {
       zone = null;
+      xs = []; ys = []; ts = [];
     }
     const dot = el("wg-dot"), band = el("wg-zone");
     dot.style.opacity = showDot && fresh ? "1" : "0";

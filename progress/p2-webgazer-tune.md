@@ -1,0 +1,1 @@
+Sat 16:51 webgazer tuning: less lag (220 ms median window, Kalman off, wild jumps dropped, ring follows at once), calibration scores each column and redoes the dot below 75%, D shows predictions/s; check_frontend PASS
