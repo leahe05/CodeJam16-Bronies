@@ -192,20 +192,43 @@ def calibrate(tracker, say, patient: str, frames: int = CALIB_FRAMES, show: bool
 
 
 class LocalSpeaker:
-    """Fallback voice for the self-test (before voice.py exists). Never blocks.
+    """The spoken prompts: a calm, natural female voice. Never blocks.
 
-    Windows: one persistent PowerShell System.Speech process reading lines from stdin.
-    macOS: the built-in `say` command. Otherwise: print.
+    Windows: one persistent PowerShell System.Speech process reading lines from stdin, using the
+    first installed female voice (usually "Microsoft Zira"), slightly slower than default.
+    macOS: the built-in `say` command with the best installed female voice (see MAC_VOICES).
+    Otherwise: print.
     """
+
+    # best first; "(Premium)"/"(Enhanced)" voices sound the most natural once downloaded in
+    # System Settings > Accessibility > Spoken Content > System Voice > Manage Voices
+    MAC_VOICES = ["Ava (Premium)", "Zoe (Premium)", "Ava (Enhanced)", "Zoe (Enhanced)",
+                  "Allison (Enhanced)", "Susan (Enhanced)", "Samantha (Enhanced)", "Samantha"]
+    MAC_RATE = "175"   # words per minute; default is ~185
 
     def __init__(self):
         self.proc = None
+        self.mac_voice = None
         if sys.platform == "win32":
             script = ("Add-Type -AssemblyName System.Speech; "
                       "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
+                      "try { $s.SelectVoiceByHints([System.Speech.Synthesis.VoiceGender]::Female, "
+                      "[System.Speech.Synthesis.VoiceAge]::Adult) } catch {}; "
+                      "$s.Rate = -1; "
                       "while ($null -ne ($l = [Console]::In.ReadLine())) { $s.Speak($l) }")
             self.proc = subprocess.Popen(["powershell", "-NoProfile", "-Command", script],
                                          stdin=subprocess.PIPE, text=True)
+        elif shutil.which("say"):
+            self.mac_voice = self._pick_mac_voice()
+
+    @classmethod
+    def _pick_mac_voice(cls):
+        try:
+            listing = subprocess.run(["say", "-v", "?"], capture_output=True, text=True, timeout=5).stdout
+        except (OSError, subprocess.SubprocessError):
+            return None
+        installed = {line.split("  ")[0].strip() for line in listing.splitlines()}
+        return next((v for v in cls.MAC_VOICES if v in installed), None)
 
     def __call__(self, text: str) -> None:
         print(f"[say] {text}")
@@ -214,7 +237,8 @@ class LocalSpeaker:
                 self.proc.stdin.write(text.replace("\n", " ") + "\n")
                 self.proc.stdin.flush()
             elif shutil.which("say"):
-                subprocess.Popen(["say", text])
+                voice = ["-v", self.mac_voice] if self.mac_voice else []
+                subprocess.Popen(["say", *voice, "-r", self.MAC_RATE, text])
         except OSError as e:
             print(f"[say failed: {e}]")
 
