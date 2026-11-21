@@ -12,8 +12,8 @@ LookAt is an AI agent that talks first, for patients who can only move their eye
 ## The patient screens (lookat/screens.py = logic, lookat/display.py = page). Labels exactly as written.
 - IDLE: "You're all set." / "I'm here if you need anything." Top-left card "Room Controls" (look left + short raise). Center pill "Talk to AI" (look center + short raise). Bottom banner "Call Nurse • Long eyebrow raise anywhere".
 - SUGGESTION (AI notification pending): Room Controls still top-left; center card badge "AI SUGGESTION" + the agent's text + "Look center + raise eyebrows to engage". Fades back to IDLE after SUGGESTION_FADE_S if ignored.
-- CHECKIN (active AI): badge "AI CHECK-IN", the question, left/right answers (default "Yes, please." / "No, thanks."), center "Return to main menu". NO Room Controls. "No, thanks" may lead to another fitting suggestion; "Return to main menu" stops the stream.
-- ASSISTANT (patient chose Talk to AI): "How can I help you?", left/right from the agent's ranked list (default "Get more comfortable" / "More suggestions"), center "Return to main menu". Includes "Quiet for 2 hours" and "Something else" among the options.
+- CHECKIN (active AI): badge "AI CHECK-IN", the question, left/right answers (default "Yes, please." / "No, thanks."), center "Return to main menu". Open questions (more than 2 answers, "Something else" last) page 2 at a time: center = "More options", and "Return to main menu" on the last page. NO Room Controls. "No, thanks" may lead to another fitting suggestion; "Return to main menu" stops the stream.
+- ASSISTANT (patient chose Talk to AI): "How can I help you?", left = the current option from the agent's ranked list (default "Get more comfortable", "Quiet for 2 hours", "Adjust the room", "Something else"), right = "More suggestions" (next option), center "Return to main menu".
 - ROOM: "What would you like to adjust?" left "Adjust the lights", right "Adjust the temperature", center "Return to main menu". LIGHTS: Lamp on / Lamp off / Back. TEMPERATURE: Cooler (fan on) / Warmer (fan off) / Back.
 - NURSE (session opened by the nurse): pill "From your nurse", "Connected", her question, her answers 2 per page, center "More options", page dots. Room Controls, Return and the Call Nurse banner are hidden. Only the nurse ends the session; then IDLE and the agent resumes.
 - Style: deep navy gradient, glassy glowing rounded cards, white bold text, light-blue hints, LookAt eye logo. Readable from 2-3 m.
@@ -36,7 +36,7 @@ LookAt is an AI agent that talks first, for patients who can only move their eye
 ## Safety (enforced IN CODE)
 - Comfort, environment and communication only. Pain, breathing, distress or anything clinical -> page_nurse urgent at once. Never medical advice.
 - act() only after the patient's matching Yes; routines only after the patient approved them. Nothing automatic runs during a nurse session or while the patient is choosing.
-- "Call Nurse" (long raise) and "Something else" are always available.
+- "Call Nurse" (long raise) works on every screen; every open question offers "Something else".
 - Any AI failure (no key, error, timeout) falls back to rules, marked "(fallback)" on the panel.
 
 ## Nurse app (lookat/nurse.py, phone) + Ask anything (lookat/ask.py)
