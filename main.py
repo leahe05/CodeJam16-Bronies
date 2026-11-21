@@ -284,7 +284,8 @@ def main() -> None:
     print_urls(args.port)
     print(f"Lamp: {room.lamp.ip or 'simulated'}   Fan: {room.fan.ip or 'simulated (set FAN_IP for plug 2)'}")
     args.speech = Speech(enabled=not args.no_voice)
-    live.announcer = Announcer(args.speech.say)   # says the locked card, the choice, new screens
+    # names the card you look at, then "Raise your eyebrows" right after it; the choice; new screens
+    live.announcer = Announcer(args.speech.say, queue=args.speech)
     try:
         (run_keyboard if args.keyboard else run_camera)(args, live)
     except KeyboardInterrupt:

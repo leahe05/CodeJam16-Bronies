@@ -13,9 +13,10 @@ def screen(kind="idle", title="You're all set.", left="Room Controls", middle="T
     return s
 
 
-def announcer(t=None):
+def announcer():
+    """said: interrupting lines as-is, queued lines as "+<text>"."""
     said = []
-    return Announcer(said.append, clock=(lambda: t[0]) if t else (lambda: 0.0)), said
+    return Announcer(said.append, clock=lambda: 0.0, queue=lambda x: said.append("+" + x)), said
 
 
 def look(a, scr, spot, state, t0, t1, step=0.1):
@@ -26,29 +27,30 @@ def look(a, scr, spot, state, t0, t1, step=0.1):
     return t
 
 
-def test_name_while_looking_then_cue_on_lock():
+def test_name_while_looking_then_cue_queued_after_it():
     a, said = announcer()
     idle = screen()
     look(a, idle, "left", "dwell", 0.0, 1.0)
     assert said == ["Room Controls."]                   # named during the dwell, once
     look(a, idle, "left", "asking", 1.0, 2.0)
-    assert said == ["Room Controls.", RAISE]            # the cue right when it locks, once
+    assert said == ["Room Controls.", "+" + RAISE]      # cue QUEUED: never cuts the name off
 
 
-def test_looking_away_stops_the_voice_at_once():
+def test_looking_away_lets_the_name_finish():
     a, said = announcer()
     idle = screen()
     look(a, idle, "left", "dwell", 0.0, 0.5)
     a.update(idle, None, None, now=0.5)
-    assert said == ["Room Controls.", ""]               # "" = stop talking now
+    a.update(idle, {"spot": "left", "state": "dwell"}, None, now=0.6)   # gaze flicker back
+    assert said == ["Room Controls."]                   # no stop, no repeat
 
 
-def test_moving_to_another_card_cuts_in_with_its_name():
+def test_another_card_replaces_the_name():
     a, said = announcer()
     idle = screen()
     look(a, idle, "left", "dwell", 0.0, 0.5)
     look(a, idle, "middle", "dwell", 0.5, 1.0)
-    assert said == ["Room Controls.", "", "Talk to AI."]
+    assert said == ["Room Controls.", "Talk to AI."]    # say() interrupts
 
 
 def test_a_quick_flicker_is_not_named():
@@ -59,10 +61,10 @@ def test_a_quick_flicker_is_not_named():
     assert said == []
 
 
-def test_lock_without_a_dwell_name_still_names_and_cues():
+def test_lock_without_a_dwell_name_still_names_then_cues():
     a, said = announcer()
     a.update(screen(), {"spot": "left", "state": "asking"}, None, now=0.0)
-    assert said == [f"Room Controls. {RAISE}"]
+    assert said == ["Room Controls.", "+" + RAISE]
 
 
 def test_choice_says_label_and_new_screen():
@@ -105,7 +107,7 @@ def test_speakable_reads_degrees():
 def test_live_speaks_while_choosing_the_lamp():
     live = Live(Room(lamp_ip="", fan_ip="", plug_factory=SimPlug), now=lambda: 0.0)
     said = []
-    live.announcer = Announcer(said.append)
+    live.announcer = Announcer(said.append, queue=lambda x: said.append("+" + x))
     t = 0.0
 
     def choose(spot):
@@ -122,8 +124,7 @@ def test_live_speaks_while_choosing_the_lamp():
     choose("left")      # Room Controls
     choose("left")      # Adjust the lights
     choose("left")      # Lamp on
-    spoken = [x for x in said if x]
-    assert spoken == ["Room Controls.", RAISE, "Room Controls. What would you like to adjust?",
-                      "Adjust the lights.", RAISE, "Adjust the lights. The lamp is OFF",
-                      "Lamp on.", RAISE, "Lamp on."]
+    assert said == ["Room Controls.", "+" + RAISE, "Room Controls. What would you like to adjust?",
+                    "Adjust the lights.", "+" + RAISE, "Adjust the lights. The lamp is OFF",
+                    "Lamp on.", "+" + RAISE, "Lamp on."]
     assert live.room.state()["lamp_on"]
