@@ -1,12 +1,15 @@
 """LookAt: the real program.
 
-    py -3.11 main.py --patient NAME [--recalibrate] [--camera 0]
+    py -3.11 main.py --patient NAME [--recalibrate] [--camera 0] [--voice edge|page|windows|off]
     py -3.11 main.py --patient NAME --keyboard      (no camera: test with the keyboard)
 
 Starts the web server (Lea's pages + the JSON API, docs/API.md), the plugs (lamp,
 fan), calibrates gaze and eyebrows on the patient screen if needed, then runs the
 camera loop in the main thread: camera -> gaze spot + eyebrow events -> Live.frame()
-(selection engine -> screens -> room / nurse).
+(selection engine -> screens -> room / nurse). A voice (lookat/speech.py) says which card
+locked and when to raise the eyebrows, what was chosen, and new screens. Default --voice edge:
+Microsoft's natural voice (edge-tts, needs internet; lines are cached in cache/voice/).
+--voice page: the patient page reads it aloud in Edge instead (click the page once).
 
 Operator window (team only) keys:  c = recalibrate gaze   g = recalibrate eyebrows   q = quit
 Keyboard mode keys:  a / s / d = look left / center / right   x = look away
@@ -25,6 +28,7 @@ from lookat import config
 from lookat.devices import Room
 from lookat.live import Live
 from lookat.server import PAGES, find_page, make_app
+from lookat.speech import Announcer, EdgeVoice, Speech, WebVoice, known_lines
 
 WINDOW = "LookAt operator (team only)"
 
@@ -99,7 +103,7 @@ class ScreenPrompt:
         from lookat.gaze import SPOKEN_NAMES
         spot = next((s for s, name in SPOKEN_NAMES.items() if name in text), None)
         self.live.set_calibration(text, spot)
-        self.speaker.say(text, interrupt=True)   # the newest prompt wins: never lag behind the camera
+        self.speaker(text)
 
 
 def calibrate(tracker, live: Live, speaker, patient: str, what: str):
@@ -186,37 +190,26 @@ def describe(events, out, chosen, flash: tuple) -> tuple:
     return text, time.monotonic()
 
 
-def narrate(narrator, live: Live, speaker) -> None:
-    """Speak what the patient screen shows (new screen, locked option, nurse called)."""
-    with live.lock:
-        screen = live.screen_json()
-    for text, interrupt in narrator.update(screen):
-        speaker.say(text, interrupt=interrupt)
-
-
 def run_camera(args, live: Live) -> None:
-    from lookat.gaze import GazeModel, LocalSpeaker
-    from lookat.narrator import Narrator
+    from lookat.gaze import GazeModel
     from lookat.gestures import GestureDetector, load_settings
     from lookat.vision import FaceTracker
     from lookat.awake import AwakeDetector
 
-    speaker = LocalSpeaker()                          # Ava: the app's voice
-    cal_voice = LocalSpeaker(ava=False, fast=True)     # calibration: instant, offline, quicker
-    awake = AwakeDetector()
+    speaker = args.speech          # the same voice as the announcements (lookat/speech.py)
+    awake = AwakeDetector()        # eyes open / awake for the agent
     tracker = FaceTracker(args.camera)
     live.camera_ok = True
     try:
-        gaze = (calibrate(tracker, live, cal_voice, args.patient, "gaze")
+        gaze = (calibrate(tracker, live, speaker, args.patient, "gaze")
                 if args.recalibrate or not GazeModel.exists(args.patient) else GazeModel.load(args.patient))
         settings = None if args.recalibrate else load_settings(args.patient)
         if settings is None:
-            settings = calibrate(tracker, live, cal_voice, args.patient, "gestures")
+            settings = calibrate(tracker, live, speaker, args.patient, "gestures")
         det = GestureDetector(settings, on_release=True)
         print(f"Ready. Eyebrow threshold {det.threshold:.2f} ({settings['gesture']}). "
               f"Watch the '{WINDOW}' window; press q in it to quit.")
         fps, last, raised, flash = 0.0, time.monotonic(), False, ("", 0.0)
-        narrator = Narrator()
         while True:
             frame, f = tracker.read()
             if frame is None:
@@ -231,7 +224,6 @@ def run_camera(args, live: Live) -> None:
             live.awake_state = awake.update(f, now)
             out = live.frame(now, spot, events, face=f is not None, confidence=conf, brow=brow)
             flash = describe(events, out, live.chosen, flash)
-            narrate(narrator, live, speaker)
             fps = 0.9 * fps + 0.1 / max(now - last, 1e-3)
             last = now
             if f is not None and f["face_px"] < config.MIN_FACE_PX:
@@ -246,31 +238,19 @@ def run_camera(args, live: Live) -> None:
                 print("Stopped: q pressed.")
                 break
             if key == ord("c"):
-                gaze = calibrate(tracker, live, cal_voice, args.patient, "gaze")
+                gaze = calibrate(tracker, live, speaker, args.patient, "gaze")
                 raised = False
             elif key == ord("g"):
-                settings = calibrate(tracker, live, cal_voice, args.patient, "gestures")
+                settings = calibrate(tracker, live, speaker, args.patient, "gestures")
                 det = GestureDetector(settings, on_release=True)
                 raised = False
     finally:
         live.camera_ok = False
         tracker.close()
-        speaker.close()
-        cal_voice.close()
 
 
 def run_keyboard(args, live: Live) -> None:
     """No camera: drive the real screens, lamp and fan from the keyboard."""
-    from lookat.gaze import LocalSpeaker
-    from lookat.narrator import Narrator
-    speaker, narrator = LocalSpeaker(), Narrator()
-    try:
-        _keyboard_loop(live, speaker, narrator)
-    finally:
-        speaker.close()
-
-
-def _keyboard_loop(live: Live, speaker, narrator) -> None:
     spot, look = None, {ord("a"): "left", ord("s"): "middle", ord("d"): "right"}
     fps, last = 0.0, time.monotonic()
     while True:
@@ -290,7 +270,6 @@ def _keyboard_loop(live: Live, speaker, narrator) -> None:
         live.frame(now, spot, events, face=True, confidence=1.0 if spot else 0.0)
         is_open = live.eyes_override != "closed"   # keyboard: no camera, the patient counts as awake
         live.awake_state = {"eyes_open": is_open, "open_ratio": 1.0 if is_open else 0.0, "awake": is_open}
-        narrate(narrator, live, speaker)
         fps = 0.9 * fps + 0.1 / max(now - last, 1e-3)
         last = now
         draw_operator(np.zeros((480, 1000, 3), np.uint8), live, 1.0 if spot else 0.0, None, fps, keyboard=True)
@@ -303,6 +282,10 @@ def main() -> None:
     ap.add_argument("--camera", type=int, default=0)
     ap.add_argument("--keyboard", action="store_true", help="no camera: test with the keyboard")
     ap.add_argument("--port", type=int, default=config.PAGE_PORT)
+    ap.add_argument("--voice", choices=("edge", "page", "windows", "off"), default="edge",
+                    help="edge = Microsoft natural voice from this laptop (internet); "
+                         "page = the patient page speaks (Edge natural voice, click it once); "
+                         "windows = this laptop's built-in voice; off = printed only")
     args = ap.parse_args()
 
     check_wifi()
@@ -316,6 +299,17 @@ def main() -> None:
     server = start_server(live, args.port)
     print_urls(args.port)
     print(f"Lamp: {room.lamp.ip or 'simulated'}   Fan: {room.fan.ip or 'simulated (set FAN_IP for plug 2)'}")
+    if args.voice == "edge":
+        args.speech = EdgeVoice()
+        args.speech.prewarm(known_lines())
+    elif args.voice == "page":
+        args.speech = WebVoice()
+        live.voice_out = args.speech
+        print("Voice: open the patient page in Microsoft Edge and click it once to turn the voice on.")
+    else:
+        args.speech = Speech(enabled=args.voice == "windows")
+    # names the card you look at, then "Raise your eyebrows" right after it; the choice; new screens
+    live.announcer = Announcer(args.speech.say, queue=args.speech)
     try:
         (run_keyboard if args.keyboard else run_camera)(args, live)
     except KeyboardInterrupt:
@@ -324,6 +318,7 @@ def main() -> None:
         cv2.destroyAllWindows()
         server.should_exit = True
         room.close()
+        args.speech.close()
         print("LookAt stopped.", flush=True)
         # end the process for sure: a stuck camera/voice/web thread kept it alive before, holding
         # port 8000 and the camera, so the next start failed with "port already in use"
