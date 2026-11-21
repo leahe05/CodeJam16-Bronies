@@ -196,7 +196,10 @@ def run_camera(args, live: Live) -> None:
     from lookat.vision import FaceTracker
     from lookat.awake import AwakeDetector
 
-    speaker = args.speech          # the same voice as the announcements (lookat/speech.py)
+    from lookat.gaze import LocalSpeaker
+    # calibration: the computer's own voice, instant and offline, a bit quicker (Ava lags behind the camera);
+    # the rest of the app keeps args.speech. --voice off keeps calibration silent too.
+    speaker = args.speech if args.voice == "off" else LocalSpeaker(ava=False, fast=True)
     awake = AwakeDetector()        # eyes open / awake for the agent
     tracker = FaceTracker(args.camera)
     live.camera_ok = True
@@ -247,6 +250,8 @@ def run_camera(args, live: Live) -> None:
     finally:
         live.camera_ok = False
         tracker.close()
+        if speaker is not args.speech:
+            speaker.close()
 
 
 def run_keyboard(args, live: Live) -> None:
