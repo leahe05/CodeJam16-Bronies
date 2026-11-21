@@ -2,16 +2,20 @@
 
     speech = Speech()                      # one Windows voice for the whole program
     speech("Look at the LEFT card")        # queued: calibration prompts, in order
-    speech.say("Lamp on. Raise your eyebrows.")   # interrupts: only the latest news matters
-    live.announcer = Announcer(speech.say)        # Live.frame() calls announcer.update(...)
+    speech.say("Lamp on.")                 # interrupts: only the latest news matters
+    speech.say("")                         # just stop talking
+    live.announcer = Announcer(speech.say) # Live.frame() calls announcer.update(...)
 
-What the Announcer says (one short sentence per moment, never every frame):
-  - a card locks (asking)   -> "<label>. Raise your eyebrows."
+What the Announcer says, following the gaze as it happens:
+  - the patient starts looking at a card (dwell glow)  -> "<label>."   (during the 1 s dwell)
+  - the card locks (asking)                            -> "Raise your eyebrows."  (right away)
+  - the gaze leaves that card                          -> stops talking at once (and the next
+                                                          card's name cuts in)
   - a choice is made        -> "<label>." plus the new screen's title if the screen changed
   - a new screen appears on its own (suggestion, check-in, nurse question) -> its title
   - a long raise            -> "Calling your nurse."
-Not spoken: the soft dwell glow, timeouts back to the home screen, live numbers in titles
-(the temperature title changes every second), the calibration overlay (calibration speaks itself).
+Not spoken: timeouts back to the home screen, live numbers in titles (the temperature
+title changes every second), the calibration overlay (calibration speaks itself).
 
 Windows: one persistent PowerShell System.Speech process reading lines from stdin.
 A line starting with "!" cancels whatever is being said first. Elsewhere: print only.
@@ -22,7 +26,8 @@ import time
 from typing import Callable, Optional
 
 RAISE = "Raise your eyebrows."
-REPEAT_S = 8.0          # the same card re-locking within this time is not announced again
+NAME_AFTER_S = 0.2      # look at a card this long before its name is said (skips gaze flicker)
+RENAME_S = 2.0          # the same card's name is not repeated within this time
 VOICE = "Microsoft Zira Desktop"   # calmer than the default David; falls back if missing
 NURSE_CALLED = "Calling your nurse. Help is on the way."
 # screens whose title is the news (a question or a suggestion); on the others it's a live
@@ -58,8 +63,9 @@ class Speech:
         self._send(speakable(text))
 
     def say(self, text: str) -> None:
-        """Stops what is being said and says this instead."""
-        print(f"[voice] {text}")
+        """Stops what is being said and says this instead ("" = just stop)."""
+        if text:
+            print(f"[voice] {text}")
         self._send("!" + speakable(text))
 
     def _send(self, line: str) -> None:
@@ -106,13 +112,18 @@ class Announcer:
     def __init__(self, say: Callable[[str], None], clock: Callable[[], float] = time.monotonic):
         self.say = say
         self.clock = clock
-        self._asking: Optional[tuple] = None   # (screen key, spot) of the current lock
-        self._said_lock: dict = {}             # (screen key, spot) -> when it was last announced
         self._screen: Optional[tuple] = None
+        self._target: Optional[tuple] = None     # (screen key, spot) being looked at (dwell/asking)
+        self._target_since = 0.0
+        self._named: dict = {}                   # (screen key, spot) -> when its name was said
+        self._cued: Optional[tuple] = None       # the lock "Raise your eyebrows" was said for
+        self._talking_about: Optional[tuple] = None   # the target the voice is speaking about now
 
-    def update(self, screen: dict, focus: Optional[dict], chosen: Optional[str], events=()) -> Optional[str]:
+    def update(self, screen: dict, focus: Optional[dict], chosen: Optional[str], events=(),
+               now: Optional[float] = None) -> Optional[str]:
         """Call once per frame with the patient screen, the focus highlight, the label chosen this
         frame (or None) and the frame's patient events. Speaks at most one line; returns it."""
+        t = self.clock() if now is None else now
         key = screen_key(screen)
         changed = self._screen is not None and key != self._screen
         first = self._screen is None
@@ -126,18 +137,34 @@ class Announcer:
                 parts.append(screen_line(screen))
         elif changed and not first and screen.get("screen") != "idle":
             parts.append(screen_line(screen))      # a pop-up or a nurse question arrived
+        news = bool(parts)
 
-        asking = (key, focus["spot"]) if focus and focus.get("state") == "asking" else None
-        if asking and asking != self._asking:
-            label = _label(screen, focus["spot"])
-            t = self.clock()
-            # gaze often drops and re-locks the same card: say it once, not every re-lock
-            if label and (chosen or t - self._said_lock.get(asking, -1e9) >= REPEAT_S):
-                parts.append(f"{label}. {RAISE}")
-                self._said_lock[asking] = t
-        self._asking = asking
+        state = focus.get("state") if focus else None
+        target = (key, focus["spot"]) if state in ("dwell", "asking") else None
+        if target != self._target:
+            self._target, self._target_since = target, t
+        label = _label(screen, target[1]) if target else None
+        about = None
+        if target and label and target != self._named_target(t):
+            if state == "asking" or t - self._target_since >= NAME_AFTER_S - 1e-9:
+                parts.append(f"{label}.")           # name the card while the patient looks at it
+                self._named[target] = t
+                about = target
+        if state == "asking" and target != self._cued:
+            parts.append(RAISE)                     # the cue, the moment the card locks
+            about = target
+        self._cued = target if state == "asking" else None
 
         text = " ".join(p for p in parts if p)
         if text:
             self.say(text)
+            self._talking_about = None if news else about
+        elif self._talking_about is not None and self._talking_about != target:
+            self.say("")                            # the gaze moved on: stop talking at once
+            self._talking_about = None
         return text or None
+
+    def _named_target(self, t: float) -> Optional[tuple]:
+        """The current target if its name was said recently (so it isn't repeated), else None."""
+        when = self._named.get(self._target)
+        return self._target if when is not None and t - when < RENAME_S else None

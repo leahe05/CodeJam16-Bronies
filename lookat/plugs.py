@@ -158,7 +158,8 @@ class PlugWorker:
     def _offline(self, err: Exception) -> None:
         self.online = False
         if not self._warned:
-            hint = ("wrong Kasa login: KASA_USER / KASA_PASSWORD must be the TP-Link account that owns the plug"
+            hint = ("login refused: KASA_USER / KASA_PASSWORD must be the TP-Link account that owns the plug; "
+                    "if they are (another plug works), unplug this plug 10 s, plug it back in, wait 1 min"
                     if "Authentication" in type(err).__name__
                     else "run the network check (PLAN.md R1): laptop on the right Wi-Fi? plug powered?")
             print(f"PLUG {self.name} OFFLINE at {self.ip} ({type(err).__name__}) - {hint}")

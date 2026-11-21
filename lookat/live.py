@@ -91,7 +91,7 @@ class Live:
                 self._handle(ev, now)
             if self.announcer is not None:
                 try:
-                    self.announcer.update(self.sm.view(now), self.machine.view(), self.chosen, out)
+                    self.announcer.update(self.sm.view(now), self.machine.view(), self.chosen, out, now=now)
                 except Exception as e:   # noqa: BLE001 - the voice must never stop the camera loop
                     log_event("voice_error", error=repr(e))
         for ev in out:
