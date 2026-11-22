@@ -130,3 +130,26 @@ def test_claudes_question_for_an_unclear_request_becomes_the_proposal(tmp_path):
     origin = [a for a in live.nurse_json()["alerts"] if a["text"] == "Wants something, did not say what."][0]
     assert origin["review"] == "clarified"
     live.nurse.stop()
+
+
+def test_patient_message_reaches_the_nurse_and_the_conversation(tmp_path):
+    live = setup(tmp_path)
+    with live.lock:
+        live._handle(("patient_message", "I'm thirsty"), live.now())
+    d = live.nurse_json()
+    assert any(a["text"] == "Patient message: I'm thirsty." for a in d["alerts"])      # a request on the dashboard
+    assert d["conversation"][-1] == {"time": d["conversation"][-1]["time"], "from": "patient", "kind": "message",
+                                     "text": "I'm thirsty"}
+    assert (live.screen_json().get("overlay") or {}).get("kind") == "call_nurse"       # nurse is coming
+
+
+def test_nurse_message_and_question_are_one_conversation(tmp_path):
+    live = setup(tmp_path)
+    assert live.nurse_action("send", {"question": "I'll be there in 5 minutes.", "options": []})["kind"] == "message"
+    assert live.screen_json()["middle"]["label"] == "OK"
+    answer(live, "OK")
+    assert live.nurse_action("send", {"question": "Are you in pain?", "options": ["Yes", "No"]})["ok"]
+    answer(live, "No")
+    conv = [(c["from"], c["kind"], c["text"]) for c in live.nurse_json()["conversation"]]
+    assert conv == [("nurse", "message", "I'll be there in 5 minutes."), ("patient", "seen", "Seen"),
+                    ("nurse", "question", "Are you in pain?"), ("patient", "answer", "No")]

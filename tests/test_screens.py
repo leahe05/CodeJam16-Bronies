@@ -54,6 +54,8 @@ def test_talk_to_ai_assistant():
     assert v["title"] == "How can I help you?" and v["badge"] == "AI ASSISTANT"
     assert labels(m) == ["Get more comfortable", RETURN, "More suggestions"]
     assert m.select("right", 2) == []
+    assert labels(m)[0] == "Message my nurse"           # always second
+    assert m.select("right", 2) == []
     assert labels(m)[0] == "Quiet for 2 hours"
     assert m.select("left", 3) == [("assistant_choice", "Quiet for 2 hours")]
     assert m.kind == "idle"
@@ -62,20 +64,50 @@ def test_talk_to_ai_assistant():
 def test_assistant_more_suggestions_wraps_and_adjust_room_goes_to_room():
     m = sm()
     m.select("middle", 1)
-    for _ in range(4):
+    for _ in range(5):                                  # 4 options + Message my nurse
         m.select("right", 2)
     assert labels(m)[0] == "Get more comfortable"
-    m.select("right", 3)
-    m.select("right", 3)
+    for _ in range(3):
+        m.select("right", 3)
     assert labels(m)[0] == "Adjust the room"
     assert m.select("left", 4) == [] and m.kind == "room"
 
 
-def test_assistant_with_two_options_shows_both():
+def test_assistant_with_one_option_shows_it_and_message_my_nurse():
     m = sm()
-    m.show_assistant(["Water", "Adjust pillows"])
+    m.show_assistant(["Water"])
     m.select("middle", 1)
-    assert labels(m) == ["Water", RETURN, "Adjust pillows"]
+    assert labels(m) == ["Water", RETURN, "Message my nurse"]
+    assert m.assistant["options"] == ["Water"]          # the agent's own list is unchanged
+
+
+def test_message_my_nurse_sends_a_ready_made_message():
+    m = sm()
+    m.select("middle", 1)
+    m.select("right", 2)                                # More suggestions -> Message my nurse
+    assert m.select("left", 3) == [] and m.kind == "checkin"
+    v = m.view(3)
+    assert v["badge"] == "MESSAGE YOUR NURSE" and v["title"] == "What would you like to tell your nurse?"
+    assert labels(m) == ["I'm in pain", "More options", "I'm thirsty"]
+    assert m.select("right", 4) == [("patient_message", "I'm thirsty")] and m.kind == "idle"
+
+
+def test_message_my_nurse_return_sends_nothing():
+    m = sm()
+    m.open_messages(1)
+    m.select("middle", 2)
+    m.select("middle", 2)
+    assert labels(m)[1] == RETURN
+    assert m.select("middle", 3) == [] and m.kind == "idle"
+
+
+def test_plain_nurse_message_has_one_ok_in_the_centre():
+    m = sm()
+    m.nurse_question("q1", "I'll be there in 5 minutes.", ["OK"], 1, kind="message")
+    v = m.view(1)
+    assert v["title"] == "I'll be there in 5 minutes." and v["left"] is None and v["right"] is None
+    assert v["middle"]["label"] == "OK"
+    assert m.select("middle", 2) == [("nurse_answer", "q1", "OK")]
 
 
 def test_suggestion_shows_its_two_choices_directly():

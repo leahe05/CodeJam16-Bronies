@@ -18,7 +18,8 @@ Events (tuples):
     ("dismissed", id)                     "Return to main menu" on a check-in, or Room Controls
                                           chosen over a suggestion (stops the stream)
     ("ignored", id)                       a suggestion faded / a check-in timed out
-    ("nurse_answer", qid, text)           patient answered the nurse
+    ("nurse_answer", qid, text)           patient answered the nurse (a plain nurse message: "OK" = seen)
+    ("patient_message", text)             patient sent the nurse a ready-made message (Message my nurse)
     ("call_nurse",)                       long eyebrow raise
 """
 from dataclasses import asdict, dataclass
@@ -36,7 +37,12 @@ MORE_OPTIONS = "More options"
 MORE_SUGGESTIONS = "More suggestions"
 SOMETHING_ELSE = "Something else"
 YES_NO = ["Yes, please.", "No, thanks."]
+MESSAGE_NURSE = "Message my nurse"
 ASSISTANT_DEFAULT = ["Get more comfortable", "Quiet for 2 hours", "Adjust the room", SOMETHING_ELSE]
+# Message my nurse: what the patient can say to the nurse at any time (2 per page, like a check-in)
+NURSE_MESSAGES = ["I'm in pain", "I'm thirsty", "Please reposition me", "I need the bathroom",
+                  "I feel sick", "Please come see me"]
+SEEN = "OK"                     # the one answer to a plain nurse message
 NOT_NOW = "Not now"
 NURSE_FOOTER = ("Look left or right and raise your eyebrows to choose, "
                 "or look center and raise your eyebrows to see more options.")
@@ -140,12 +146,13 @@ class ScreenManager:
                 left, right, count = paged(opts, c["page"])
                 s["page"] = {"index": c["page"] % count, "count": count}
             last = c["page"] % count == count - 1
-            s.update(badge="AI CHECK-IN", title=c["question"], icon=c.get("icon") or "sparkle",
+            s.update(badge=c.get("badge") or "AI CHECK-IN", title=c["question"], icon=c.get("icon") or "sparkle",
                      left=_opt("a", left, "left"), right=_opt("b", right, "right") if right else None,
                      middle=_opt("home", RETURN, "middle", icon="home") if last
                      else _opt("more", MORE_OPTIONS, "middle", icon="more"))
         elif k == "assistant":
-            opts, i = self.assistant["options"], self.assistant["index"] % len(self.assistant["options"])
+            opts = self._assistant_opts()
+            i = self.assistant["index"] % len(opts)
             if len(opts) <= 2:
                 right = _opt("b", opts[1], "right") if len(opts) > 1 else None
             else:
@@ -178,7 +185,11 @@ class ScreenManager:
         elif k == "nurse":
             s.update(badge="From your nurse", icon="nurse", show_call_nurse=False, footer=NURSE_FOOTER)
             n = self.nurse or {}
-            if not n.get("question"):
+            if n.get("question") and n.get("kind") == "message":
+                s.update(title=n["question"], subtitle=None,
+                         middle=_opt("a", SEEN, "middle", hint=None, icon="check"),
+                         footer="OK: look center and raise your eyebrows when you have read it.")
+            elif not n.get("question"):
                 s.update(title="Thank you. Your nurse can see your answer." if self.nurse_thanks
                          else "Your nurse is here.", subtitle="A question is coming.", footer=None)
             else:
@@ -225,6 +236,8 @@ class ScreenManager:
                 c["page"] += 1
                 return []
             self._go("idle", now)
+            if c.get("message"):                 # Message my nurse: not an answer to the agent
+                return [] if oid == "home" else [("patient_message", label)]
             if oid == "home":
                 return [("dismissed", c["qid"])]
             return [("answer", c["qid"], label)]
@@ -233,10 +246,13 @@ class ScreenManager:
                 self._go("idle", now)
                 return []
             if oid == "more":
-                self.assistant["index"] = (self.assistant["index"] + 1) % len(self.assistant["options"])
+                self.assistant["index"] = (self.assistant["index"] + 1) % len(self._assistant_opts())
                 return []
             if label == "Adjust the room":
                 self._go("room", now)
+                return []
+            if label == MESSAGE_NURSE:
+                self.open_messages(now)
                 return []
             self._go("idle", now)
             return [("assistant_choice", label)]
@@ -326,16 +342,31 @@ class ScreenManager:
         opts = _clean_options(options) or list(ASSISTANT_DEFAULT)
         self.assistant = {"options": opts, "index": 0}
 
+    def _assistant_opts(self) -> list:
+        """What the patient sees on Talk to AI: the agent's options with Message my nurse second
+        (always one "More suggestions" away). The agent's own list is left as it wrote it."""
+        opts = list(self.assistant["options"])
+        if MESSAGE_NURSE not in opts:
+            opts.insert(min(1, len(opts)), MESSAGE_NURSE)
+        return opts
+
+    def open_messages(self, now: float) -> None:
+        """Message my nurse: the ready-made messages as a paged check-in (Return to main menu on the last page)."""
+        self.checkin = {"qid": "message", "question": "What would you like to tell your nurse?",
+                        "options": list(NURSE_MESSAGES), "icon": "nurse", "page": 0,
+                        "badge": "MESSAGE YOUR NURSE", "message": True}
+        self._go("checkin", now)
+
     # ----- the nurse -------------------------------------------------------
     def nurse_start(self, now: float) -> None:
         self.nurse = {}
         self.nurse_thanks = False
         self._go("nurse", now)
 
-    def nurse_question(self, qid: str, question: str, options: list, now: float) -> None:
+    def nurse_question(self, qid: str, question: str, options: list, now: float, kind: str = "question") -> None:
         if self.kind != "nurse":
             self.nurse_start(now)
-        self.nurse = {"qid": qid, "question": question, "options": _clean_options(options), "page": 0}
+        self.nurse = {"qid": qid, "question": question, "options": _clean_options(options), "page": 0, "kind": kind}
         self.nurse_thanks = False
         self.since = now
 
