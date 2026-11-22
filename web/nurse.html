@@ -82,23 +82,29 @@
           <a id="patient-screen" class="button" target="_blank" rel="noopener" hidden>Open patient screen</a>
         </div>
         <div id="patient-actions" hidden>
+          <div class="chat-pane">
+          <div id="latest-reply" class="latest-reply" role="status" hidden></div>
           <form id="question-form" class="question-composer" aria-labelledby="composer-heading">
             <h3 id="composer-heading">Ask the patient</h3>
+            <div id="suggested-questions" class="suggested" aria-live="polite" hidden></div>
+            <p class="own-label">Or write your own</p>
             <label for="question">Question</label>
             <textarea id="question" rows="2" maxlength="300" required></textarea>
             <label for="options" id="options-label">Answer choices, one per line</label>
             <textarea id="options" rows="2" maxlength="500" required>Yes
 No</textarea>
             <p id="options-source" class="muted option-source"></p>
-            <div class="form-row">
+            <div class="form-row composer-main">
               <button id="send-question" class="button primary" type="submit">Send question</button>
-              <button id="draft-question" class="button" type="button" hidden>Draft with Claude</button>
               <button id="send-message" class="button" type="button" title="The patient reads it and answers OK">Send as message</button>
-              <button id="suggest-choices" class="button" type="button" hidden>Suggest choices</button>
-              <button id="end-session" class="button" type="button" hidden>End conversation</button>
+              <button id="end-session" class="button danger" type="button" hidden>End conversation</button>
+            </div>
+            <div class="form-row composer-more">
+              <button id="draft-question" class="button small" type="button" hidden>✦ Draft with Claude</button>
+              <button id="suggest-choices" class="button small" type="button" hidden>✦ Suggest choices</button>
             </div>
           </form>
-          <div id="latest-reply" class="latest-reply" role="status" hidden></div>
+          </div>
           <section id="room-controls" class="room-controls" aria-labelledby="room-heading" hidden>
             <div class="section-heading">
               <h3 id="room-heading">Room</h3>

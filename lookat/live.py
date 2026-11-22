@@ -282,6 +282,8 @@ class Live:
             return {"ok": True, **self._suggest(q)}
         if path == "summary":            # may call the AI (up to 8 s): never hold the lock here
             return self._shift_summary()
+        if path == "questions":          # may call the AI: never hold the lock here
+            return {"ok": True, **self._suggest_questions(body.get("alert_id"))}
         now = self.now()
         with self.lock:
             if path == "session/start":
@@ -355,6 +357,50 @@ class Live:
             self.session["follow_ups"] = []
             log_event("nurse_question", qid=qid, question=question, options=options)
             return qid
+
+    def _suggest_questions(self, alert_id=None) -> dict:
+        """Two ready-made questions for the nurse, written for the newest open request (cached per request)."""
+        with self.lock:
+            open_alerts = [a for a in self.alerts if not a.get("done")]
+            alert = next((a for a in self.alerts if a.get("id") == alert_id), None) if alert_id else \
+                (open_alerts[0] if open_alerts else None)
+            room = self.room.state()
+            facts = [f.get("text") for f in (self.facts or [])][:12]
+            last = [{"from": c.get("from"), "text": c.get("text")} for c in self.conversation[-4:]]
+            pairs = [{"question": q["question"], "answer": q["answer"]}      # what draft_question narrows from
+                     for q in self.session.get("thread", []) if q.get("kind", "question") == "question" and q.get("answer")]
+            answers = [c for c in self.conversation if c.get("from") == "patient"]
+            key = (alert or {}).get("id"), (alert or {}).get("text"), len(answers), \
+                (answers[-1].get("text") if answers else None)   # only a new patient answer: new follow-ups
+        profile = {}
+        if self.nurse is not None:
+            try:
+                prof = self.nurse.profile()
+                profile = {k: prof[k] for k in ("status", "awareness", "room", "last_meal", "preferences", "habits")
+                           if k in prof}
+            except Exception:   # noqa: BLE001 - the profile is extra context only
+                profile = {}
+        cache = getattr(self, "_questions_cache", None)
+        if cache and cache[0] == key:
+            return cache[1]
+        context = {"patient_request": ((alert.get("request") or alert.get("text")) if alert else None),
+                   "request_kind": (alert or {}).get("kind"), "request_reason": (alert or {}).get("reason"),
+                   "patient_context": profile or {"facts": facts},
+                   "room": {"temp_c": room["temp_c"], "lamp_on": room["lamp_on"], "fan_on": room["fan_on"]},
+                   "conversation_so_far": pairs[-8:], "time": clock.hhmm()}
+        try:
+            from lookat import ask
+            res = ask.suggest_questions(context)
+        except Exception:   # noqa: BLE001 - no key or an AI error: rule-based questions
+            from lookat.ask import fallback_questions
+            answer = next((c.get("text") for c in reversed(last) if c.get("from") == "patient"), None)
+            asked = next((c.get("text") for c in reversed(last) if c.get("from") == "nurse"), None)
+            res = {"questions": fallback_questions(alert, answer, asked), "source": "fallback"}
+        answer = next((c for c in reversed(last) if c.get("from") == "patient"), None)
+        out = {**res, "about": (alert or {}).get("text"), "alert_id": (alert or {}).get("id"),
+               "after": answer.get("text") if answer and last and last[-1] is answer else None}
+        self._questions_cache = (key, out)
+        return out
 
     def _suggest(self, question: str) -> dict:
         try:

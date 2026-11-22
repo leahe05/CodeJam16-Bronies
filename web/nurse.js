@@ -75,7 +75,7 @@ function storeAgents() {
 async function request(origin, path = "", body) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(),
-    ["/suggest", "/proposal/refine", "/alert/question/draft", "/question/draft"].includes(path) ? 20000 : 5000);
+    ["/suggest", "/questions", "/proposal/refine", "/alert/question/draft", "/question/draft"].includes(path) ? 20000 : 5000);
   try {
     const response = await fetch(origin + nursePath + path, {
       cache: "no-store",
@@ -988,15 +988,90 @@ function renderRoom(agent, data) {
   $("setpoint-down").disabled = $("setpoint-up").disabled = disabled || !Number.isFinite(room.setpoint_c);
 }
 
+// Two ready-made questions for the newest open request (POST /api/nurse/questions), as chips: one click fills
+// the question and its two answers; the nurse can still edit them before "Send question".
+function renderSuggestedQuestions(agent, data) {
+  const box = $("suggested-questions");
+  const open = list(data?.alerts).filter(alert => !alert.done);
+  const answers = list(data?.conversation).filter(line => line.from === "patient");
+  const key = data ? JSON.stringify([agent.origin, open[0]?.id ?? null, open[0]?.text ?? null,
+    answers.length, answers.at(-1)?.text ?? null]) : null;   // only a new PATIENT answer brings new follow-ups
+  if (data && !data.simulation && agent.state === "online" && agent.questionsKey !== key && !agent.questionsLoading
+      && (agent.questionsRetryAt ?? 0) <= Date.now()) {
+    agent.questionsLoading = true;
+    const body = agent.data?.patient_id_guard ? { patient_id: agent.data.patient.id } : {};
+    request(agent.origin, "/questions", body).then(result => {
+      if (!result?.ok) throw new Error("no suggestions");
+      agent.suggested = { key, ...result };
+      agent.sentQuestion = null;
+      agent.questionsKey = key;                     // only a success settles this key
+    }).catch(() => {
+      agent.questionsRetryAt = Date.now() + 5000;   // failed: try again in 5 s (the old cards stay, dimmed)
+    }).finally(() => {
+      agent.questionsLoading = false;
+      render();
+    });
+  }
+  // Seamless: the box never collapses. Until the first suggestions arrive it shows two placeholder cards; while
+  // new ones are drafted, the previous ones stay (dimmed) and are swapped in place.
+  const s = agent.suggested;
+  const stale = !s || s.key !== key;
+  const waiting = data?.session?.waiting === true;
+  const off = $("question").disabled;
+  box.hidden = !data || data.simulation;
+  updateRegion(box, [s, stale, waiting, off, agent.question, agent.sentQuestion], () => {
+    if (box.hidden) return [];
+    const head = element("div", "suggested-head");
+    const note = waiting ? "waiting for the patient's answer…" : stale ? "updating…"
+      : s?.after ? `after "${s.after}"` : s?.about ? `for: ${s.about}` : "";
+    head.append(element("span", "suggested-badge", s?.source === "ai" ? "✦ Suggested by Claude" : "Suggested"),
+      element("span", "suggested-about" + (stale && !waiting ? " pulse" : ""), note));
+    if (!s) return [head, ...[0, 1].map(() => element("div", "suggested-card skeleton"))];
+    const cards = list(s.questions).map(item => {
+      const sent = agent.sentQuestion === item.question;
+      const card = element("div", "suggested-card" + (agent.question === item.question ? " picked" : "")
+        + (sent ? " sent" : "") + (stale || off ? " dim" : ""));
+      const tags = element("div", "suggested-tags");
+      tags.append(...item.options.map(option => element("span", "tag", option)));
+      const send = button(sent ? "✓ Sent" : "Send", "button primary small", () => {
+        if (off || stale) return;
+        agent.sentQuestion = item.question;
+        act(agent, "/send", { question: item.question, options: item.options },
+          "Question sent to " + agentName(agent) + ".", () => {
+            agent.data.session = { ...agent.data.session, active: true, waiting: true };
+          }, () => { agent.sentQuestion = null; });
+      });
+      const editButton = button("Edit", "button small", () => {
+        agent.question = item.question;
+        agent.options = item.options.join("\n");
+        agent.optionsSource = s.source === "ai" ? "ai_question" : "manual";
+        render();
+        $("question").focus();
+      });
+      send.disabled = editButton.disabled = off || stale;
+      const actions = element("div", "suggested-actions");
+      actions.append(send, editButton);
+      const text = element("div", "suggested-text");
+      text.append(element("b", "", item.question), tags);
+      card.append(text, actions);
+      return card;
+    });
+    return [head, ...cards];
+  });
+}
+
 function renderLatestReply(data) {
   const region = $("latest-reply");
   const waiting = data?.session?.waiting;
   const conversation = list(data?.conversation);
   if (Array.isArray(data?.conversation)) {          // a MinimEyes server with the conversation log
-    region.hidden = !conversation.length && !waiting;
+    region.hidden = false;                          // always shown, so the layout doesn't jump
     updateRegion(region, [waiting, conversation], () => {
-      if (region.hidden) return [];
       const status = element("strong", "", waiting ? "Conversation · waiting for the patient" : "Conversation");
+      if (!conversation.length && !waiting) {
+        return [status, element("p", "conversation-empty",
+          "No messages yet. Questions you send and the patient's answers will appear here.")];
+      }
       const lines = element("ol", "conversation");
       lines.append(...conversation.map(conversationLine));
       queueMicrotask(() => { lines.scrollTop = lines.scrollHeight; });
@@ -1099,6 +1174,7 @@ function render() {
     data && agent.state !== "online" ? "Showing last received status" : null].filter(Boolean).join(" · "));
   renderPatientActions(agent, data);
   renderLatestReply(data);
+  if (agent) renderSuggestedQuestions(agent, data);
   renderRoom(agent, data);
   renderSimulatedReply(agent, data);
   renderSimulation(agent, data);

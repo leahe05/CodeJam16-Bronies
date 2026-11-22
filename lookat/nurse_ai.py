@@ -152,6 +152,49 @@ def make_options(question, context):
     return {"options": options, "source": "ai"}
 
 
+def _alternatives(question):
+    """How many extra alternatives a question names: each " or ", plus each list comma (not the comma of
+    "X, or Y"). "Do you need something, or are you uncomfortable?" -> 1; "pain, breathing or bleeding?" -> 2."""
+    low = question.lower()
+    return len(re.findall(r"\bor\b", low)) + len(re.findall(r",(?!\s*or\b)", low))
+
+
+def suggest_questions(context):
+    """Two candidate next questions for the nurse, each answered by exactly two gaze choices. Same triage method
+    and context as draft_question ("Draft with Claude"), so the chips are as pertinent as that draft."""
+    instruction = (
+        "Draft exactly two different candidate next questions the nurse could send, to find out what the patient "
+        "needs. Each is brief, patient-facing and answered by exactly two distinct short answers the patient "
+        "selects by gaze. Don't assume the patient has any particular need. " + NARROWING + ANSWER_CHOICE_GUIDANCE +
+        "Both questions are at the same level of the tree: the first is the single best next question, the second "
+        "the best alternative at that level. A question must never name three or more alternatives; if it offers "
+        "a choice, it names exactly its two answers (the patient also gets Other automatically). "
+        "Do not diagnose, suggest medication or direct treatment. "
+        'Return a JSON array of two objects: {"question": "...", "options": ["...", "..."]}.')
+    last_error = None
+    for _ in range(2):                               # one retry when a draft breaks the rules
+        try:
+            items = _request_json(instruction, context)
+            if not isinstance(items, list) or len(items) != 2:
+                raise ValueError("Unexpected AI response")
+            out = []
+            for item in items:
+                q = str((item or {}).get("question", "")).strip()
+                opts = [str(o).strip() for o in (item or {}).get("options") or []]
+                if (not 1 < len(q) <= 140 or not q.endswith("?") or len(opts) != 2
+                        or not all(0 < len(o) <= 60 for o in opts) or opts[0].casefold() == opts[1].casefold()
+                        or any(o.casefold() in ("other", "something else") for o in opts)
+                        or _alternatives(q) >= 2):            # "pain, breathing or bleeding?": 3 options
+                    raise ValueError("Invalid AI draft")
+                out.append({"question": q, "options": opts})
+            if out[0]["question"].casefold() == out[1]["question"].casefold():
+                raise ValueError("Invalid AI draft")
+            return out
+        except ValueError as error:
+            last_error = error
+    raise last_error
+
+
 def validate_request_branches(branches):
     if not isinstance(branches, list) or len(branches) != 2 or not all(isinstance(item, dict) for item in branches):
         raise ValueError("Provide exactly two response branches.")

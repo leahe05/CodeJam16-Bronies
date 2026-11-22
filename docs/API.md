@@ -122,6 +122,7 @@ Examples of each screen are in `lookat/fake_api.py` (`SCREENS`).
 | `/api/nurse/session/start` | `{}` | patient screen switches to "From your nurse" |
 | `/api/nurse/session/end` | `{}` | patient screen back to normal, agent resumes |
 | `/api/nurse/suggest` | `{"question": "Did you sleep okay?"}` | returns `{"ok": true, "options": ["Yes", "No", "Something else"], "source": "ai"\|"fallback"}` (takes up to ~8 s: show a spinner) |
+| `/api/nurse/questions` | `{}` or `{"alert_id": "a3"}` | two ready-made questions for the nurse, each with 2 answer choices, written for the newest open request (or that alert): e.g. a long-raise call -> "Do you need help right away?" / "Is it pain or breathing?"; a blanket page -> "One blanket or two?" / "Should I turn the fan off too?". Returns `{"ok": true, "questions": [{"question": "...", "options": ["...", "..."]}, {...}], "about": "Feels cold, would like a blanket.", "source": "ai"\|"fallback"}`. Cached per request, so calling it again is instant. Show them as clickable chips that fill the question box. |
 | `/api/nurse/send` | `{"question": "...", "options": ["...", "..."]}` | puts the question on the patient screen (starts a session if none); returns `{"ok": true, "qid": "q2"}` |
 | `/api/nurse/alert` | `{"id": "a3", "action": "ask"}` | runs an alert button; marks it done |
 | `/api/nurse/room` | `{"device": "lamp"\|"fan", "cmd": "on"\|"off"}` or `{"setpoint_c": 18}` | changes the room (the 18 °C flag comes from this) |
