@@ -78,3 +78,10 @@ def test_page_scripts_are_rechecked_so_browsers_never_show_an_old_screen():
     live, client = make([0.0])
     r = client.get("/web/patient-ui.js")
     assert r.status_code == 200 and r.headers["cache-control"] == "no-cache" and 'class="eyes"' in r.text
+
+
+def test_pages_link_versioned_scripts_so_an_update_is_always_a_new_file():
+    live, client = make([0.0])
+    html = client.get("/patient?gaze=web").text
+    assert '/web/patient-ui.js?v=' in html and '/web/patient-base.css?v=' in html and '/web/logo.svg?v=' in html
+    assert '/web/nurse.js?v=' in client.get("/nurse").text

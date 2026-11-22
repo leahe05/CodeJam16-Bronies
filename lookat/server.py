@@ -17,6 +17,7 @@ If her page doesn't exist yet, lookat/fallback/<name>.html is served instead
 Static files: web/ at /web/..., and web/dist/assets at /assets/... (Vite-style builds).
 """
 import os
+import re
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WEB_DIR = os.environ.get("LOOKAT_WEB_DIR") or os.path.join(ROOT, "web")
@@ -33,6 +34,21 @@ def find_page(name: str, web_dir: str = WEB_DIR, fallback_dir: str = FALLBACK_DI
                 return path, True
     path = os.path.join(fallback_dir, f"{name}.html")
     return (path if os.path.isfile(path) else None), False
+
+
+def versioned(path: str, web_dir: str = WEB_DIR) -> str:
+    """The page with ?v=<file time> on each /web/ script, style and icon, so a browser can never reuse an
+    old copy after an update (a changed file gets a new address it has never seen)."""
+    with open(path, encoding="utf-8") as f:
+        html = f.read()
+
+    def stamp(match):
+        local = os.path.join(web_dir, *match.group(2).split("/"))
+        if not os.path.isfile(local):
+            return match.group(0)
+        return f'{match.group(1)}/web/{match.group(2)}?v={int(os.path.getmtime(local))}"'
+
+    return re.sub(r'((?:src|href)=")/web/([\w./-]+\.(?:js|css|svg))"', stamp, html)
 
 
 def public(data):
@@ -113,7 +129,7 @@ def make_app(backend, title: str = "MinimEyes", web_dir: str = WEB_DIR):
     def page(name):
         path, _ = find_page(name, web_dir)
         if path:
-            return FileResponse(path, headers={"Cache-Control": "no-store"})
+            return HTMLResponse(versioned(path, web_dir), headers={"Cache-Control": "no-store"})
         api = API_FOR_PAGE[name]
         return HTMLResponse(f"<h1>No {name} page yet</h1><p>Data: <a href='{api}'>{api}</a> (docs/API.md)</p>")
 
