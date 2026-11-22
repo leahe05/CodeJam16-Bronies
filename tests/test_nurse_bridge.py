@@ -139,3 +139,26 @@ def test_yes_to_a_nurse_check_in_shows_the_nurse_is_coming_screen(tmp_path):
     live.nurse_action("proposal/approve", {"id": p["id"], "source": p.get("source")})
     answer(live, "Yes")
     assert (live.screen_json().get("overlay") or {}).get("kind") == "call_nurse"
+
+
+def test_patient_message_reaches_the_nurse_and_the_conversation(tmp_path):
+    live = setup(tmp_path)
+    with live.lock:
+        live._handle(("patient_message", "I'm thirsty"), live.now())
+    d = live.nurse_json()
+    assert any(a["text"] == "Patient message: I'm thirsty." for a in d["alerts"])      # a request on the dashboard
+    assert d["conversation"][-1] == {"time": d["conversation"][-1]["time"], "from": "patient", "kind": "message",
+                                     "text": "I'm thirsty"}
+    assert (live.screen_json().get("overlay") or {}).get("kind") == "call_nurse"       # nurse is coming
+
+
+def test_nurse_message_and_question_are_one_conversation(tmp_path):
+    live = setup(tmp_path)
+    assert live.nurse_action("send", {"question": "I'll be there in 5 minutes.", "options": []})["kind"] == "message"
+    assert live.screen_json()["middle"]["label"] == "OK"
+    answer(live, "OK")
+    assert live.nurse_action("send", {"question": "Are you in pain?", "options": ["Yes", "No"]})["ok"]
+    answer(live, "No")
+    conv = [(c["from"], c["kind"], c["text"]) for c in live.nurse_json()["conversation"]]
+    assert conv == [("nurse", "message", "I'll be there in 5 minutes."), ("patient", "seen", "Seen"),
+                    ("nurse", "question", "Are you in pain?"), ("patient", "answer", "No")]

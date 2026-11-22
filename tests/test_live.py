@@ -123,7 +123,9 @@ def test_nurse_question_answered_by_gaze():
 
 def test_nurse_send_validation_and_suggest_fallback():
     live = Live(make_room())
-    assert not live.nurse_action("send", {"question": "Hi?", "options": ["Yes"]})["ok"]
+    assert not live.nurse_action("send", {"question": " ", "options": ["Yes", "No"]})["ok"]
+    sent = live.nurse_action("send", {"question": "Coming in 5 minutes.", "options": []})   # no choices = a message
+    assert sent["ok"] and sent["kind"] == "message" and live.session["thread"][-1]["options"] == ["OK"]
     r = live.nurse_action("suggest", {"question": "Did you sleep okay?"})
     assert r["ok"] and r["options"][:2] == ["Yes", "No"]
     assert fallback_options("What would help?")[-1] == "Something else"
