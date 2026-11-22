@@ -285,6 +285,7 @@ class NurseBridge:
             if idx == 0:
                 self.supervisor.receive_request(self.pid, step["request"], at=clock.hhmm(), delivery="check-in")
                 self.record("Patient agent", "Reported to nurse", step["request"])
+                self.live.nurse_called()                   # the patient sees "nurse is coming"
                 if self.origin_alert:
                     self.supervisor.update_question_request(self.pid, self.origin_alert, "clarified")
                     self.origin_alert = None
