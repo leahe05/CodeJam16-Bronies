@@ -44,12 +44,24 @@
   const CAMERA = { video: { width: { ideal: 640, max: 640 }, height: { ideal: 480, max: 480 },
                             frameRate: { ideal: 30, max: 30 }, facingMode: "user" } };
   (function throttleFrames() {
-    const raf = window.requestAnimationFrame.bind(window), last = new WeakMap(), gap = 1000 / TRACK_FPS - 2;
-    window.requestAnimationFrame = (cb) => raf(function tick(t) {
-      if (t - (last.get(cb) || 0) < gap) return raf(tick);       // too soon for THIS loop: wait a frame
-      last.set(cb, t);
-      cb(t);
-    });
+    const raf = window.requestAnimationFrame.bind(window), caf = window.cancelAnimationFrame.bind(window);
+    const last = new WeakMap(), gap = 1000 / TRACK_FPS - 2;
+    const pending = new Map();                     // our handle -> the browser's id of its current booking
+    let next = 1;
+    window.requestAnimationFrame = (cb) => {
+      const handle = next++;
+      const tick = (t) => {
+        if (t - (last.get(cb) || 0) < gap) { pending.set(handle, raf(tick)); return; }   // too soon: next frame
+        pending.delete(handle);
+        last.set(cb, t);
+        cb(t);
+      };
+      pending.set(handle, raf(tick));
+      return handle;
+    };
+    window.cancelAnimationFrame = (handle) => {    // cancels a postponed frame too
+      if (pending.has(handle)) { caf(pending.get(handle)); pending.delete(handle); } else caf(handle);
+    };
   })();
 
   let borders = [1 / 3, 2 / 3];   // zone borders, share of the screen width (set by the check)
