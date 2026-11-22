@@ -1,4 +1,4 @@
-"""The real LookAt behind Paco's nurse dashboard (web/nurse.js), task M3-1 (backend side).
+"""The real MinimEyes behind Paco's nurse dashboard (web/nurse.js), task M3-1 (backend side).
 
 His dashboard was built against a simulated patient (lookat/supervisor_demo.py). This bridge gives the real
 patient (Live + the agent's memory) the same contract, so the dashboard works on the live demo:
@@ -201,7 +201,7 @@ class NurseBridge:
             except ValueError:
                 pass  # The patient chart may contain an invalid time.
         return {"patient": self.patient(), "_observed_at": time.monotonic(), "reported_at": now.strftime("%H:%M:%S"),
-                "status": status + (f" · LookAt: {self.live.agent_status}" if getattr(self.live, "agent_status", None) else ""),
+                "status": status + (f" · MinimEyes: {self.live.agent_status}" if getattr(self.live, "agent_status", None) else ""),
                 "minutes_past_bedtime": minutes_past_bedtime,
                 "posture": "In bed", "awareness": aware, "visitors_present": self.link.snapshot(time.monotonic())["visitors_present"],
                 "room": {"temp_c": r["temp_c"], "setpoint_c": r["setpoint_c"], "lamp_on": r["lamp_on"], "fan_on": r["fan_on"]},

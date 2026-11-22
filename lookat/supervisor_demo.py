@@ -645,7 +645,7 @@ def make_demo_app(companion_port, interval_s=DEFAULT_INTERVAL_S, *, playback=Non
 def main():
     import uvicorn
 
-    parser = argparse.ArgumentParser(description="Run the standalone LookAt nurse demo")
+    parser = argparse.ArgumentParser(description="Run the standalone MinimEyes nurse demo")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8768)
     parser.add_argument("--companion-port", type=int, help="Morgan's port (defaults to --port + 1)")

@@ -36,7 +36,7 @@ def test_events_are_only_this_shift_in_time_order(tmp_path):
     ev = summary.shift_events(night(tmp_path), [{"time": "02:22", "stage": "checked", "text": "Room 22.8 °C"}], now=NOW)
     texts = [t for _, t in ev]
     assert [x.strftime("%H:%M") for x, _ in ev] == ["02:14", "02:15", "02:22", "02:23", "05:00"]
-    assert texts[1] == "LookAt turned the fan on" and texts[2] == "Room 22.8 °C"
+    assert texts[1] == "MinimEyes turned the fan on" and texts[2] == "Room 22.8 °C"
     assert not any("lamp" in t for t in texts)     # yesterday noon and the labelled demo data are left out
 
 
@@ -64,7 +64,7 @@ def test_ai_summary_is_used_when_it_sticks_to_the_log(tmp_path):
     c = FakeClient("At 2:14 AM the patient was warm; the fan went on at 2:15 AM and helped. Repositioning waits.")
     s = summary.shift_summary(night(tmp_path), now=NOW, client=c)
     assert s["source"] == "ai" and s["text"].startswith("At 2:14 AM")
-    assert "2:15 AM LookAt turned the fan on" in c.kw["messages"][0]["content"]
+    assert "2:15 AM MinimEyes turned the fan on" in c.kw["messages"][0]["content"]
 
 
 def test_ai_summary_with_an_invented_time_is_rejected(tmp_path):

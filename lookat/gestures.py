@@ -138,7 +138,7 @@ def calibrate_gestures(tracker, say, patient: str, show: bool = True) -> dict:
         frame, f = tracker.read()
         if show and frame is not None:
             cv2.putText(frame, label, (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 1.3, (0, 200, 255), 3)
-            cv2.imshow("LookAt gestures (operator)", frame)
+            cv2.imshow("MinimEyes gestures (operator)", frame)
             cv2.waitKey(1)
         return f
 
@@ -232,7 +232,7 @@ def _self_test(patient: str, recalibrate: bool, camera: int) -> None:
             cv2.putText(frame, label, (x0, y0 - 20), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
             cv2.putText(frame, f"confirms {counts['confirm']}  emergencies {counts['emergency']}",
                         (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 3)
-            cv2.imshow("LookAt gestures (operator)", frame)
+            cv2.imshow("MinimEyes gestures (operator)", frame)
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 break
     finally:

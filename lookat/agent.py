@@ -76,7 +76,7 @@ WAKE_BEFORE_MIN, WAKE_AFTER_MIN = 15, 90         # the good-morning check-in run
 EXTREME_HIGH_C = 30.0        # outside these the room is unsafe (or the sensor is wrong): page the nurse at once,
 EXTREME_LOW_C = 16.0         # awake or not, screen or not
 
-SYSTEM = """You are LookAt, an assistant for a patient who cannot speak or move and answers only by \
+SYSTEM = """You are MinimEyes, an assistant for a patient who cannot speak or move and answers only by \
 looking left/center/right at a screen and raising their eyebrows. You speak first so they need fewer \
 glances, and you speak up for them to the nurse.
 

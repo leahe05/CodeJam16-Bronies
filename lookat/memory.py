@@ -1,4 +1,4 @@
-"""What LookAt remembers about one patient. Pure Python + JSON, no AI (task C4a, patient side).
+"""What MinimEyes remembers about one patient. Pure Python + JSON, no AI (task C4a, patient side).
 
     mem = Memory("demo")                    # memory/demo.json (git-ignored); missing/corrupt -> empty
     mem.load_chart(DEMO_CHART)              # starting facts, if the file has none
@@ -49,7 +49,7 @@ def _diff(a: int, b: int) -> int:
     """a - b in minutes on a 24-hour clock, in -720..719 (21:50 - 22:10 = -20, 00:10 - 23:50 = 20)."""
     return (a - b + 720) % 1440 - 720
 
-# The demo patients (fictional), picked on the panel. Each chart is what LookAt knows on day one (labelled
+# The demo patients (fictional), picked on the panel. Each chart is what MinimEyes knows on day one (labelled
 # "chart" on the panel). Comfort facts carry the numbers the triggers use (cold_below_c, warm_above_c,
 # runs_warm); routine facts carry the times (bedtime, wake); the rest gives Claude something real to work with.
 # "Reset demo" puts every profile back to exactly its chart: what the agent did or learned since is deleted.

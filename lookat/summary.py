@@ -20,7 +20,7 @@ from lookat.state import log_event
 
 MODEL = "claude-opus-5-5"
 TIMEOUT_S = 8
-WHO = {"patient": "The patient", "agent": "LookAt", "routine": "The routine", "nurse": "The nurse",
+WHO = {"patient": "The patient", "agent": "MinimEyes", "routine": "The routine", "nurse": "The nurse",
        "thermostat": "The thermostat"}
 SYSTEM = (
     "You write a nurse's shift handover for one patient who can only move their eyes. You get the "

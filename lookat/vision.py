@@ -174,7 +174,7 @@ def _self_test(camera_index: int) -> None:
                             (20, 140), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2)
                 cv2.putText(frame, f"brow {f['browInnerUp']:.2f}  jaw {f['jawOpen']:.2f}",
                             (20, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2)
-            cv2.imshow("LookAt vision (operator)", frame)
+            cv2.imshow("MinimEyes vision (operator)", frame)
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 break
     finally:
