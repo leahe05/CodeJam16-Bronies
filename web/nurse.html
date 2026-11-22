@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#12243b">
+  <title>Nurse dashboard | LookAt</title>
+  <link rel="stylesheet" href="/web/nurse.css">
+  <script defer src="/web/nurse.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="wrap topbar-inner">
+      <div class="brand"><span class="brand-mark" aria-hidden="true"></span>LookAt</div>
+      <button id="sound" class="button sound" type="button" aria-pressed="false">Enable alert sound</button>
+    </div>
+  </header>
+  <main class="wrap dashboard">
+    <div class="page-heading">
+      <h1>Nurse dashboard</h1>
+      <p id="connection-summary" class="connection" role="status">Connecting to LookAt…</p>
+    </div>
+
+    <div id="shift-controls" class="shift-controls" hidden>
+      <div>
+        <p id="shift-status" role="status"></p>
+        <p id="shift-ai-status" class="muted"></p>
+      </div>
+      <button id="start-shift" class="button primary" type="button">Start shift</button>
+      <button id="end-shift" class="button" type="button" hidden>End shift</button>
+    </div>
+
+    <section id="request-queue" class="panel request-queue" aria-labelledby="request-heading">
+      <div class="section-heading">
+        <h2 id="request-heading">Patient requests</h2>
+        <span id="queue-count" class="count" role="status">Checking for requests…</span>
+      </div>
+      <div id="alerts" class="alert-list request-list" tabindex="0" aria-label="Open patient requests">
+        <p class="empty">Waiting for agent updates.</p>
+      </div>
+    </section>
+
+    <div class="tabs" role="tablist" aria-label="Nurse dashboard views">
+      <button id="patients-tab" type="button" role="tab" aria-selected="true" aria-controls="overview">Patients</button>
+      <button id="attention-tab" type="button" role="tab" aria-selected="false" aria-controls="attention" tabindex="-1">
+        Needs attention <span id="alert-count" class="count" hidden></span>
+      </button>
+    </div>
+    <p id="alert-announcement" class="visually-hidden" role="alert"></p>
+    <section id="attention" class="panel intervention" role="tabpanel" aria-labelledby="attention-tab" tabindex="0" hidden>
+      <h2>Request history</h2>
+      <p id="handled-empty" class="empty">No handled requests yet.</p>
+      <details id="history" class="history" hidden>
+        <summary id="history-label">Handled alerts</summary>
+        <div id="handled" class="alert-list"></div>
+      </details>
+    </section>
+
+    <div id="overview" class="patient-grid" role="tabpanel" aria-labelledby="patients-tab" tabindex="0">
+      <section class="roster" aria-labelledby="patient-heading">
+        <div class="section-heading">
+          <h2 id="patient-heading">Assigned patients</h2>
+          <details class="agent-setup">
+            <summary>Connect another agent</summary>
+            <form id="connect-form">
+              <label for="agent-url">LookAt server URL</label>
+              <input id="agent-url" name="agent-url" type="url" placeholder="http://room-device:8000" required>
+              <button class="button primary" type="submit">Connect agent</button>
+            </form>
+          </details>
+        </div>
+        <ul id="patients" class="patient-list"></ul>
+      </section>
+      <section id="patient-panel" class="panel details" aria-labelledby="details-heading">
+        <div class="section-heading">
+          <div>
+            <h2 id="details-heading" class="patient-marker" tabindex="-1">Patient status</h2>
+            <p id="patient-status" class="muted" role="status">Waiting for patient data…</p>
+          </div>
+          <a id="patient-screen" class="button" target="_blank" rel="noopener" hidden>Open patient screen</a>
+        </div>
+        <div id="patient-actions" hidden>
+          <form id="question-form" class="question-composer" aria-labelledby="composer-heading">
+            <h3 id="composer-heading">Ask the patient</h3>
+            <label for="question">Question</label>
+            <textarea id="question" rows="2" maxlength="300" required></textarea>
+            <label for="options" id="options-label">Answer choices, one per line</label>
+            <textarea id="options" rows="2" maxlength="500" required>Yes
+No</textarea>
+            <p id="options-source" class="muted option-source"></p>
+            <div class="form-row">
+              <button id="send-question" class="button primary" type="submit">Send question</button>
+              <button id="suggest-choices" class="button" type="button" hidden>Suggest choices</button>
+              <button id="end-session" class="button" type="button" hidden>End conversation</button>
+            </div>
+          </form>
+          <div id="latest-reply" class="latest-reply" role="status" hidden></div>
+          <section id="simulated-reply" class="note simulation" aria-label="Simulate patient reply" hidden></section>
+        </div>
+        <details id="profile-details" class="profile-details" hidden>
+          <summary>Patient profile and history</summary>
+          <div id="notes"></div>
+          <section id="history-panel" class="note" aria-labelledby="history-heading" hidden>
+            <div class="section-heading">
+              <h3 id="history-heading">Chat history</h3>
+              <small id="history-source" class="muted" hidden></small>
+            </div>
+            <div id="chat-history"></div>
+          </section>
+          <section id="simulation" class="note simulation" hidden></section>
+          <form id="presence-form" class="note" hidden>
+            <label for="presence">Visitor status</label>
+            <div class="form-row">
+              <select id="presence">
+                <option value="unknown">Unknown</option>
+                <option value="present">Visitors present</option>
+                <option value="absent">No visitors</option>
+              </select>
+              <button id="save-presence" class="button" type="submit">Save status</button>
+            </div>
+          </form>
+          <button id="visit" class="button profile-visit" type="button" hidden>Log visit</button>
+        </details>
+      </section>
+    </div>
+
+    <section id="supervisor-panel" class="panel supervisor" aria-labelledby="supervisor-heading" hidden>
+      <div class="section-heading">
+        <h2 id="supervisor-heading">Suggested check-ins</h2>
+        <span id="supervisor-mode" class="muted">Two-patient simulation</span>
+      </div>
+      <div id="proposals" class="proposal-list" aria-live="polite"></div>
+    </section>
+
+    <section id="shift-panel" class="panel shift-panel" aria-labelledby="shift-heading" hidden>
+      <h2 id="shift-heading">Shift feeds</h2>
+      <div id="shift-feeds" class="shift-feeds"></div>
+    </section>
+
+    <p id="feedback" class="feedback" role="status" hidden></p>
+  </main>
+  <dialog id="request-question-dialog" aria-labelledby="request-question-heading">
+    <form id="request-question-form">
+      <h2 id="request-question-heading">Ask about this request</h2>
+      <p id="request-question-context" class="muted patient-marker"></p>
+      <label for="request-question">Question</label>
+      <textarea id="request-question" rows="2" maxlength="300" required autofocus></textarea>
+      <div id="request-branches" class="request-branches" hidden>
+        <p id="request-branches-source" class="muted option-source"></p>
+        <fieldset>
+          <legend>Left choice</legend>
+          <label for="request-left-label">Patient answer</label>
+          <input id="request-left-label" maxlength="60">
+          <label for="request-left-step">Nurse next step</label>
+          <input id="request-left-step" maxlength="160">
+        </fieldset>
+        <fieldset>
+          <legend>Right choice</legend>
+          <label for="request-right-label">Patient answer</label>
+          <input id="request-right-label" maxlength="60">
+          <label for="request-right-step">Nurse next step</label>
+          <input id="request-right-step" maxlength="160">
+        </fieldset>
+      </div>
+      <p id="request-question-feedback" class="muted" role="status" hidden></p>
+      <div class="form-row">
+        <button id="draft-request-branches" class="button primary" type="submit">Suggest two choices</button>
+        <button id="send-request-question" class="button primary" type="button" hidden>Send question</button>
+        <button id="cancel-request-question" class="button" type="button">Cancel</button>
+      </div>
+    </form>
+  </dialog>
+</body>
+</html>
