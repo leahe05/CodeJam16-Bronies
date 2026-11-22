@@ -13,6 +13,7 @@
  *      >= CONFIRM_S and released = "confirm" (choose); held >= LONG_S = "emergency" (Call Nurse).
  *      Eyes open = eyelid gap / eye width (for the agent's "awake").
  *   Keys (operator): R = redo gaze, B = redo eyebrows, D = show/hide the gaze ring.
+ *   CPU: the face model runs at most TRACK_FPS (30) times a second on a 640x480 camera (?fps=20 = lighter).
  * WebGazer runs fully offline: its face model is in /web/vendor/webgazer/mediapipe/face_mesh.
  * WebGazer.js is GPLv3 (LGPLv3 for companies valued under $1M): web/vendor/webgazer/LICENSE.md.
  */
@@ -36,6 +37,20 @@
   const CHECK_SETTLE_MS = 1200, CHECK_MS = 2200, MIN_SPREAD = 0.08;
   const CONFIRM_S = 0.3, LONG_S = 2.0;      // config.CONFIRM_S / config.EMERGENCY_S
   const EYES_OPEN = 0.16;                  // eyelid gap / eye width above this = open
+  // CPU: WebGazer runs its face model on every animation frame (60/s on most screens), but the camera only
+  // delivers ~30 new frames a second. Each requestAnimationFrame loop on this page (WebGazer's, the gaze ring)
+  // is held to TRACK_FPS, and the camera to 640x480 @ 30 fps: about half the work, same accuracy.
+  const TRACK_FPS = Number(params.get("fps")) || 30;
+  const CAMERA = { video: { width: { ideal: 640, max: 640 }, height: { ideal: 480, max: 480 },
+                            frameRate: { ideal: 30, max: 30 }, facingMode: "user" } };
+  (function throttleFrames() {
+    const raf = window.requestAnimationFrame.bind(window), last = new WeakMap(), gap = 1000 / TRACK_FPS - 2;
+    window.requestAnimationFrame = (cb) => raf(function tick(t) {
+      if (t - (last.get(cb) || 0) < gap) return raf(tick);       // too soon for THIS loop: wait a frame
+      last.set(cb, t);
+      cb(t);
+    });
+  })();
 
   let borders = [1 / 3, 2 / 3];   // zone borders, share of the screen width (set by the check)
   let probe = null;               // predictions collected during the check
@@ -125,6 +140,7 @@
     const wg = window.webgazer;
     wg.params.faceMeshSolutionPath = "/web/vendor/webgazer/mediapipe/face_mesh";   // offline
     wg.params.showVideoPreview = false;
+    wg.params.camConstraints = CAMERA;
     wg.saveDataAcrossSessions(false);                // a fresh calibration every start
     wg.setRegression("ridge").applyKalmanFilter(true);
     wg.setGazeListener((data) => {
