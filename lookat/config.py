@@ -17,6 +17,16 @@ def saved_env(name: str, default: Optional[str] = None) -> Optional[str]:
         return default
 
 
+def load_saved_env(*names: str) -> None:
+    """Copy keys that `setx` saved into this process, so code that reads os.environ (the
+    Anthropic SDK, the agent, the nurse app) also works in a terminal opened before setx."""
+    for name in names:
+        if not os.environ.get(name):
+            value = saved_env(name)
+            if value:
+                os.environ[name] = value
+
+
 # Interaction timing (seconds)
 DWELL_S = 1.0          # look at a spot this long -> it is highlighted and locked
 CONFIRM_S = 0.3        # eyebrow raise held this long = choose
