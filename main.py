@@ -439,6 +439,7 @@ def main() -> None:
                          "page = the patient page speaks (Edge natural voice, click it once); "
                          "windows = this laptop's built-in voice; off = printed only")
     args = ap.parse_args()
+    config.load_saved_env("ANTHROPIC_API_KEY")
 
     check_wifi()
     room = Room()
