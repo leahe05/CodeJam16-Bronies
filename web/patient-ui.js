@@ -171,7 +171,7 @@
   const menuHTML = (d) => BIG ? `<div class="panel enter">${chip(d)}<h1>${esc(d.title)}</h1>${sub(d)}${bigCols(d, true)}</div>` : `<div class="panel enter">${chip(d)}<h1>${esc(d.title)}</h1>${sub(d)}${cards(d, "stack")}${center(d)}${dots(d.page)}</div>`;
 
   function headHTML(d) {
-    const brand = (cls) => `<div class="brand ${cls}">${icon("eye")}<span>MinimEyes</span></div>`;
+    const brand = (cls) => `<div class="brand ${cls}"><svg class="logo" viewBox="0 0 76 70" aria-hidden="true"><path d="M20 2H56Q74 2 74 20V38Q74 56 56 56H38L24 68L26 56H20Q2 56 2 38V20Q2 2 20 2Z" fill="#bfdbfe" stroke="#60a5fa" stroke-width="3" stroke-linejoin="round"/><g fill="none" stroke="#1d4ed8" stroke-linecap="round"><path d="M21 28Q27 21 33 28" stroke-width="4.5"/><path d="M43 28Q49 21 55 28" stroke-width="4.5"/><path d="M28 38Q38 46 48 38" stroke-width="4"/></g></svg><span>MinimEyes</span></div>`;
     if (d.screen === "nurse")
       return `${brand("start")}<div class="nursepill">${icon("nurse")}${esc(d.badge || "From your nurse")}</div>`
         + `<div class="conn"><span class="ok">Connected</span><span class="lost">Reconnecting…</span></div>`;
