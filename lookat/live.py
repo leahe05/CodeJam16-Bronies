@@ -19,7 +19,7 @@ from typing import Callable, Optional
 from lookat import config
 from lookat.clock import clock
 from lookat.machine import Machine
-from lookat.screens import ScreenManager
+from lookat.screens import SEEN, ScreenManager
 from lookat.state import log_event
 
 # A face missing for less than this (a dropped frame, a blink, a hand passing) keeps the look, so
@@ -73,6 +73,7 @@ class Live:
         self.alerts: list = []
         self.next_visit: list = []
         self.session = {"active": False, "thread": [], "follow_ups": [], "waiting": False}
+        self.conversation: list = []   # nurse <-> patient messages, oldest first (the nurse app's thread)
         self.recent: list = []
         self.facts: list = []
         self.feed: list = []
@@ -147,10 +148,21 @@ class Live:
                 if q["qid"] == qid and q["answer"] is None:
                     q["answer"] = text
                     q["seconds"] = round(now - q["_sent"], 1)
-                    self._recent(request_text(q["question"], text))
+                    seen = q.get("kind") == "message"
+                    self._say("patient", "seen" if seen else "answer", "Seen" if seen else text, qid=qid)
+                    self._recent(f"Patient read: {q['question']}" if seen else request_text(q["question"], text))
                     if self.nurse is not None:
                         self.nurse.on_answer(q, text)
             self.session["waiting"] = False
+        elif kind == "patient_message":
+            _, text = ev
+            self._say("patient", "message", text)
+            self._recent(f"Patient message: {text}")
+            self.add_alert("page", f"Patient message: {text}.", reason="Sent by the patient (Message my nurse)",
+                           actions=[{"id": "ack", "label": "On my way"}])
+            if self.nurse is not None:
+                self.nurse.record("Patient", "Message", text)
+            self.nurse_called()            # the patient sees "Your nurse has been called"
 
     def _notify(self, ev: tuple) -> None:
         for cb in list(self.listeners):
@@ -171,6 +183,12 @@ class Live:
             self.alerts.insert(0, a)
             log_event("nurse_alert", kind=kind, text=text, urgency=urgency, reason=reason)
             return a
+
+    def _say(self, who: str, kind: str, text: str, **extra) -> None:
+        """One line of the nurse <-> patient conversation (GET /api/nurse "conversation")."""
+        with self.lock:
+            self.conversation.append({"time": clock.hhmm(), "from": who, "kind": kind, "text": text, **extra})
+            del self.conversation[:-50]
 
     def nurse_called(self) -> None:
         """Show the patient the "Your nurse has been called" screen, the same one as a long eyebrow raise
@@ -218,7 +236,7 @@ class Live:
                 "room": {"temp_c": r["temp_c"], "setpoint_c": r["setpoint_c"], "lamp_on": r["lamp_on"],
                          "fan_on": r["fan_on"], "fan_simulated": r["fan"]["simulated"]},
                 "facts": self.facts, "routines": [], "recent": self.recent, "last_visit": self.last_visit,
-                "summary": self.summary}
+                "summary": self.summary, "conversation": self.conversation[-30:]}
         return self.nurse.extend(out) if self.nurse is not None else out
 
     # ----- GET /api/panel ---------------------------------------------------
@@ -275,8 +293,10 @@ class Live:
             elif path == "send":
                 q = str(body.get("question") or "").strip()
                 opts = [str(o).strip() for o in (body.get("options") or []) if str(o).strip()]
-                if not q or len(opts) < 2:
-                    return {"ok": False, "error": "need a question and at least 2 answers"}
+                if not q:
+                    return {"ok": False, "error": "empty message"}
+                if len(set(opts)) < 2:             # no answer choices: a plain message, the patient says OK
+                    return {"ok": True, "kind": "message", "qid": self.send_question(q, [SEEN], now, kind="message")}
                 return {"ok": True, "qid": self.send_question(q, opts, now)}
             elif path == "alert":
                 a = next((a for a in self.alerts if a["id"] == body.get("id")), None)
@@ -320,15 +340,16 @@ class Live:
         self.session.update(active=True)
         log_event("nurse_session", state="start")
 
-    def send_question(self, question: str, options: list, now: float) -> str:
+    def send_question(self, question: str, options: list, now: float, kind: str = "question") -> str:
         with self.lock:
             self._start_session(now)
             qid = f"q{next(self._ids)}"
-            self.sm.nurse_question(qid, question, options, now)
+            self.sm.nurse_question(qid, question, options, now, kind=kind)
             self.machine.reset(now)
             self.session["thread"].append({"qid": qid, "time": clock.hhmm(), "question": question,
                                            "options": list(options), "answer": None, "seconds": None,
-                                           "_sent": now})
+                                           "kind": kind, "_sent": now})
+            self._say("nurse", kind, question, qid=qid, **({"options": list(options)} if kind == "question" else {}))
             self.session["waiting"] = True
             self.session["follow_ups"] = []
             log_event("nurse_question", qid=qid, question=question, options=options)

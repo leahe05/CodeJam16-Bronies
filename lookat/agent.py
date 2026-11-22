@@ -564,9 +564,7 @@ class Agent:
         self.call("page_nurse", {"message": f"Room reads {t} °C. Please check the room (or the sensor).",
                                  "reason": f"Outside the safe range {EXTREME_LOW_C:g}-{EXTREME_HIGH_C:g} °C; "
                                            "paged at once, whether the patient is awake or not.",
-                                 "urgency": "urgent", "why": "unsafe temperature"})
-        self.live.nurse_called()          # the patient sees the same "nurse is coming" screen as an eyebrow call
-        self.feed("did", "Showed the patient: Your nurse has been called", "they should know help is coming")
+                                 "urgency": "urgent", "why": "unsafe temperature"})   # shows "nurse is coming" too
         return True
 
     def trigger(self, p: dict) -> Optional[tuple]:
@@ -891,6 +889,8 @@ class Agent:
                                 actions=[{"id": "ack", "label": "On my way"}])
             self.memory.log("pages", {"message": a["message"], "reason": a.get("reason"), "urgency": a.get("urgency")})
             self.feed("outcome", f"Paged the nurse: {a['message']}", a.get("reason") or why)
+            self.live.nurse_called()      # every page: the patient sees "nurse is coming", as with an eyebrow call
+            self.feed("did", "Showed the patient: Your nurse has been called", "they should know help is coming")
             return "paged"
         if name == "defer":
             with self.live.lock:

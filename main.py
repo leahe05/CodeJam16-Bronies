@@ -1,8 +1,8 @@
 """LookAt: the real program.
 
     py -3.11 main.py --patient NAME [--voice edge|page|windows|off]
-        default --gaze web: the patient page (/patient) tracks gaze AND eyebrows itself (WebGazer, big layout)
-    py -3.11 main.py --patient NAME --gaze camera [--recalibrate] [--camera 0]   (the old Python gaze)
+        --gaze web: the patient page (/patient) tracks gaze AND eyebrows itself (WebGazer, big layout)
+    py -3.11 main.py --patient NAME [--gaze camera] [--recalibrate] [--camera 0]   (default: Python gaze, left/centre/right)
     py -3.11 main.py --patient NAME --keyboard      (no camera: test with the keyboard)
 
 Starts the web server (Lea's pages + the JSON API, docs/API.md), the plugs (lamp,
@@ -431,7 +431,7 @@ def main() -> None:
     ap.add_argument("--camera", type=int, default=0)
     ap.add_argument("--keyboard", action="store_true", help="no camera: test with the keyboard")
     ap.add_argument("--port", type=int, default=config.PAGE_PORT)
-    ap.add_argument("--gaze", choices=("camera", "web"), default="web",
+    ap.add_argument("--gaze", choices=("camera", "web"), default="camera",
                     help="camera = Python gaze + eyebrows (left/center/right calibration); "
                          "web = the patient page tracks gaze AND eyebrows with WebGazer (no Python camera, big layout)")
     ap.add_argument("--voice", choices=("edge", "page", "windows", "off"), default="edge",

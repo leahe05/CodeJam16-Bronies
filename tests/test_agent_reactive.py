@@ -58,3 +58,13 @@ def test_extreme_page_shows_the_nurse_is_coming_screen(tmp_path):
     assert ("call_nurse",) in spoken[-1]                                      # the voice says the nurse is coming
     live.frame(live.now(), None, [], face=False)
     assert ("call_nurse",) not in spoken[-1]                                  # once
+
+
+def test_every_page_shows_the_nurse_is_coming_screen(tmp_path):
+    agent, live, room, _ = make(tmp_path, temp=19.0, at="14:00")
+    assert (live.screen_json().get("overlay") or {}).get("kind") != "call_nurse"
+    agent.call("page_nurse", {"message": "Feels cold, would like a blanket.", "reason": "Patient said Yes.",
+                              "why": "she asked"})
+    assert (live.screen_json().get("overlay") or {}).get("kind") == "call_nurse"   # e.g. a blanket, not only emergencies
+    assert [a["kind"] for a in live.alerts] == ["page"]                             # one page, no extra "call"
+    assert any("Your nurse has been called" in t for _, t in stages(live))

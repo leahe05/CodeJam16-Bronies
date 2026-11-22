@@ -818,6 +818,8 @@ function renderPatientActions(agent, data) {
   $("question").disabled = $("options").disabled = $("send-question").disabled = disabled || data?.session?.waiting === true;
   $("suggest-choices").hidden = !data;
   $("suggest-choices").disabled = $("send-question").disabled;
+  $("send-message").hidden = !data || data.simulation;
+  $("send-message").disabled = $("send-question").disabled;
   $("end-session").disabled = disabled;
   $("end-session").hidden = !data?.session?.active;
   const visitor = data?.bedside?.visitors_present;
@@ -830,9 +832,35 @@ function renderPatientActions(agent, data) {
     "Choices drafted with Claude." : "Default choices are placeholders for Claude.");
 }
 
+// The nurse <-> patient conversation (GET /api/nurse "conversation"): questions, plain messages, the
+// patient's answers ("Seen" for a message) and the patient's own messages (Message my nurse).
+function conversationLine(line) {
+  const row = element("li", "from-" + line.from);
+  const text = line.kind === "seen" ? "Read your message" : line.text;
+  const who = line.from === "nurse" ? (line.kind === "message" ? "You · message" : "You · question")
+    : line.kind === "message" ? "Patient · message" : "Patient";
+  row.append(element("time", "", line.time || ""), element("span", "who", who), element("span", "text", text));
+  if (line.options?.length) row.append(element("span"), element("span"),
+    element("span", "choices", "Choices: " + line.options.join(" · ")));
+  return row;
+}
+
 function renderLatestReply(data) {
   const region = $("latest-reply");
   const waiting = data?.session?.waiting;
+  const conversation = list(data?.conversation);
+  if (Array.isArray(data?.conversation)) {          // a LookAt server with the conversation log
+    region.hidden = !conversation.length && !waiting;
+    updateRegion(region, [waiting, conversation], () => {
+      if (region.hidden) return [];
+      const status = element("strong", "", waiting ? "Conversation · waiting for the patient" : "Conversation");
+      const lines = element("ol", "conversation");
+      lines.append(...conversation.map(conversationLine));
+      queueMicrotask(() => { lines.scrollTop = lines.scrollHeight; });
+      return [status, lines];
+    });
+    return;
+  }
   const latest = list(data?.session?.thread).at(-1);
   region.hidden = !waiting && latest?.answer == null;
   updateRegion(region, [waiting, latest], () => {
@@ -1073,6 +1101,20 @@ $("question-form").addEventListener("submit", event => {
     delete agent.question;
     delete agent.options;
     delete agent.optionsSource;
+    agent.data.session = { ...agent.data.session, active: true, waiting: true };
+  });
+});
+$("send-message").addEventListener("click", () => {
+  const agent = agents.get(selected);
+  const message = $("question").value.trim();
+  if (!message) {
+    $("question").focus();
+    notify("Type the message first.");
+    return;
+  }
+  if (agent.data?.session?.waiting) return;
+  act(agent, "/send", { question: message, options: [] }, "Message sent to " + agentName(agent) + ".", () => {
+    delete agent.question;
     agent.data.session = { ...agent.data.session, active: true, waiting: true };
   });
 });
