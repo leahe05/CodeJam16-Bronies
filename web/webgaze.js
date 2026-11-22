@@ -31,9 +31,9 @@
   const SETTLE_MS = 900, RECORD_MS = 1500, SAMPLE_MS = 50;
   // Check after the dot: look at the left / centre / right column; where the tracker THINKS you look there
   // sets the zone borders (half-way between those), so a tracker that reads everything a bit to the left
-  // still gets "right" right. If the three don't come out in order, the dot calibration runs again.
+  // still gets "right" right. If the three come out of order, plain thirds (R redoes it).
   const CHECK = [["left", 1 / 6], ["middle", .5], ["right", 5 / 6]];
-  const CHECK_SETTLE_MS = 1200, CHECK_MS = 2200, MIN_SPREAD = 0.08;
+  const CHECK_SETTLE_MS = 1200, CHECK_MS = 2200, MIN_SPREAD = 0.02;   // in order, a little apart
   const CONFIRM_S = 0.3, LONG_S = 2.0;      // config.CONFIRM_S / config.EMERGENCY_S
   const EYES_OPEN = 0.16;                  // eyelid gap / eye width above this = open
 
@@ -291,19 +291,14 @@
     return true;
   }
 
-  // Dot, then the check; up to 3 rounds (each round adds more dot training).
+  // ONE dot, then the check, never repeated (a repeat made weaker webcams do the 45 s dot two or three
+  // times). Check out of order: plain thirds. The operator can still press R to redo it.
   async function calibrateGaze() {
     window.webgazer.clearData();
-    for (let round = 0; round < 3; round++) {
-      await calibrate();
-      if (await checkZones()) { el("wg-cal").remove(); return; }
-      const cal = el("wg-cal", `<div class="msg"><b>Let's do the dot once more</b><p>Keep your head still and follow it with your eyes.</p></div>`);
-      say("Let's do the dot once more.");
-      await wait(2500);
-      cal.remove();
-    }
-    borders = [1 / 3, 2 / 3];                        // still not in order: plain thirds
-    el("wg-cal").remove();
+    await calibrate();
+    if (!(await checkZones())) borders = [1 / 3, 2 / 3];
+    const c = document.getElementById("wg-cal");
+    if (c) c.remove();
   }
 
   // ---------------- live: zone -> backend ----------------
