@@ -415,7 +415,6 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: #3b82f6
 
 /* conversation and "Ask the patient" side by side, so the nurse sees the answers while writing the next question */
 .chat-pane { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1rem; align-items: start; }
-.chat-pane:has(> #latest-reply[hidden]) { grid-template-columns: minmax(0, 1fr); }
 .chat-pane > .latest-reply { margin-top: 0; position: sticky; top: .5rem; }
 .chat-pane .conversation { max-height: 22rem; }
 @media (max-width: 860px) {
@@ -449,11 +448,43 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: #3b82f6
 .button.small { padding: .32rem .8rem; font-size: .85rem; min-height: 0; }
 .composer-main { margin-top: .6rem; }
 .composer-more { margin-top: .4rem; gap: .35rem; }
-.composer-more .button { background: transparent; border-color: transparent; color: var(--blue, #1d4ed8); }
-.composer-more .button:hover { background: rgba(37, 99, 235, .08); }
-.composer-more .button.end { color: #b42318; margin-left: auto; }
 @media (max-width: 860px) {
   .chat-pane { grid-template-columns: minmax(0, 1fr); }
   .suggested-card { flex-direction: column; align-items: stretch; }
   .suggested-actions .button { flex: 1; }
+}
+
+/* ---------- polish: one consistent button family, smooth states ---------- */
+.button {
+  display: inline-flex; align-items: center; justify-content: center; gap: .4rem; line-height: 1.2;
+  white-space: nowrap; cursor: pointer;
+  transition: background-color .2s ease, border-color .2s ease, color .2s ease, box-shadow .2s ease,
+              transform .12s ease, opacity .2s ease;
+}
+.button:hover:not(:disabled) { transform: translateY(-1px); }
+.button:active:not(:disabled) { transform: translateY(0) scale(.97); box-shadow: none; }
+.button:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(59, 130, 246, .35); }
+.button:disabled { opacity: .5; cursor: not-allowed; box-shadow: none; }
+/* a solid colour (not a gradient) so the hover colour can fade */
+.button.primary { background: #2563eb; box-shadow: 0 4px 14px rgba(37, 99, 235, .28); }
+.button.primary:hover:not(:disabled) { background: #1d4ed8; box-shadow: 0 8px 20px rgba(37, 99, 235, .32); }
+.button.small { min-height: 2.15rem; padding: .3rem .95rem; font-size: .86rem; }
+.button.danger { color: #b42318; background: #fff5f4; border-color: rgba(180, 35, 24, .35); margin-left: auto; }
+.button.danger:hover:not(:disabled) { color: white; background: #d92d20; border-color: #d92d20;
+  box-shadow: 0 6px 16px rgba(217, 45, 32, .28); }
+.composer-main { align-items: center; }
+.composer-more { margin-top: .5rem; }
+.composer-more .button { color: #1d4ed8; background: rgba(255, 255, 255, .6); }
+textarea, input, select { transition: border-color .2s ease, box-shadow .2s ease; }
+
+/* cards and messages ease in instead of popping */
+@keyframes ease-in { from { opacity: 0; transform: translateY(4px); } }
+.suggested-card { animation: ease-in .3s ease both; transition: border-color .2s ease, box-shadow .2s ease, transform .2s ease; }
+.suggested-card + .suggested-card { animation-delay: .06s; }
+.suggested-card:hover { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(30, 64, 140, .1); }
+.conversation li { animation: ease-in .25s ease both; }
+.conversation-empty { margin: .6rem 0 .2rem; color: var(--muted); font-size: .9rem; }
+.chat-pane > .latest-reply { min-height: 9rem; }
+@media (prefers-reduced-motion: reduce) {
+  .button, .suggested-card, .conversation li { transition: none; animation: none; }
 }

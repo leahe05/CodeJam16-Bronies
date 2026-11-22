@@ -1051,10 +1051,13 @@ function renderLatestReply(data) {
   const waiting = data?.session?.waiting;
   const conversation = list(data?.conversation);
   if (Array.isArray(data?.conversation)) {          // a MinimEyes server with the conversation log
-    region.hidden = !conversation.length && !waiting;
+    region.hidden = false;                          // always shown, so the layout doesn't jump
     updateRegion(region, [waiting, conversation], () => {
-      if (region.hidden) return [];
       const status = element("strong", "", waiting ? "Conversation · waiting for the patient" : "Conversation");
+      if (!conversation.length && !waiting) {
+        return [status, element("p", "conversation-empty",
+          "No messages yet. Questions you send and the patient's answers will appear here.")];
+      }
       const lines = element("ol", "conversation");
       lines.append(...conversation.map(conversationLine));
       queueMicrotask(() => { lines.scrollTop = lines.scrollHeight; });
