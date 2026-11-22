@@ -72,3 +72,9 @@ def test_patient_page_opens_with_web_gaze_when_main_uses_it():
     r = c.get("/patient?theme=day", follow_redirects=False)
     assert r.status_code in (302, 307) and r.headers["location"] == "/patient?gaze=web&theme=day"
     assert c.get("/patient?gaze=web", follow_redirects=False).status_code == 200
+
+
+def test_page_scripts_are_rechecked_so_browsers_never_show_an_old_screen():
+    live, client = make([0.0])
+    r = client.get("/web/patient-ui.js")
+    assert r.status_code == 200 and r.headers["cache-control"] == "no-cache" and 'class="eyes"' in r.text

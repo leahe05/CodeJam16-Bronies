@@ -101,6 +101,15 @@ def make_app(backend, title: str = "MinimEyes", web_dir: str = WEB_DIR):
         app.mount("/assets", StaticFiles(directory=assets), name="assets")
     app.mount("/web", StaticFiles(directory=web_dir), name="web")
 
+    @app.middleware("http")
+    async def fresh_web_files(request, call_next):
+        """Scripts and styles are re-checked on every load (ETag, so unchanged files cost a 304):
+        a teammate's browser never keeps showing an old patient screen after a pull."""
+        response = await call_next(request)
+        if request.url.path.startswith(("/web/", "/assets/")):
+            response.headers["Cache-Control"] = "no-cache"
+        return response
+
     def page(name):
         path, _ = find_page(name, web_dir)
         if path:
