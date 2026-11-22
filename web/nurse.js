@@ -937,6 +937,8 @@ function renderPatientActions(agent, data) {
   $("suggest-choices").hidden = !data;
   $("suggest-choices").disabled = $("send-question").disabled;
   $("draft-question").hidden = data?.question_drafts !== true;
+  const answered = list(data?.conversation).at(-1)?.from === "patient";
+  updateText($("draft-question"), answered ? "Draft follow-up with Claude" : "Draft with Claude");
   $("draft-question").disabled = $("send-question").disabled;
   $("send-message").hidden = !data || data.simulation;
   $("send-message").disabled = $("send-question").disabled;
@@ -955,14 +957,35 @@ function renderPatientActions(agent, data) {
 // The nurse <-> patient conversation (GET /api/nurse "conversation"): questions, plain messages, the
 // patient's answers ("Seen" for a message) and the patient's own messages (Message my nurse).
 function conversationLine(line) {
-  const row = element("li", "from-" + line.from);
-  const text = line.kind === "seen" ? "Read your message" : line.text;
+  const other = line.from === "patient" && line.kind === "answer" && /^(other|something else)$/i.test(line.text);
+  const row = element("li", "from-" + line.from + (other ? " other" : ""));
+  const seconds = Number.isFinite(line.seconds) ? ` · ${line.seconds} s` : "";
+  const text = (line.kind === "seen" ? "Read your message" : line.text) + seconds +
+    (other ? " · draft a more specific follow-up with Claude" : "");
   const who = line.from === "nurse" ? (line.kind === "message" ? "You · message" : "You · question")
     : line.kind === "message" ? "Patient · message" : "Patient";
   row.append(element("time", "", line.time || ""), element("span", "who", who), element("span", "text", text));
   if (line.options?.length) row.append(element("span"), element("span"),
     element("span", "choices", "Choices: " + line.options.join(" · ")));
   return row;
+}
+
+// Room: temperature, AC setpoint − / +, lamp and fan switches, and "add a fact" (PLAN.md C2).
+function renderRoom(agent, data) {
+  const room = data?.room;
+  const panel = $("room-controls");
+  panel.hidden = !room || data.simulation;
+  if (panel.hidden) return;
+  const disabled = agent.state !== "online" || agent.busy;
+  updateText($("room-temp"), Number.isFinite(room.temp_c) ? `Room ${room.temp_c} °C` : "");
+  updateText($("setpoint-value"), Number.isFinite(room.setpoint_c) ? `${room.setpoint_c} °C` : "–");
+  for (const [id, on, name] of [["toggle-lamp", room.lamp_on, "Lamp"], ["toggle-fan", room.fan_on, "Fan"]]) {
+    const control = $(id);
+    control.setAttribute("aria-pressed", on ? "true" : "false");
+    updateText(control, `${name} ${on ? "on" : "off"}`);
+    control.disabled = disabled;
+  }
+  $("setpoint-down").disabled = $("setpoint-up").disabled = disabled || !Number.isFinite(room.setpoint_c);
 }
 
 function renderLatestReply(data) {
@@ -1076,6 +1099,7 @@ function render() {
     data && agent.state !== "online" ? "Showing last received status" : null].filter(Boolean).join(" · "));
   renderPatientActions(agent, data);
   renderLatestReply(data);
+  renderRoom(agent, data);
   renderSimulatedReply(agent, data);
   renderSimulation(agent, data);
   renderHistory(data);
@@ -1267,6 +1291,27 @@ $("send-message").addEventListener("click", () => {
     delete agent.question;
     agent.data.session = { ...agent.data.session, active: true, waiting: true };
   });
+});
+for (const [id, step] of [["setpoint-down", -0.5], ["setpoint-up", 0.5]]) {
+  $(id).addEventListener("click", () => {
+    const agent = agents.get(selected);
+    const setpoint = Math.round((agent.data.room.setpoint_c + step) * 2) / 2;
+    act(agent, "/room", { setpoint_c: setpoint }, `AC set to ${setpoint} °C.`);
+  });
+}
+for (const device of ["lamp", "fan"]) {
+  $("toggle-" + device).addEventListener("click", () => {
+    const agent = agents.get(selected);
+    const cmd = agent.data.room[device + "_on"] ? "off" : "on";
+    act(agent, "/room", { device, cmd }, `${device === "lamp" ? "Lamp" : "Fan"} turned ${cmd}.`);
+  });
+}
+$("fact-form").addEventListener("submit", event => {
+  event.preventDefault();
+  const agent = agents.get(selected);
+  const text = $("fact").value.trim();
+  if (!text) return;
+  act(agent, "/fact", { text }, "Added to the patient's notes.", () => { $("fact").value = ""; });
 });
 $("end-session").addEventListener("click", () => {
   const agent = agents.get(selected);

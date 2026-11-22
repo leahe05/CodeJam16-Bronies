@@ -149,7 +149,8 @@ class Live:
                     q["answer"] = text
                     q["seconds"] = round(now - q["_sent"], 1)
                     seen = q.get("kind") == "message"
-                    self._say("patient", "seen" if seen else "answer", "Seen" if seen else text, qid=qid)
+                    self._say("patient", "seen" if seen else "answer", "Seen" if seen else text, qid=qid,
+                              seconds=q["seconds"])
                     self._recent(f"Patient read: {q['question']}" if seen else request_text(q["question"], text))
                     if self.nurse is not None:
                         self.nurse.on_answer(q, text)
