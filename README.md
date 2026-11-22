@@ -5,7 +5,7 @@
 <p align="center"><b>An AI that speaks first, for patients who can only move their eyes.</b><br>
 <i>MinimEyes speaks first, so patients need fewer glances, and nurses need fewer calls.</i></p>
 
-<p align="center">Built at McGill CodeJam 16 with Claude Code.</p>
+<p align="center">Built for McGill CodeJam 16.</p>
 
 ---
 
