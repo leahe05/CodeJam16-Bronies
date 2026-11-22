@@ -468,8 +468,12 @@ class NurseBridge:
                 if "id" in body and alert is None:
                     return {"ok": False, "error": "This request is no longer open."}
                 profile = self.profile()
+                conversation = [{"question": q["question"], "answer": q["answer"]}       # narrow down from these
+                                for q in self.live.session["thread"]
+                                if q.get("kind", "question") == "question" and q.get("answer")]
             request = (alert.get("request") or alert["text"]) if alert is not None else None
-            draft = nurse_ai.draft_question(profile, request=request, topic=body.get("topic", ""))
+            draft = nurse_ai.draft_question(profile, request=request, topic=body.get("topic", ""),
+                                            conversation=conversation)
             if self.pid != profile["patient"]["id"]:
                 return {"ok": False, "error": "The active patient changed. Review their profile before continuing."}
             return draft
@@ -487,7 +491,7 @@ class NurseBridge:
                     self.live.session["thread"][-1]["_patient_id"] = self.pid
                     self.record("Nurse", "Messaged", q)
                     return {"ok": True, "kind": "message", "qid": qid}
-                qid = self.live.send_question(q, options, self.live.now())
+                qid = self.live.send_question(q, nurse_ai.with_other(options), self.live.now())
                 self.live.session["thread"][-1]["_patient_id"] = self.pid
                 self.record("Nurse", "Asked", q)
                 return {"ok": True, "qid": qid}
@@ -532,6 +536,8 @@ class NurseBridge:
                 return {"ok": False, "error": "This request is no longer open."}
             if self._awaiting_answer():
                 return {"ok": False, "error": "The patient is still answering a question."}
+            if nurse_ai.with_other([b["label"] for b in branches]) != [b["label"] for b in branches]:
+                branches = branches + [dict(nurse_ai.OTHER_BRANCH)]          # the patient can always say Other
             qid = self.live.send_question(question, [b["label"] for b in branches], self.live.now())
             self.live.session["thread"][-1].update(_request_alert=alert["id"], _branches=branches,
                                                    _patient_id=self.pid,

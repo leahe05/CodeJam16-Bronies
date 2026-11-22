@@ -192,6 +192,11 @@ class ScreenManager:
             elif not n.get("question"):
                 s.update(title="Thank you. Your nurse can see your answer." if self.nurse_thanks
                          else "Your nurse is here.", subtitle="A question is coming.", footer=None)
+            elif len(n["options"]) == 3:          # e.g. two answers + Other: all three at once, Other in the centre
+                a, b, c = n["options"]
+                s.update(title=n["question"], left=_opt("a", a, "left", hint=None),
+                         right=_opt("b", b, "right", hint=None), middle=_opt("c", c, "middle", hint=None),
+                         footer="Look left, center or right and raise your eyebrows to choose.")
             else:
                 left, right, count = paged(n["options"], n["page"])
                 s.update(title=n["question"], left=_opt("a", left, "left", hint=None),

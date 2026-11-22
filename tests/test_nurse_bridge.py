@@ -392,3 +392,45 @@ def test_eta_for_a_native_call_cannot_go_to_a_different_profile(tmp_path):
         assert "about 4 minutes" in live.screen_json()["subtitle"]
     finally:
         live.nurse.stop()
+
+
+def test_every_nurse_question_gives_the_patient_an_other_choice(tmp_path):
+    live = setup(tmp_path)
+    assert live.nurse_action("send", {"question": "Are you in pain?", "options": ["Yes", "No"]})["ok"]
+    screen = live.screen_json()
+    assert [screen[s]["label"] for s in ("left", "middle", "right")] == ["Yes", "Other", "No"]   # no paging
+    answer(live, "Other")
+    assert live.nurse_json()["conversation"][-1]["text"] == "Other"
+
+
+def test_claude_follow_up_narrows_down_from_the_answers_so_far(tmp_path, monkeypatch):
+    seen = {}
+
+    def generate(instruction, payload):
+        seen.update(instruction=instruction, payload=payload)
+        return {"question": "Where is the pain?", "branches": [
+            {"label": "Head", "next_step": "Ask how bad the headache is."},
+            {"label": "Back", "next_step": "Ask how bad the back pain is."}]}
+
+    monkeypatch.setattr(nurse_ai, "_request_json", generate)
+    live = setup(tmp_path)
+    live.nurse_action("send", {"question": "Are you in pain?", "options": ["Yes", "No"]})
+    answer(live, "Yes")
+    draft = live.nurse_action("question/draft", {"topic": ""})
+    assert draft["ok"] and draft["question"] == "Where is the pain?"
+    assert seen["payload"]["conversation_so_far"] == [{"question": "Are you in pain?", "answer": "Yes"}]
+    assert "MORE SPECIFIC" in seen["instruction"] and '"Other"' in seen["instruction"]
+
+
+def test_request_question_answered_other_gets_its_own_next_step(tmp_path):
+    live = setup(tmp_path)
+    live.add_alert("page", "Wants repositioning.")
+    aid = [a for a in live.nurse_json()["alerts"] if a["id"].startswith("agent-")][0]["id"]
+    branches = [{"label": "Left side", "next_step": "Turn her to the left."},
+                {"label": "Right side", "next_step": "Turn her to the right."}]
+    assert live.nurse_action("alert/question/send", {"id": aid, "question": "Which side?", "branches": branches,
+                                                     "source": "ai"})["ok"]
+    assert live.screen_json()["middle"]["label"] == "Other"
+    answer(live, "Other")
+    a = [x for x in live.nurse_json()["alerts"] if x["id"] == aid][0]
+    assert a["question_reply"]["answer"] == "Other" and "follow-up" in a["question_reply"]["next_step"]

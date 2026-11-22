@@ -11,10 +11,24 @@ from lookat.nurse_patient_profile import CARE_CHOICES
 
 DEFAULT_MODEL = "claude-haiku-5-5"
 ANSWER_CHOICE_GUIDANCE = (
-    'Use Yes and No for yes-or-no questions. For open-ended questions, usually give the most plausible '
-    'specific answer and "Other" so the patient can signal a different answer. When a question explicitly '
-    'offers exactly two alternatives, use those alternatives. '
+    'Use Yes and No for yes-or-no questions. For open-ended questions, give the two most plausible '
+    'specific answers. When a question explicitly offers exactly two alternatives, use those alternatives. '
+    'Never use "Other" or "Something else": the patient always gets an "Other" choice automatically. '
 )
+OTHER = "Other"                 # added to every nurse question on the patient screen (lookat/nurse_bridge.py)
+OTHER_BRANCH = {"label": OTHER, "next_step": "Draft a more specific follow-up question with Claude."}
+NARROWING = (
+    'conversation_so_far lists the questions already asked in this conversation and the patient answers, '
+    'oldest first. If it has answers, the new question must build on the latest answer and be MORE SPECIFIC '
+    'than the previous question (narrow it down, e.g. pain -> where -> how bad); never repeat a question. '
+    'If the latest answer was "Other", ask about the most likely remaining possibilities instead. '
+)
+
+
+def with_other(labels):
+    """The answers the patient sees: the drafted ones plus Other (once)."""
+    labels = [label for label in labels if label]
+    return labels if any(label.casefold() in ("other", "something else") for label in labels) else labels + [OTHER]
 
 
 class ClaudeNotConfigured(ValueError):
@@ -180,7 +194,7 @@ def draft_request_branches(question, request, profile):
                 "fallback_reason": failure_reason(error)}
 
 
-def draft_question(profile, *, request=None, topic=""):
+def draft_question(profile, *, request=None, topic="", conversation=None):
     if not isinstance(topic, str) or len(topic.strip()) > 300:
         return {"ok": False, "error": "Enter a topic of up to 300 characters."}
     context = {key: profile[key] for key in ("status", "awareness", "room", "last_meal", "preferences", "habits")
@@ -190,13 +204,14 @@ def draft_question(profile, *, request=None, topic=""):
             "Draft one brief, patient-facing question and exactly two distinct short answers the patient can "
             "select by gaze. Clarify the supplied request or topic. If neither is present, ask a neutral "
             "comfort check-in guided by the patient's preferences. Don't assume the patient has any unmet needs. "
-            + ANSWER_CHOICE_GUIDANCE +
+            + NARROWING + ANSWER_CHOICE_GUIDANCE +
             'For each answer suggest a next step for the nurse to review. For "Other", suggest a follow-up question. '
             "Do not diagnose, suggest "
             "medication, direct treatment, or claim care was performed. The nurse must approve the draft. "
             'Return an object with "question" (at most 140 characters) and "branches", an array of exactly '
             'two objects with "label" (at most 60 characters) and "next_step" (at most 160 characters).',
-            {"patient_request": request, "topic": topic.strip(), "patient_context": context},
+            {"patient_request": request, "topic": topic.strip(), "patient_context": context,
+             "conversation_so_far": list(conversation or [])[-8:]},
         )
         question = result.get("question") if isinstance(result, dict) else None
         if not isinstance(question, str) or not 1 < len(question.strip()) <= 140 or not question.strip().endswith("?"):
