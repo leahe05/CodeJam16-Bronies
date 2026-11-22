@@ -1,3 +1,11 @@
+<p align="center">
+  <a href="https://www.youtube.com/watch?v=xO-heRdDVAc">
+    <img src="https://img.youtube.com/vi/xO-heRdDVAc/hqdefault.jpg" width="100%" alt="Watch the MinimEyes demo video on YouTube">
+  </a>
+  <br>
+  <b>▶ <a href="https://www.youtube.com/watch?v=xO-heRdDVAc">Watch the demo video</a></b>
+</p>
+
 <p align="center"><img src="web/logo.svg" width="88" alt="MinimEyes logo: a smiling chat bubble"></p>
 
 <h1 align="center">MinimEyes</h1>
