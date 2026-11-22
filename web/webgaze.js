@@ -12,6 +12,9 @@
  *      Calibration right after the dot: "Relax" (rest), then "Raise your eyebrows" 3 times. A raise held
  *      >= CONFIRM_S and released = "confirm" (choose); held >= LONG_S = "emergency" (Call Nurse).
  *      Eyes open = eyelid gap / eye width (for the agent's "awake").
+ *   5. The calibration is SAVED in this browser (dot training + zone borders in IndexedDB, eyebrow
+ *      thresholds in localStorage) for SAVED_H hours: reloading /patient reuses it instead of running the
+ *      dot and eyebrows again. ?recal=1 forces a fresh one.
  *   Keys (operator): R = redo gaze, B = redo eyebrows, D = show/hide the gaze ring.
  * WebGazer runs fully offline: its face model is in /web/vendor/webgazer/mediapipe/face_mesh.
  * WebGazer.js is GPLv3 (LGPLv3 for companies valued under $1M): web/vendor/webgazer/LICENSE.md.
@@ -33,7 +36,10 @@
   // sets the zone borders (half-way between those), so a tracker that reads everything a bit to the left
   // still gets "right" right. If the three don't come out in order, the dot calibration runs again.
   const CHECK = [["left", 1 / 6], ["middle", .5], ["right", 5 / 6]];
-  const CHECK_SETTLE_MS = 1200, CHECK_MS = 2200, MIN_SPREAD = 0.08;
+  // MIN_SPREAD: the three only need to come out in order with a little room between them (0.08 made
+  // weaker webcams / dim rooms redo the 45 s dot again and again). At most ROUNDS dots.
+  const CHECK_SETTLE_MS = 1200, CHECK_MS = 2200, MIN_SPREAD = 0.04, ROUNDS = 2;
+  const SAVED_H = 12;                       // a saved calibration is reused this long (R / B redo it)
   const CONFIRM_S = 0.3, LONG_S = 2.0;      // config.CONFIRM_S / config.EMERGENCY_S
   const EYES_OPEN = 0.16;                  // eyelid gap / eye width above this = open
 
@@ -104,12 +110,65 @@
     s.onclick = () => { s.remove(); run(); };
   }
 
+  // ---------------- saved calibration (survives a reload) ----------------
+  const recal = params.get("recal") === "1";
+  const young = (at) => at && Date.now() - at < SAVED_H * 3600e3;
+  function idb(mode, fn) {                     // one IndexedDB store; the eye patches are ImageData (cloneable)
+    return new Promise((ok, no) => {
+      const open = indexedDB.open("lookat-webgaze", 1);
+      open.onupgradeneeded = () => open.result.createObjectStore("cal");
+      open.onerror = () => no(open.error);
+      open.onsuccess = () => {
+        const tx = open.result.transaction("cal", mode), req = fn(tx.objectStore("cal"));
+        tx.oncomplete = () => { open.result.close(); ok(req && req.result); };
+        tx.onerror = () => { open.result.close(); no(tx.error); };
+      };
+    });
+  }
+  async function saveGaze() {
+    try {
+      const data = window.webgazer.getRegression()[0].getData();
+      await idb("readwrite", (s) => s.put({ at: Date.now(), borders, data: [...data] }, "gaze"));
+    } catch (e) { console.warn("WG gaze not saved", e); }
+  }
+  async function loadGaze() {
+    try {
+      const g = await idb("readonly", (s) => s.get("gaze"));
+      if (!g || !young(g.at) || !g.data || g.data.length < 20) return false;   // WebGazer keeps the last 50
+      window.webgazer.clearData();
+      window.webgazer.getRegression()[0].setData(g.data);
+      borders = g.borders;
+      console.log("WG gaze loaded", g.data.length, borders);
+      return true;
+    } catch (e) { console.warn("WG saved gaze unusable", e); return false; }
+  }
+  function saveBrows() {
+    try { localStorage.setItem("lookat-wg-brows", JSON.stringify({ at: Date.now(), thr: brow.thr, rel: brow.rel, start: brow.start })); } catch (e) {}
+  }
+  function loadBrows() {
+    try {
+      const b = JSON.parse(localStorage.getItem("lookat-wg-brows") || "null");
+      if (!b || !young(b.at) || b.thr == null) return false;
+      Object.assign(brow, { thr: b.thr, rel: b.rel, start: b.start });
+      return true;
+    } catch (e) { return false; }
+  }
+
   async function run() {
     const st = el("wg-cal", `<div class="msg"><b>Starting the camera…</b><p>Loading eye tracking (a few seconds).</p></div>`);
     try {
       await begin();
-      await calibrateGaze();
-      await calibrateBrows();
+      const gotGaze = !recal && await loadGaze();
+      const gotBrows = !recal && loadBrows();
+      if (!gotGaze) await calibrateGaze();
+      if (!gotBrows) await calibrateBrows();
+      if (gotGaze && gotBrows) {
+        el("wg-cal", `<div class="msg"><b>Using your last calibration</b><p>Press R to redo the dot, B to redo the eyebrows.</p></div>`);
+        say("Welcome back.");
+        await wait(1800);
+      }
+      const c = document.getElementById("wg-cal");
+      if (c) c.remove();
     } catch (e) {
       console.error("WG", e);
       st.innerHTML = `<div class="msg"><b>Eye tracking could not start</b><p>${String(e && e.message || e)}</p>`
@@ -222,6 +281,7 @@
         brow.rel = brow.thr - 0.3 * (brow.thr - rest);
         brow.start = rest + 0.2 * (peak - rest);           // starting to rise: freeze the gaze from here
         console.log("WG brows", { rest, peak, thr: brow.thr });
+        saveBrows();
         break;
       }
       msg("Let's try that again", "Raise your eyebrows as high as you can.");
@@ -291,12 +351,13 @@
     return true;
   }
 
-  // Dot, then the check; up to 3 rounds (each round adds more dot training).
+  // Dot, then the check; up to ROUNDS rounds (each round adds more dot training). Saved either way.
   async function calibrateGaze() {
     window.webgazer.clearData();
-    for (let round = 0; round < 3; round++) {
+    for (let round = 0; round < ROUNDS; round++) {
       await calibrate();
-      if (await checkZones()) { el("wg-cal").remove(); return; }
+      if (await checkZones()) { el("wg-cal").remove(); await saveGaze(); return; }
+      if (round === ROUNDS - 1) break;
       const cal = el("wg-cal", `<div class="msg"><b>Let's do the dot once more</b><p>Keep your head still and follow it with your eyes.</p></div>`);
       say("Let's do the dot once more.");
       await wait(2500);
@@ -304,6 +365,7 @@
     }
     borders = [1 / 3, 2 / 3];                        // still not in order: plain thirds
     el("wg-cal").remove();
+    await saveGaze();
   }
 
   // ---------------- live: zone -> backend ----------------
