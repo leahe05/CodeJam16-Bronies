@@ -412,3 +412,23 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: #3b82f6
 .fact-form label { font-size: .875rem; color: var(--muted); font-weight: 600; }
 .fact-form .form-row { display: flex; gap: .5rem; }
 .fact-form input { flex: 1; min-width: 0; padding: 0 .9rem; }
+
+/* conversation and "Ask the patient" side by side, so the nurse sees the answers while writing the next question */
+.chat-pane { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1rem; align-items: start; }
+.chat-pane:has(> #latest-reply[hidden]) { grid-template-columns: minmax(0, 1fr); }
+.chat-pane > .latest-reply { margin-top: 0; position: sticky; top: .5rem; }
+.chat-pane .conversation { max-height: 22rem; }
+@media (max-width: 860px) {
+  .chat-pane { grid-template-columns: minmax(0, 1fr); gap: .6rem; }
+  .chat-pane > .latest-reply { position: static; }
+  .chat-pane .conversation { max-height: 12rem; }
+}
+/* two ready-made questions for the open request: one click fills the question and its answers */
+.suggested { display: grid; gap: .4rem; margin: .35rem 0 .6rem; }
+.suggested .suggested-head { font-size: .78rem; color: var(--muted); }
+.suggested-chip { display: grid; gap: .1rem; text-align: left; width: 100%; padding: .55rem .75rem; border-radius: .7rem;
+  border: 1px solid #b9cde6; background: #f1f6fd; color: inherit; font: inherit; cursor: pointer; }
+.suggested-chip:hover, .suggested-chip:focus-visible { border-color: #3b82f6; background: #e3eefc; }
+.suggested-chip.picked { border-color: #2563eb; background: #dbeafe; }
+.suggested-chip b { font-weight: 650; }
+.suggested-chip small { color: var(--muted); }

@@ -82,8 +82,11 @@
           <a id="patient-screen" class="button" target="_blank" rel="noopener" hidden>Open patient screen</a>
         </div>
         <div id="patient-actions" hidden>
+          <div class="chat-pane">
+          <div id="latest-reply" class="latest-reply" role="status" hidden></div>
           <form id="question-form" class="question-composer" aria-labelledby="composer-heading">
             <h3 id="composer-heading">Ask the patient</h3>
+            <div id="suggested-questions" class="suggested" aria-live="polite" hidden></div>
             <label for="question">Question</label>
             <textarea id="question" rows="2" maxlength="300" required></textarea>
             <label for="options" id="options-label">Answer choices, one per line</label>
@@ -98,7 +101,7 @@ No</textarea>
               <button id="end-session" class="button" type="button" hidden>End conversation</button>
             </div>
           </form>
-          <div id="latest-reply" class="latest-reply" role="status" hidden></div>
+          </div>
           <section id="room-controls" class="room-controls" aria-labelledby="room-heading" hidden>
             <div class="section-heading">
               <h3 id="room-heading">Room</h3>

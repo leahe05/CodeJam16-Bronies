@@ -282,6 +282,8 @@ class Live:
             return {"ok": True, **self._suggest(q)}
         if path == "summary":            # may call the AI (up to 8 s): never hold the lock here
             return self._shift_summary()
+        if path == "questions":          # may call the AI: never hold the lock here
+            return {"ok": True, **self._suggest_questions(body.get("alert_id"))}
         now = self.now()
         with self.lock:
             if path == "session/start":
@@ -355,6 +357,32 @@ class Live:
             self.session["follow_ups"] = []
             log_event("nurse_question", qid=qid, question=question, options=options)
             return qid
+
+    def _suggest_questions(self, alert_id=None) -> dict:
+        """Two ready-made questions for the nurse, written for the newest open request (cached per request)."""
+        with self.lock:
+            open_alerts = [a for a in self.alerts if not a.get("done")]
+            alert = next((a for a in self.alerts if a.get("id") == alert_id), None) if alert_id else \
+                (open_alerts[0] if open_alerts else None)
+            room = self.room.state()
+            facts = [f.get("text") for f in (self.facts or [])][:12]
+            last = [{"from": c.get("from"), "text": c.get("text")} for c in self.conversation[-4:]]
+        key = (alert or {}).get("id"), (alert or {}).get("text")
+        cache = getattr(self, "_questions_cache", None)
+        if cache and cache[0] == key:
+            return cache[1]
+        context = {"open_request": {k: (alert or {}).get(k) for k in ("kind", "urgency", "text", "reason")} if alert else None,
+                   "room": {"temp_c": room["temp_c"], "lamp_on": room["lamp_on"], "fan_on": room["fan_on"]},
+                   "patient_facts": facts, "recent_conversation": last, "time": clock.hhmm()}
+        try:
+            from lookat import ask
+            res = ask.suggest_questions(context)
+        except Exception:   # noqa: BLE001 - no key or an AI error: rule-based questions
+            from lookat.ask import fallback_questions
+            res = {"questions": fallback_questions(alert), "source": "fallback"}
+        out = {**res, "about": (alert or {}).get("text"), "alert_id": (alert or {}).get("id")}
+        self._questions_cache = (key, out)
+        return out
 
     def _suggest(self, question: str) -> dict:
         try:

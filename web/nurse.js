@@ -75,7 +75,7 @@ function storeAgents() {
 async function request(origin, path = "", body) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(),
-    ["/suggest", "/proposal/refine", "/alert/question/draft", "/question/draft"].includes(path) ? 20000 : 5000);
+    ["/suggest", "/questions", "/proposal/refine", "/alert/question/draft", "/question/draft"].includes(path) ? 20000 : 5000);
   try {
     const response = await fetch(origin + nursePath + path, {
       cache: "no-store",
@@ -988,6 +988,45 @@ function renderRoom(agent, data) {
   $("setpoint-down").disabled = $("setpoint-up").disabled = disabled || !Number.isFinite(room.setpoint_c);
 }
 
+// Two ready-made questions for the newest open request (POST /api/nurse/questions), as chips: one click fills
+// the question and its two answers; the nurse can still edit them before "Send question".
+function renderSuggestedQuestions(agent, data) {
+  const box = $("suggested-questions");
+  const open = list(data?.alerts).filter(alert => !alert.done);
+  const key = data ? JSON.stringify([agent.origin, open[0]?.id ?? null, open[0]?.text ?? null]) : null;
+  if (data && !data.simulation && agent.state === "online" && agent.questionsKey !== key && !agent.questionsLoading) {
+    agent.questionsLoading = true;
+    const body = agent.data?.patient_id_guard ? { patient_id: agent.data.patient.id } : {};
+    request(agent.origin, "/questions", body).then(result => {
+      if (result?.ok) agent.suggested = { key, ...result };
+    }).catch(() => {}).finally(() => {
+      agent.questionsKey = key;
+      agent.questionsLoading = false;
+      render();
+    });
+  }
+  const s = agent.suggested?.key === key ? agent.suggested : null;
+  box.hidden = !s || !list(s.questions).length;
+  updateRegion(box, [s, agent.question, $("question").disabled], () => {
+    if (box.hidden) return [];
+    const head = element("p", "suggested-head",
+      (s.about ? `Suggested for: ${s.about}` : "Suggested questions") + (s.source === "ai" ? " · drafted with Claude" : ""));
+    const chips = list(s.questions).map(item => {
+      const chip = button("", "suggested-chip" + (agent.question === item.question ? " picked" : ""), () => {
+        agent.question = item.question;
+        agent.options = item.options.join("\n");
+        agent.optionsSource = s.source === "ai" ? "ai_question" : "manual";
+        render();
+        $("send-question").focus();
+      });
+      chip.append(element("b", "", item.question), element("small", "", item.options.join(" · ")));
+      chip.disabled = $("question").disabled;
+      return chip;
+    });
+    return [head, ...chips];
+  });
+}
+
 function renderLatestReply(data) {
   const region = $("latest-reply");
   const waiting = data?.session?.waiting;
@@ -1099,6 +1138,7 @@ function render() {
     data && agent.state !== "online" ? "Showing last received status" : null].filter(Boolean).join(" · "));
   renderPatientActions(agent, data);
   renderLatestReply(data);
+  if (agent) renderSuggestedQuestions(agent, data);
   renderRoom(agent, data);
   renderSimulatedReply(agent, data);
   renderSimulation(agent, data);

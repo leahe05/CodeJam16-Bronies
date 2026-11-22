@@ -152,6 +152,29 @@ def make_options(question, context):
     return {"options": options, "source": "ai"}
 
 
+def suggest_questions(context):
+    """Two short questions the nurse could send next, each with two answers the patient picks by gaze."""
+    items = _request_json(
+        "A patient who can only answer by looking left or right at a screen needs their nurse. Using the open "
+        "request, the room and the patient's facts, suggest exactly two different short questions (at most 10 words) "
+        "the nurse could send next to understand or confirm what the patient needs. Each has exactly two short, "
+        "distinct answers (1 to 4 words). Calm, plain words; never medical advice. Return a JSON array of two "
+        'objects: {"question": "...", "options": ["...", "..."]}.', context)
+    if not isinstance(items, list) or len(items) != 2:
+        raise ValueError("Unexpected AI response")
+    out = []
+    for item in items:
+        q = str((item or {}).get("question", "")).strip()
+        opts = [str(o).strip() for o in (item or {}).get("options") or []]
+        if not 0 < len(q) <= 120 or len(opts) != 2 or not all(0 < len(o) <= 40 for o in opts) \
+                or opts[0].casefold() == opts[1].casefold():
+            raise ValueError("Invalid AI draft")
+        out.append({"question": q, "options": opts})
+    if out[0]["question"].casefold() == out[1]["question"].casefold():
+        raise ValueError("Invalid AI draft")
+    return out
+
+
 def validate_request_branches(branches):
     if not isinstance(branches, list) or len(branches) != 2 or not all(isinstance(item, dict) for item in branches):
         raise ValueError("Provide exactly two response branches.")
