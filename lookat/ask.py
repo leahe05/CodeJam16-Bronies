@@ -16,13 +16,8 @@ def suggest_questions(context: dict) -> dict:
     return {"questions": nurse_ai.suggest_questions(context), "source": "ai"}
 
 
-def fallback_questions(alert: dict | None) -> list:
-    """Rule-based questions when Claude is unavailable, chosen by what the open request is about."""
-    text = f"{(alert or {}).get('text', '')} {(alert or {}).get('reason') or ''}".lower()
-    kind = (alert or {}).get("kind")
-    if kind == "call" or "call signal" in text or "eyebrow" in text:
-        return [{"question": "Do you need help right away?", "options": ["Yes, now", "It can wait"]},
-                {"question": "Is it pain or breathing?", "options": ["Yes", "No, something else"]}]
+def _topic_questions(text: str):
+    text = text.lower()
     if "blanket" in text or "cold" in text:
         return [{"question": "Would you like one blanket or two?", "options": ["One", "Two"]},
                 {"question": "Should I turn the fan off too?", "options": ["Yes, please", "No, keep it on"]}]
@@ -35,5 +30,25 @@ def fallback_questions(alert: dict | None) -> list:
     if "position" in text or "pillow" in text:
         return [{"question": "Would you like to change position?", "options": ["Yes", "No"]},
                 {"question": "Left side or right side?", "options": ["Left", "Right"]}]
-    return [{"question": "Are you comfortable right now?", "options": ["Yes", "No"]},
-            {"question": "Do you need me to come in?", "options": ["Yes, please", "Not now"]}]
+    if "pain" in text or "breath" in text:
+        return [{"question": "Is it getting worse?", "options": ["Yes", "No"]},
+                {"question": "Should I come right now?", "options": ["Yes, now", "In a few minutes"]}]
+    return None
+
+
+def fallback_questions(alert: dict | None, answer: str | None = None, asked: str | None = None) -> list:
+    """Rule-based questions when Claude is unavailable: a follow-up to the patient's latest answer if it names a
+    topic, else by what the open request is about. Never the question just asked."""
+    text = f"{(alert or {}).get('text', '')} {(alert or {}).get('reason') or ''}".lower()
+    kind = (alert or {}).get("kind")
+    out = _topic_questions(answer or "")
+    if out is None and (kind == "call" or "call signal" in text or "eyebrow" in text):
+        out = [{"question": "Do you need help right away?", "options": ["Yes, now", "It can wait"]},
+               {"question": "Is it pain or breathing?", "options": ["Yes", "No, something else"]}]
+    out = out or _topic_questions(text) or \
+        [{"question": "Are you comfortable right now?", "options": ["Yes", "No"]},
+         {"question": "Do you need me to come in?", "options": ["Yes, please", "Not now"]}]
+    if asked and any(q["question"].casefold() == asked.casefold() for q in out):
+        out = [q for q in out if q["question"].casefold() != asked.casefold()] + \
+              [{"question": "Is there anything else you need?", "options": ["Yes", "No, thank you"]}]
+    return out

@@ -367,7 +367,8 @@ class Live:
             room = self.room.state()
             facts = [f.get("text") for f in (self.facts or [])][:12]
             last = [{"from": c.get("from"), "text": c.get("text")} for c in self.conversation[-4:]]
-        key = (alert or {}).get("id"), (alert or {}).get("text")
+        key = (alert or {}).get("id"), (alert or {}).get("text"), len(self.conversation), \
+            (self.conversation[-1].get("text") if self.conversation else None)   # a new answer: new follow-ups
         cache = getattr(self, "_questions_cache", None)
         if cache and cache[0] == key:
             return cache[1]
@@ -379,8 +380,12 @@ class Live:
             res = ask.suggest_questions(context)
         except Exception:   # noqa: BLE001 - no key or an AI error: rule-based questions
             from lookat.ask import fallback_questions
-            res = {"questions": fallback_questions(alert), "source": "fallback"}
-        out = {**res, "about": (alert or {}).get("text"), "alert_id": (alert or {}).get("id")}
+            answer = next((c.get("text") for c in reversed(last) if c.get("from") == "patient"), None)
+            asked = next((c.get("text") for c in reversed(last) if c.get("from") == "nurse"), None)
+            res = {"questions": fallback_questions(alert, answer, asked), "source": "fallback"}
+        answer = next((c for c in reversed(last) if c.get("from") == "patient"), None)
+        out = {**res, "about": (alert or {}).get("text"), "alert_id": (alert or {}).get("id"),
+               "after": answer.get("text") if answer and last and last[-1] is answer else None}
         self._questions_cache = (key, out)
         return out
 

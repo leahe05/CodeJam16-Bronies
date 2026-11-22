@@ -993,7 +993,9 @@ function renderRoom(agent, data) {
 function renderSuggestedQuestions(agent, data) {
   const box = $("suggested-questions");
   const open = list(data?.alerts).filter(alert => !alert.done);
-  const key = data ? JSON.stringify([agent.origin, open[0]?.id ?? null, open[0]?.text ?? null]) : null;
+  const last = list(data?.conversation).at(-1);
+  const key = data ? JSON.stringify([agent.origin, open[0]?.id ?? null, open[0]?.text ?? null,
+    list(data?.conversation).length, last?.text ?? null]) : null;   // a new answer -> new follow-up suggestions
   if (data && !data.simulation && agent.state === "online" && agent.questionsKey !== key && !agent.questionsLoading) {
     agent.questionsLoading = true;
     const body = agent.data?.patient_id_guard ? { patient_id: agent.data.patient.id } : {};
@@ -1010,7 +1012,8 @@ function renderSuggestedQuestions(agent, data) {
   updateRegion(box, [s, agent.question, $("question").disabled], () => {
     if (box.hidden) return [];
     const head = element("p", "suggested-head",
-      (s.about ? `Suggested for: ${s.about}` : "Suggested questions") + (s.source === "ai" ? " · drafted with Claude" : ""));
+      (s.after ? `Next, after "${s.after}"` : s.about ? `Suggested for: ${s.about}` : "Suggested questions")
+      + (s.source === "ai" ? " · drafted with Claude" : ""));
     const chips = list(s.questions).map(item => {
       const chip = button("", "suggested-chip" + (agent.question === item.question ? " picked" : ""), () => {
         agent.question = item.question;

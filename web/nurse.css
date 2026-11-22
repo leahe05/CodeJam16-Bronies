@@ -432,3 +432,9 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: #3b82f6
 .suggested-chip.picked { border-color: #2563eb; background: #dbeafe; }
 .suggested-chip b { font-weight: 650; }
 .suggested-chip small { color: var(--muted); }
+
+/* the patient list is a strip of cards above the patient panel, so the conversation + question box get the full width */
+.dashboard { width: min(92rem, calc(100% - 2rem)); }
+.patient-grid { grid-template-columns: minmax(0, 1fr); }
+.patient-list { grid-template-columns: repeat(auto-fill, minmax(min(100%, 15rem), 1fr)); max-height: none; margin-top: .6rem; }
+.topbar .wrap { width: min(92rem, calc(100% - 2rem)); }

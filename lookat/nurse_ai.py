@@ -157,7 +157,9 @@ def suggest_questions(context):
     items = _request_json(
         "A patient who can only answer by looking left or right at a screen needs their nurse. Using the open "
         "request, the room and the patient's facts, suggest exactly two different short questions (at most 10 words) "
-        "the nurse could send next to understand or confirm what the patient needs. Each has exactly two short, "
+        "the nurse could send next to understand or confirm what the patient needs. If the recent conversation ends "
+        "with the patient's answer, both questions must follow up on that answer (e.g. 'Too warm' -> offer the fan, "
+        "ask how warm); never repeat a question already asked. Each has exactly two short, "
         "distinct answers (1 to 4 words). Calm, plain words; never medical advice. Return a JSON array of two "
         'objects: {"question": "...", "options": ["...", "..."]}.', context)
     if not isinstance(items, list) or len(items) != 2:
