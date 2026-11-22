@@ -72,3 +72,11 @@ def test_ai_questions_never_offer_three_alternatives(monkeypatch):
     monkeypatch.setattr(nurse_ai, "_request_json", lambda instruction, payload: next(drafts))
     out = nurse_ai.suggest_questions({"patient_request": "Patient used the call signal"})
     assert out[0]["options"] == ["I need something", "I am uncomfortable"]     # the 3-option draft was redone
+
+
+def test_alternatives_count():
+    from lookat.nurse_ai import _alternatives
+    assert _alternatives("Do you need something, or are you uncomfortable?") == 1
+    assert _alternatives("Would you like one blanket or two?") == 1
+    assert _alternatives("Is it pain, breathing or bleeding?") == 2
+    assert _alternatives("Is it pain, breathing, or bleeding?") == 2

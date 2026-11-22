@@ -369,6 +369,9 @@ class Live:
             last = [{"from": c.get("from"), "text": c.get("text")} for c in self.conversation[-4:]]
             pairs = [{"question": q["question"], "answer": q["answer"]}      # what draft_question narrows from
                      for q in self.session.get("thread", []) if q.get("kind", "question") == "question" and q.get("answer")]
+            answers = [c for c in self.conversation if c.get("from") == "patient"]
+            key = (alert or {}).get("id"), (alert or {}).get("text"), len(answers), \
+                (answers[-1].get("text") if answers else None)   # only a new patient answer: new follow-ups
         profile = {}
         if self.nurse is not None:
             try:
@@ -377,9 +380,6 @@ class Live:
                            if k in prof}
             except Exception:   # noqa: BLE001 - the profile is extra context only
                 profile = {}
-        answers = [c for c in self.conversation if c.get("from") == "patient"]
-        key = (alert or {}).get("id"), (alert or {}).get("text"), len(answers), \
-            (answers[-1].get("text") if answers else None)       # only a new patient answer: new follow-ups
         cache = getattr(self, "_questions_cache", None)
         if cache and cache[0] == key:
             return cache[1]

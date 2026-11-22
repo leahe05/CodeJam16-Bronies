@@ -996,13 +996,18 @@ function renderSuggestedQuestions(agent, data) {
   const answers = list(data?.conversation).filter(line => line.from === "patient");
   const key = data ? JSON.stringify([agent.origin, open[0]?.id ?? null, open[0]?.text ?? null,
     answers.length, answers.at(-1)?.text ?? null]) : null;   // only a new PATIENT answer brings new follow-ups
-  if (data && !data.simulation && agent.state === "online" && agent.questionsKey !== key && !agent.questionsLoading) {
+  if (data && !data.simulation && agent.state === "online" && agent.questionsKey !== key && !agent.questionsLoading
+      && (agent.questionsRetryAt ?? 0) <= Date.now()) {
     agent.questionsLoading = true;
     const body = agent.data?.patient_id_guard ? { patient_id: agent.data.patient.id } : {};
     request(agent.origin, "/questions", body).then(result => {
-      if (result?.ok) { agent.suggested = { key, ...result }; agent.sentQuestion = null; }
-    }).catch(() => {}).finally(() => {
-      agent.questionsKey = key;
+      if (!result?.ok) throw new Error("no suggestions");
+      agent.suggested = { key, ...result };
+      agent.sentQuestion = null;
+      agent.questionsKey = key;                     // only a success settles this key
+    }).catch(() => {
+      agent.questionsRetryAt = Date.now() + 5000;   // failed: try again in 5 s (the old cards stay, dimmed)
+    }).finally(() => {
       agent.questionsLoading = false;
       render();
     });
