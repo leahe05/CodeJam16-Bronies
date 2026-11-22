@@ -201,7 +201,9 @@
       while (performance.now() < end) { const m = measure(); if (m) vals.push(m.brow); await wait(40); }
       return vals.length ? pick(vals) : null;
     }
-    for (let attempt = 0; attempt < 2; attempt++) {
+    // ONE round of 3 raises, never repeated. Any raise the camera can tell apart from rest counts
+    // (was > 0.012 + a second round, which a weaker webcam failed again and again); B redoes it.
+    for (let attempt = 0; attempt < 1; attempt++) {
       msg("Relax your face", "Look at the screen.");
       say("Relax your face.");
       await wait(1500);
@@ -217,16 +219,14 @@
         await wait(1300);
       }
       const peak = median(peaks.filter((v) => v != null));
-      if (rest != null && peak != null && peak - rest > 0.012) {
+      console.log("WG brows measured", { rest, peak });
+      if (rest != null && peak != null && peak - rest > 0.004) {
         brow.thr = rest + 0.5 * (peak - rest);
         brow.rel = brow.thr - 0.3 * (brow.thr - rest);
         brow.start = rest + 0.2 * (peak - rest);           // starting to rise: freeze the gaze from here
         console.log("WG brows", { rest, peak, thr: brow.thr });
         break;
       }
-      msg("Let's try that again", "Raise your eyebrows as high as you can.");
-      say("Let's try that again. Raise your eyebrows as high as you can.");
-      await wait(2500);
     }
     if (brow.thr == null) msg("Eyebrows not detected", "Move closer to the camera, light your face, then press B.");
     else cal.remove();
