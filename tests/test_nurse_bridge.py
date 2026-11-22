@@ -419,7 +419,18 @@ def test_claude_follow_up_narrows_down_from_the_answers_so_far(tmp_path, monkeyp
     draft = live.nurse_action("question/draft", {"topic": ""})
     assert draft["ok"] and draft["question"] == "Where is the pain?"
     assert seen["payload"]["conversation_so_far"] == [{"question": "Are you in pain?", "answer": "Yes"}]
-    assert "MORE SPECIFIC" in seen["instruction"] and '"Other"' in seen["instruction"]
+    assert "BROAD to SPECIFIC" in seen["instruction"] and '"Other"' in seen["instruction"]
+    assert "comfort check-in" not in seen["instruction"]       # the old prompt jumped to "warm or cold?"
+
+
+def test_claude_draft_with_a_wordy_next_step_is_shortened_not_dropped(monkeypatch):
+    long_step = "Check in with the patient about their request, " * 6
+    monkeypatch.setattr(nurse_ai, "_request_json", lambda instruction, payload: {
+        "question": "Do you need something, or are you uncomfortable?", "branches": [
+            {"label": "I need something", "next_step": long_step},
+            {"label": "I am uncomfortable", "next_step": "Ask where."}]})
+    draft = nurse_ai.draft_question({"status": "awake"}, conversation=[])
+    assert draft["ok"] and len(draft["branches"][0]["next_step"]) <= 160
 
 
 def test_request_question_answered_other_gets_its_own_next_step(tmp_path):

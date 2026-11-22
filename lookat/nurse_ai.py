@@ -18,10 +18,20 @@ ANSWER_CHOICE_GUIDANCE = (
 OTHER = "Other"                 # added to every nurse question on the patient screen (lookat/nurse_bridge.py)
 OTHER_BRANCH = {"label": OTHER, "next_step": "Draft a more specific follow-up question with Claude."}
 NARROWING = (
-    'conversation_so_far lists the questions already asked in this conversation and the patient answers, '
-    'oldest first. If it has answers, the new question must build on the latest answer and be MORE SPECIFIC '
-    'than the previous question (narrow it down, e.g. pain -> where -> how bad); never repeat a question. '
-    'If the latest answer was "Other", ask about the most likely remaining possibilities instead. '
+    'Ask like a triage tree: from BROAD to SPECIFIC, one level per question, so the patient is never asked a '
+    'narrow guess about something that may not be why they called. '
+    'Level 1, when the reason is not known yet: the broadest split, e.g. "Do you need something, or are you '
+    'uncomfortable?" with answers "I need something" / "I am uncomfortable". '
+    'Level 2 narrows the chosen branch, e.g. need something -> "Food or drink" / "Medicine"; '
+    'uncomfortable -> "Upper body" / "Lower body". '
+    'Level 3 and deeper narrow again, e.g. food or drink -> "Water" / "Something to eat"; '
+    'upper body -> "Head or neck" / "Chest or arms"; then how it feels or how bad. '
+    'conversation_so_far lists the questions already asked and the patient answers, oldest first. '
+    'Start at level 1 unless the patient request, topic or answers so far already settle the broad reason; '
+    'then ask exactly one level below what is known, building on the latest answer. Never skip levels '
+    '(no "warm or cold?" before you know the patient is uncomfortable) and never repeat a question. '
+    'If the latest answer was "Other", stay at the same level and offer the next two most likely categories '
+    'at that level instead (e.g. after Other at level 1: "I want to talk to someone" / "Something about my room"). '
 )
 
 
@@ -202,8 +212,7 @@ def draft_question(profile, *, request=None, topic="", conversation=None):
     try:
         result = _request_json(
             "Draft one brief, patient-facing question and exactly two distinct short answers the patient can "
-            "select by gaze. Clarify the supplied request or topic. If neither is present, ask a neutral "
-            "comfort check-in guided by the patient's preferences. Don't assume the patient has any unmet needs. "
+            "select by gaze, to find out what the patient needs. Don't assume the patient has any particular need. "
             + NARROWING + ANSWER_CHOICE_GUIDANCE +
             'For each answer suggest a next step for the nurse to review. For "Other", suggest a follow-up question. '
             "Do not diagnose, suggest "
@@ -216,8 +225,13 @@ def draft_question(profile, *, request=None, topic="", conversation=None):
         question = result.get("question") if isinstance(result, dict) else None
         if not isinstance(question, str) or not 1 < len(question.strip()) <= 140 or not question.strip().endswith("?"):
             raise ValueError("Invalid Claude question")
+        branches = result.get("branches")
+        if isinstance(branches, list):          # a wordy next step is shortened, not a reason to drop the draft
+            branches = [{**item, "next_step": _short(item["next_step"], 160)}
+                        if isinstance(item, dict) and isinstance(item.get("next_step"), str) else item
+                        for item in branches]
         return {"ok": True, "source": "ai", "question": question.strip(),
-                "branches": validate_request_branches(result.get("branches"))}
+                "branches": validate_request_branches(branches)}
     except Exception as error:
         return {"ok": False, "error": failure_reason(error)}
 
