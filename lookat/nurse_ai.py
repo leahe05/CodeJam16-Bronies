@@ -10,6 +10,11 @@ from lookat.nurse_patient_profile import CARE_CHOICES
 
 
 DEFAULT_MODEL = "claude-haiku-5-5"
+ANSWER_CHOICE_GUIDANCE = (
+    'Use Yes and No for yes-or-no questions. For open-ended questions, usually give the most plausible '
+    'specific answer and "Other" so the patient can signal a different answer. When a question explicitly '
+    'offers exactly two alternatives, use those alternatives. '
+)
 
 
 class ClaudeNotConfigured(ValueError):
@@ -64,7 +69,7 @@ def failure_reason(error):
     if type(error).__name__ == "APIConnectionError":
         return "The app could not connect to Claude. Check network or proxy settings."
     if isinstance(error, ClaudeNotConfigured):
-        return "No Claude API key is configured. Start the demo with --prompt-claude-key."
+        return "No Claude API key is configured. Set ANTHROPIC_API_KEY before starting LookAt."
     if isinstance(error, ImportError):
         return "The Anthropic Python package could not be loaded. Check the demo dependencies."
     if isinstance(error, ValueError):
@@ -117,7 +122,7 @@ def _draft(instruction, payload, count, max_length):
 def make_options(question, context):
     options = _draft(
         "Suggest exactly two distinct, short answers a patient can select by gaze. "
-        "Use Yes and No for yes-or-no questions. Use neutral patient-facing language.",
+        + ANSWER_CHOICE_GUIDANCE + "Use neutral patient-facing language.",
         {"question": question, "context": context}, 2, 60,
     )
     return {"options": options, "source": "ai"}
@@ -129,7 +134,7 @@ def validate_request_branches(branches):
     cleaned = []
     for item in branches:
         label, next_step = item.get("label"), item.get("next_step")
-        if (not isinstance(label, str) or not 0 < len(label.strip()) <= 60
+        if (not isinstance(label, str) or not 0 < len(label.strip()) <= 60 or len(label.strip().splitlines()) != 1
                 or not isinstance(next_step, str) or not 0 < len(next_step.strip()) <= 160):
             raise ValueError("Each branch needs a short answer and a nurse next step.")
         cleaned.append({"label": label.strip(), "next_step": next_step.strip()})
@@ -150,7 +155,7 @@ def default_request_branches(question):
     if re.match(r"\b(?:what|which|where|when|how)\b", question, flags=re.IGNORECASE):
         return [
             {"label": "Help with this request", "next_step": "Confirm the details of the original request."},
-            {"label": "Something else", "next_step": "Ask what else the patient would like."},
+            {"label": "Other", "next_step": "Ask a short follow-up about what else the patient would like."},
         ]
     return [
         {"label": "Yes", "next_step": "Review the confirmed request."},
@@ -163,8 +168,8 @@ def draft_request_branches(question, request, profile):
     try:
         result = _request_json(
             "Draft two distinct short responses to the nurse's question for a patient to choose by gaze. "
-            "Use Yes and No when the question is yes-or-no, and use the actual alternatives for an either/or question. "
-            "For each response include a short next step for the nurse to review based on that answer. "
+            + ANSWER_CHOICE_GUIDANCE +
+            'For each response include a short next step for the nurse to review. For "Other", suggest a follow-up question. '
             "Do not diagnose, suggest medication, or claim that care was performed. "
             'Return an array of exactly two objects with keys "label" and "next_step".',
             {"question": question, "patient_request": request, "patient_context": context},
@@ -173,6 +178,33 @@ def draft_request_branches(question, request, profile):
     except Exception as error:
         return {"branches": default_request_branches(question), "source": "fallback",
                 "fallback_reason": failure_reason(error)}
+
+
+def draft_question(profile, *, request=None, topic=""):
+    if not isinstance(topic, str) or len(topic.strip()) > 300:
+        return {"ok": False, "error": "Enter a topic of up to 300 characters."}
+    context = {key: profile[key] for key in ("status", "awareness", "room", "last_meal", "preferences", "habits")
+               if key in profile}
+    try:
+        result = _request_json(
+            "Draft one brief, patient-facing question and exactly two distinct short answers the patient can "
+            "select by gaze. Clarify the supplied request or topic. If neither is present, ask a neutral "
+            "comfort check-in guided by the patient's preferences. Don't assume the patient has any unmet needs. "
+            + ANSWER_CHOICE_GUIDANCE +
+            'For each answer suggest a next step for the nurse to review. For "Other", suggest a follow-up question. '
+            "Do not diagnose, suggest "
+            "medication, direct treatment, or claim care was performed. The nurse must approve the draft. "
+            'Return an object with "question" (at most 140 characters) and "branches", an array of exactly '
+            'two objects with "label" (at most 60 characters) and "next_step" (at most 160 characters).',
+            {"patient_request": request, "topic": topic.strip(), "patient_context": context},
+        )
+        question = result.get("question") if isinstance(result, dict) else None
+        if not isinstance(question, str) or not 1 < len(question.strip()) <= 140 or not question.strip().endswith("?"):
+            raise ValueError("Invalid Claude question")
+        return {"ok": True, "source": "ai", "question": question.strip(),
+                "branches": validate_request_branches(result.get("branches"))}
+    except Exception as error:
+        return {"ok": False, "error": failure_reason(error)}
 
 
 def refine_checkin(proposal):
@@ -191,8 +223,44 @@ def refine_checkin(proposal):
     ]}
 
 
+def assess_status(profile, changes):
+    """Assess a patient-agent update for a nurse-reviewed comfort check-in or concern."""
+    context = {key: profile[key] for key in ("status", "awareness", "room", "habits",
+                                            "minutes_past_bedtime") if key in profile}
+    context["preferences"] = profile.get("_comfort_preferences", [])
+    result = _request_json(
+        "Review a patient agent's changes for a fictional bedside comfort demo. Default to ignore for normal "
+        "activity, isolated wakefulness, minor sensor fluctuations, or a concern already handled by the patient agent. "
+        "Choose ask when a concrete non-clinical comfort question fits the observed change and known preferences. "
+        "Only ask when the patient is awake. Choose flag only for a concrete unresolved change the nurse should see "
+        "even without asking the patient. Base everything on these observations. Never diagnose, infer an emergency, "
+        "suggest medication or treatment, or claim any care was done. These are suggestions for nurse review. "
+        'Return an object with "action" ("ignore", "ask", or "flag") and "rationale" (one brief sentence). '
+        'For ask or flag, include a short patient-facing yes-or-no "question" and a matching "choice" from '
+        'the care options. If the patient is asleep, a flagged question is for the nurse to consider for later.',
+        {"patient_context": context, "changes": changes,
+         "care_choices": {key: values[0] for key, values in CARE_CHOICES.items()}},
+    )
+    action = result.get("action") if isinstance(result, dict) else None
+    if action == "ignore":
+        return None
+    rationale = result.get("rationale") if action in ("ask", "flag") else None
+    if not isinstance(rationale, str) or not rationale.strip():
+        raise ValueError("Invalid Claude status assessment")
+    assessment = {"action": action, "rationale": _short(rationale)}
+    if action == "ask" and profile.get("awareness", {}).get("state") != "awake":
+        return None
+    choice, question = result.get("choice"), result.get("question")
+    if (not isinstance(choice, str) or choice not in CARE_CHOICES or not isinstance(question, str)
+            or not 1 < len(question.strip()) <= 140 or not question.strip().endswith("?")):
+        raise ValueError("Invalid Claude check-in question")
+    assessment["step"] = {"question": question.strip(), "request": CARE_CHOICES[choice][2]}
+    return assessment
+
+
 def decide_request(request, profile, confirmed=False):
-    context = {key: profile[key] for key in ("room", "last_meal", "preferences", "habits") if key in profile}
+    context = {key: profile[key] for key in ("status", "awareness", "room", "last_meal", "preferences", "habits")
+               if key in profile}
     result = _request_json(
         "You are the nurse supervisor in a fictional comfort-care demo. Rank this request urgent, soon, or routine "
         "from what the patient actually reports. Give a short rationale and a practical recommendation for the nurse, one sentence each (under 200 characters). "

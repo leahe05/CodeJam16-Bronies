@@ -20,6 +20,8 @@ let audio = null;
 let soundEnabled = false;
 let feedbackTimer;
 let requestQuestion = null;
+let arrivalEta = null;
+let etaReminder = null;
 
 function element(tag, className, text) {
   const node = document.createElement(tag);
@@ -73,7 +75,7 @@ function storeAgents() {
 async function request(origin, path = "", body) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(),
-    ["/suggest", "/proposal/refine", "/alert/question/draft"].includes(path) ? 20000 : 5000);
+    ["/suggest", "/proposal/refine", "/alert/question/draft", "/question/draft"].includes(path) ? 20000 : 5000);
   try {
     const response = await fetch(origin + nursePath + path, {
       cache: "no-store",
@@ -168,6 +170,11 @@ async function poll(agent) {
       const data = await request(agent.origin);
       if (data?.v !== 1 || !("alerts" in data)) throw new Error("Unexpected nurse API response.");
       if (agents.get(agent.origin) !== agent || revision !== agent.revision) return;
+      if (data.patient_id_guard && agent.data?.patient?.id !== data.patient.id) {
+        delete agent.question;
+        delete agent.options;
+        delete agent.optionsSource;
+      }
       assignPatientColor(agent, data.patient);
       if (!Array.isArray(data.history)) data.observedHistory = observeHistory(agent, data);
       attachRequestReplies(agent, data);
@@ -270,7 +277,8 @@ async function act(agent, path, body, success, onSuccess, onError) {
   agent.revision += 1;
   render();
   try {
-    const result = await request(agent.origin, path, body);
+    const payload = agent.data?.patient_id_guard ? { ...body, patient_id: agent.data.patient.id } : body;
+    const result = await request(agent.origin, path, payload);
     if (!result?.ok) throw new Error(result?.error || "The action could not be completed.");
     if (agents.get(agent.origin) !== agent) return;
     if (path === "/alert") {
@@ -306,6 +314,7 @@ function showTab(tab, moveFocus = false) {
 }
 
 function alertOrigin(alert) {
+  if (alert.delivery === "status-update") return "Nurse supervisor concern";
   if (alert.delivery === "check-in") return "Reported at check-in";
   if (alert.delivery === "proactive" && alert.kind !== "call") return "Proactive patient-agent request";
   if (alert.source === "patient") return "Patient requested";
@@ -338,6 +347,10 @@ function alertCard({ agent, alert }, handled) {
   card.append(meta, element("h3", "", alert.request || alert.text || "Patient alert"));
   if (!alert.request && alert.kind === "call") card.append(element("p", "muted", "Patient did not specify what they need."));
   if (alert.reason) card.append(element("p", "muted", alert.reason));
+  if (alert.suggested_question && !handled) {
+    card.append(element("p", "", "Suggested question · " + alert.suggested_question));
+  }
+  if (alert.eta_minutes) card.append(element("p", "muted", `Initial arrival estimate · ${alert.eta_minutes} min`));
   if (alert.question_reply) {
     card.append(element("p", "", "Patient answered: " + alert.question_reply.answer),
       element("p", "request-recommendation", alert.question_reply.next_step));
@@ -371,6 +384,11 @@ function alertCard({ agent, alert }, handled) {
       control.disabled = agent.state !== "online" || agent.busy;
       row.append(control);
     });
+    if (agent.data?.arrival_eta && alert.eta_available !== false && ["page", "call"].includes(alert.kind)) {
+      const eta = button("On my way with ETA", "button", () => openArrivalEta(agent, alert));
+      eta.disabled = agent.state !== "online" || agent.busy;
+      row.append(eta);
+    }
     const ask = button("Ask a question", "button", () => openRequestQuestion(agent, alert));
     ask.id = "ask-request-" + encodeURIComponent(JSON.stringify([agent.origin, alert.id]));
     ask.disabled = agent.state !== "online" || agent.busy || agent.data?.session?.waiting === true;
@@ -410,14 +428,103 @@ function renderAlerts() {
 }
 
 function openRequestQuestion(agent, alert) {
-  requestQuestion = { agent, alertId: alert.id, drafted: false };
+  requestQuestion = { agent, alertId: alert.id, patientId: agent.data?.patient?.id, drafted: false };
   $("request-question-form").reset();
+  $("request-question").value = alert.suggested_question || "";
   markPatient($("request-question-context"), agent);
   updateText($("request-question-context"), `${agentName(agent)} · ${alert.request || alert.text}`);
   requestQuestionFeedback("");
   renderRequestQuestion();
   $("request-question-dialog").showModal();
 }
+
+function openArrivalEta(agent, alert) {
+  arrivalEta = { agent, alertId: alert.id, patientId: agent.data?.patient?.id };
+  $("arrival-eta-form").reset();
+  updateText($("arrival-eta-context"), agentName(agent));
+  updateText($("arrival-eta-feedback"), "");
+  $("send-arrival-eta").disabled = false;
+  $("arrival-eta-dialog").showModal();
+}
+
+$("arrival-eta-dialog").addEventListener("close", () => { arrivalEta = null; });
+$("cancel-arrival-eta").addEventListener("click", () => $("arrival-eta-dialog").close());
+$("arrival-eta-form").addEventListener("submit", event => {
+  event.preventDefault();
+  if (!arrivalEta) return;
+  const draft = arrivalEta;
+  if (draft.patientId !== draft.agent.data?.patient?.id) {
+    updateText($("arrival-eta-feedback"), "The active patient changed. Open the current patient’s request.");
+    return;
+  }
+  if (draft.agent.busy || draft.agent.state !== "online") {
+    updateText($("arrival-eta-feedback"), "The patient connection is busy or unavailable. Try again.");
+    return;
+  }
+  $("send-arrival-eta").disabled = true;
+  act(draft.agent, "/alert/eta", { id: draft.alertId, eta_minutes: $("arrival-eta-minutes").valueAsNumber },
+    "Arrival estimate sent.", () => {
+      if (arrivalEta === draft) $("arrival-eta-dialog").close();
+    }, message => {
+      if (arrivalEta !== draft) return;
+      $("send-arrival-eta").disabled = false;
+      updateText($("arrival-eta-feedback"), message);
+    });
+});
+
+function closeEtaReminder() {
+  etaReminder = null;
+  $("eta-reminder-dialog").close();
+}
+
+function renderEtaReminder(roster) {
+  if (etaReminder) {
+    const { agent, patientId, reminder } = etaReminder;
+    const pending = list(agent.data?.eta_reminders).some(item => item.id === reminder.id && item.version === reminder.version);
+    if (roster.includes(agent) && agent.state === "online" && agent.data?.connected !== false &&
+        agent.data?.patient?.id === patientId && pending) {
+      const disabled = agent.busy;
+      $("eta-attended").disabled = $("eta-extend").disabled = $("eta-extension-minutes").disabled = disabled;
+      return;
+    }
+    closeEtaReminder();
+  }
+  if (document.querySelector("dialog[open]")) return;
+  const agent = roster.find(item => item.state === "online" && !item.busy && item.data?.connected !== false &&
+    list(item.data?.eta_reminders).length);
+  if (!agent) return;
+  const reminder = agent.data.eta_reminders[0];
+  etaReminder = { agent, patientId: agent.data.patient?.id, reminder };
+  $("eta-reminder-form").reset();
+  $("eta-attended").disabled = $("eta-extend").disabled = $("eta-extension-minutes").disabled = false;
+  updateText($("eta-reminder-heading"), `Have you attended to ${agentName(agent)}?`);
+  updateText($("eta-reminder-request"), reminder.request);
+  updateText($("eta-reminder-feedback"), "");
+  $("eta-reminder-dialog").showModal();
+}
+
+function respondToEtaReminder(action) {
+  const draft = etaReminder;
+  if (!draft || draft.agent.data?.patient?.id !== draft.patientId) return;
+  const { id, version } = draft.reminder;
+  const body = { id, version, action };
+  if (action === "extend") body.eta_minutes = $("eta-extension-minutes").valueAsNumber;
+  act(draft.agent, "/alert/eta/follow-up", body,
+    action === "attended" ? "Request marked attended." : "Updated arrival estimate sent.", () => {
+      draft.agent.data.eta_reminders = list(draft.agent.data.eta_reminders)
+        .filter(item => item.id !== id || item.version !== version);
+      if (etaReminder === draft) closeEtaReminder();
+    }, message => {
+      if (etaReminder === draft) updateText($("eta-reminder-feedback"), message);
+    });
+}
+
+$("eta-reminder-dialog").addEventListener("cancel", event => event.preventDefault());
+$("eta-attended").addEventListener("click", () => respondToEtaReminder("attended"));
+$("eta-reminder-form").addEventListener("submit", event => {
+  event.preventDefault();
+  respondToEtaReminder("extend");
+});
 
 function requestQuestionFeedback(message) {
   $("request-question-feedback").hidden = !message;
@@ -426,12 +533,20 @@ function requestQuestionFeedback(message) {
 
 function renderRequestQuestion() {
   if (!requestQuestion) return;
-  const { agent, drafted } = requestQuestion;
+  const { agent, drafted, patientId } = requestQuestion;
+  if (agent.data?.patient_id_guard && agent.data.patient.id !== patientId) {
+    $("request-question-dialog").close();
+    requestQuestion = null;
+    notify("The active patient changed. Open their request to continue.");
+    return;
+  }
   const disabled = agent.busy || agent.state !== "online" || agent.data?.session?.waiting === true;
   $("request-branches").hidden = !drafted;
   $("send-request-question").hidden = !drafted;
   $("draft-request-branches").classList.toggle("primary", !drafted);
   $("draft-request-branches").disabled = $("send-request-question").disabled = disabled;
+  $("draft-request-question").hidden = agent.data?.question_drafts !== true;
+  $("draft-request-question").disabled = disabled;
   $("request-question").disabled = agent.busy;
   for (const input of $("request-branches").querySelectorAll("input")) input.disabled = agent.busy;
 }
@@ -510,7 +625,8 @@ function renderProposals(roster) {
   const pending = roster.filter(agent => agent.data?.proposal);
   $("supervisor-panel").hidden = pending.length === 0;
   updateText($("supervisor-mode"), roster.some(agent => agent.data?.shift) ? "Simulated shift" :
-    roster.some(agent => agent.data?.tracked_demo) ? "Live patient input + simulated patient" : "Two-patient simulation");
+    roster.some(agent => agent.data?.tracked_demo) ? "Live patient input + simulated patient" :
+    roster.some(agent => agent.data?.patient_id_guard) ? "Live patient agent" : "Two-patient simulation");
   updateRegion($("proposals"), pending.map(agent => [
     agent.origin, agentName(agent), agent.patientColor, agent.data.patient.room, agent.data.proposal,
     agent.state, agent.busy, agent.data.session?.active, agent.data.ai_drafts,
@@ -743,8 +859,10 @@ function patientNotes(data) {
       ...vitalLines(bedside.vitals)
     ]),
     checkIn && note("Agent check-ins", [
-      `Every ${checkIn.interval_s} seconds`,
-      checkIn.time ? `Last reply ${checkIn.time}` : "Waiting for the patient agent’s reply",
+      checkIn.last_update && `Last status update ${checkIn.last_update}`,
+      `Scheduled check-in every ${checkIn.interval_s} seconds`,
+      checkIn.time ? `Last scheduled reply ${checkIn.time}` : "Waiting for the patient agent’s reply",
+      checkIn.status_review_error,
       checkIn.time && (checkIn.needs_attention ? "Requested nurse attention" :
         checkIn.suggested_question ? "Suggested a question" : "Nothing needs attention")
     ]),
@@ -818,6 +936,8 @@ function renderPatientActions(agent, data) {
   $("question").disabled = $("options").disabled = $("send-question").disabled = disabled || data?.session?.waiting === true;
   $("suggest-choices").hidden = !data;
   $("suggest-choices").disabled = $("send-question").disabled;
+  $("draft-question").hidden = data?.question_drafts !== true;
+  $("draft-question").disabled = $("send-question").disabled;
   $("send-message").hidden = !data || data.simulation;
   $("send-message").disabled = $("send-question").disabled;
   $("end-session").disabled = disabled;
@@ -828,8 +948,8 @@ function renderPatientActions(agent, data) {
   if ($("question").value !== (agent.question ?? "")) $("question").value = agent.question ?? "";
   if ($("options").value !== (agent.options ?? "Yes\nNo")) $("options").value = agent.options ?? "Yes\nNo";
   $("options-source").hidden = agent.optionsSource === "manual";
-  updateText($("options-source"), agent.optionsSource === "ai" ?
-    "Choices drafted with Claude." : "Default choices are placeholders for Claude.");
+  updateText($("options-source"), agent.optionsSource === "ai_question" ? "Question and choices drafted with Claude." :
+    agent.optionsSource === "ai" ? "Choices drafted with Claude." : "Default choices are placeholders for Claude.");
 }
 
 // The nurse <-> patient conversation (GET /api/nurse "conversation"): questions, plain messages, the
@@ -874,13 +994,14 @@ function renderLatestReply(data) {
 
 function renderSimulation(agent, data) {
   const panel = $("simulation");
-  panel.hidden = !data?.simulation;
+  const simulated = data?.simulation;
   const choices = list(data?.profile?.care_choices);
-  updateRegion(panel, [agent.origin, data?.simulation, data?.agent_checkin?.interval_s, choices,
+  panel.hidden = !simulated && !(data?.patient_id_guard && choices.length);
+  updateRegion(panel, [agent.origin, simulated, panel.hidden, data?.agent_checkin?.interval_s, choices,
     agent.state, agent.busy], () => {
     if (panel.hidden) return [];
-    const rows = [element("h3", "", "Simulate patient input"),
-      element("p", "muted option-source", "Placeholder for requests from the live patient agent.")];
+    const rows = [element("h3", "", simulated ? "Simulate patient input" : "Care check-in")];
+    if (simulated) rows.push(element("p", "muted option-source", "Placeholder for requests from the live patient agent."));
     if (choices.length) {
       const label = element("label", "", "Care topic");
       label.htmlFor = "demo-care-choice";
@@ -894,12 +1015,16 @@ function renderSimulation(agent, data) {
       select.value = agent.careChoice || choices[0].id;
       select.addEventListener("change", () => { agent.careChoice = select.value; });
       const controls = element("div", "form-row");
-      const push = button("Simulate patient request", "button", () =>
-        act(agent, "/simulate/agent-request", { choice: select.value }, "The patient agent sent a request."));
       const draft = button("Suggest check-in", "button", () =>
         act(agent, "/check-in/suggest", { choice: select.value }, "Check-in queued for nurse review."));
-      push.disabled = draft.disabled = select.disabled = agent.busy || agent.state !== "online";
-      controls.append(push, draft);
+      draft.disabled = select.disabled = agent.busy || agent.state !== "online";
+      if (simulated) {
+        const push = button("Simulate patient request", "button", () =>
+          act(agent, "/simulate/agent-request", { choice: select.value }, "The patient agent sent a request."));
+        push.disabled = draft.disabled;
+        controls.append(push);
+      }
+      controls.append(draft);
       rows.push(label, select, controls);
     } else if (data.agent_checkin) {
       const push = button("Simulate agent request", "button", () =>
@@ -955,6 +1080,7 @@ function render() {
   renderSimulation(agent, data);
   renderHistory(data);
   renderRequestQuestion();
+  renderEtaReminder(roster);
   updateRegion($("notes"), [selected, data?.profile, data?.bedside, data?.agent_checkin, data?.next_visit, data?.session, data?.facts, data?.room, data?.last_visit,
     data?.routines, data?.recent, data?.summary], () => {
     const notes = data ? patientNotes(data) : [];
@@ -966,10 +1092,34 @@ $("request-question-dialog").addEventListener("close", () => { requestQuestion =
 $("cancel-request-question").addEventListener("click", () => $("request-question-dialog").close());
 $("request-question").addEventListener("input", () => {
   if (!requestQuestion) return;
-  requestQuestion.drafted = false;
+  if (!requestQuestion.generated) requestQuestion.drafted = false;
   requestQuestionFeedback("");
   renderRequestQuestion();
 });
+
+function applyRequestDraft(draft, branches, source, sourceText, question) {
+  if (requestQuestion !== draft) return;
+  if (question) $("request-question").value = question;
+  draft.generated = Boolean(question);
+  draft.source = source;
+  for (const [index, spot] of ["left", "right"].entries()) {
+    $("request-" + spot + "-label").value = branches[index].label;
+    $("request-" + spot + "-step").value = branches[index].next_step;
+  }
+  updateText($("request-branches-source"), sourceText);
+  draft.drafted = true;
+  requestQuestionFeedback("");
+}
+
+$("draft-request-question").addEventListener("click", () => {
+  const draft = requestQuestion;
+  if (!draft) return;
+  requestQuestionFeedback("Drafting a question and two choices…");
+  act(draft.agent, "/question/draft", { id: draft.alertId }, "Question and choices ready for review.", result => {
+    applyRequestDraft(draft, result.branches, result.source, "Question and choices drafted with Claude.", result.question);
+  }, message => { if (requestQuestion === draft) requestQuestionFeedback(message); });
+});
+
 $("request-question-form").addEventListener("submit", event => {
   event.preventDefault();
   if (!requestQuestion) return;
@@ -980,20 +1130,11 @@ $("request-question-form").addEventListener("submit", event => {
   requestQuestionFeedback("Preparing two choices…");
   act(draft.agent, supported ? "/alert/question/draft" : "/suggest",
     { id: draft.alertId, question }, "Choices ready for review.", result => {
-      if (requestQuestion !== draft) return;
       const branches = supported ? result.branches : defaultLegacyBranches(question, result.options, result.source);
-      draft.source = supported && result.source === "ai" ? "ai" : "fallback";
-      for (const [index, spot] of ["left", "right"].entries()) {
-        $("request-" + spot + "-label").value = branches[index].label;
-        $("request-" + spot + "-step").value = branches[index].next_step;
-      }
-      const sourceText = draft.source === "ai" ? "Both branches drafted with Claude." :
+      const source = supported && result.source === "ai" ? "ai" : "fallback";
+      const sourceText = source === "ai" ? "Both branches drafted with Claude." :
         ["Default branch text is a placeholder for Claude.", result.fallback_reason].filter(Boolean).join(" ");
-      updateText($("request-branches-source"), sourceText);
-      draft.drafted = true;
-      requestQuestionFeedback("");
-      renderRequestQuestion();
-      $("request-left-label").focus();
+      applyRequestDraft(draft, branches, source, sourceText);
     }, message => { if (requestQuestion === draft) requestQuestionFeedback(message); });
 });
 $("send-request-question").addEventListener("click", () => {
@@ -1081,6 +1222,15 @@ $("suggest-choices").addEventListener("click", () => {
     const options = list(result.options);
     agent.options = (agent.data.simulation ? options.slice(0, 2) : options).join("\n");
     agent.optionsSource = result.source;
+  });
+});
+$("draft-question").addEventListener("click", () => {
+  const agent = agents.get(selected);
+  const topic = $("question").value.trim();
+  act(agent, "/question/draft", { topic }, "Question and choices ready for review.", result => {
+    agent.question = result.question;
+    agent.options = result.branches.map(branch => branch.label).join("\n");
+    agent.optionsSource = "ai_question";
   });
 });
 $("question-form").addEventListener("submit", event => {

@@ -7,7 +7,7 @@ import time
 
 from lookat import nurse_ai
 from lookat.fake_api import Fake, opt, screen
-from lookat.nurse_link import NurseLink
+from lookat.nurse_link import NurseLink, eta_text, valid_eta_minutes
 from lookat.nurse_patient_profile import CARE_CHOICES, MEASUREMENTS, PATIENT_CONTEXT
 from lookat.nurse_shift import SHIFT_CAMERAS, ShiftPlayback
 from lookat.nurse_supervisor import DEFAULT_INTERVAL_S, NurseSupervisor
@@ -164,7 +164,8 @@ class SimulatedPatient(Fake):
         data["patient"] = {"id": self.patient_id, "name": self.patient, "room": self.room_name}
         report = self.supervisor.latest_report(self.patient_id)
         data.update(simulation=True, proposal=self.proposal(), next_visit=[], routines=[],
-                    request_question_branches=True,
+                    request_question_branches=True, question_drafts=True, arrival_eta=True,
+                    eta_reminders=self.nurse_link.eta_reminders(time.monotonic()),
                     profile=self.supervisor.latest_profile(self.patient_id),
                     alerts=self.supervisor.alerts(self.patient_id) + data["alerts"],
                     bedside=self.nurse_link.snapshot(time.monotonic()),
@@ -197,11 +198,48 @@ class SimulatedPatient(Fake):
                        "or look center and raise your eyebrows to call your nurse.",
                 show_call_nurse=False,
             )
+        message = self.nurse_link.eta_message(time.monotonic())
+        if message:
+            base["subtitle"] = " ".join(filter(None, (message, base.get("subtitle"))))
         return {**data, **base}
 
     def nurse_action(self, path, body):
+        if path == "alert/eta/follow-up":
+            return self.nurse_link.follow_up_eta(body, time.monotonic())
+        if path == "alert/eta":
+            minutes = body.get("eta_minutes")
+            if not valid_eta_minutes(minutes):
+                return {"ok": False, "error": "Enter a whole number of minutes from 1 to 120."}
+            with self.lock:
+                alert_id = body.get("id")
+                alert = next((item for item in self.supervisor.alerts(self.patient_id) + self.alerts
+                              if item["id"] == alert_id and not item["done"] and item["kind"] in ("page", "call")), None)
+                if alert is None:
+                    return {"ok": False, "error": "This patient request is no longer open."}
+                if alert_id.startswith("agent-"):
+                    if not self.supervisor.acknowledge(self.patient_id, alert_id, eta_minutes=minutes):
+                        return {"ok": False, "error": "This patient request is no longer open."}
+                    self.supervisor.resolve_question(self.patient_id, f"{alert_id}-question")
+                else:
+                    alert.update(done=True, eta_minutes=minutes)
+                now = time.monotonic()
+                request = alert.get("request") or alert["text"]
+                self.nurse_link.send_eta(alert_id, minutes, now, request=request)
+                self._interaction("Nurse", "Sent ETA", f"{request} · {eta_text(minutes)}")
+                return {"ok": True}
+        if path == "visit":
+            self.nurse_link.clear_eta()
         if path in ("alert/question/draft", "alert/question/send"):
             return self._request_question(path, body)
+        if path == "question/draft":
+            with self.lock:
+                alert = next((item for item in self.supervisor.alerts(self.patient_id) + self.alerts
+                              if item["id"] == body.get("id") and not item["done"]), None)
+                if "id" in body and alert is None:
+                    return {"ok": False, "error": "This request is no longer open."}
+                profile = self.patient_profile()
+            request = (alert.get("request") or alert["text"]) if alert is not None else None
+            return nurse_ai.draft_question(profile, request=request, topic=body.get("topic", ""))
         if path == "proposal/refine":
             return self._refine_proposal(body.get("id"))
         if path == "check-in/suggest":

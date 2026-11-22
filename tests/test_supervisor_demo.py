@@ -141,6 +141,18 @@ def test_patient_agent_can_push_and_retry_with_its_own_identity():
     assert morgan.nurse_json()["alerts"][0]["done"]
 
 
+def test_arrival_estimate_is_shown_only_to_the_target_simulated_patient():
+    avery, morgan = make_demo_patients(playback=ShiftPlayback())
+    result = morgan.nurse_action("patient/request", {"request": "Could you adjust my pillow?"})
+    body = {"id": result["id"], "eta_minutes": 3}
+    assert not avery.nurse_action("alert/eta", body)["ok"]
+    assert morgan.nurse_action("alert/eta", body)["ok"]
+    assert "about 3 minutes" in morgan.screen_json()["subtitle"]
+    assert avery.screen_json()["subtitle"] is None
+    assert morgan.nurse_action("visit", {})["ok"]
+    assert morgan.screen_json()["subtitle"] is None
+
+
 def eventually(predicate):
     deadline = time.monotonic() + 2
     while time.monotonic() < deadline:
@@ -334,6 +346,7 @@ def test_request_question_defaults_keep_two_alternatives_and_route_the_selected_
 
 def test_request_question_uses_claude_when_available_and_falls_back_for_invalid_drafts(monkeypatch):
     def response(instructions, payload):
+        assert '"Other"' in instructions and "Yes and No for yes-or-no questions" in instructions
         assert payload["patient_request"] == "Patient requests a drink."
         assert payload["question"] == "Would you like water?"
         return [
@@ -350,6 +363,7 @@ def test_request_question_uses_claude_when_available_and_falls_back_for_invalid_
     assert avery.screen_json()["screen"] == "idle"
     monkeypatch.setattr(nurse_ai, "_request_json", lambda *_: [{"label": "Only one answer", "next_step": "Review."}])
     assert nurse_ai.draft_request_branches("Would you like water?", "", {})["source"] == "fallback"
+    assert nurse_ai.draft_request_branches("What would help?", "", {})["branches"][1]["label"] == "Other"
 
 
 def test_request_question_reports_auth_failure_without_provider_details(monkeypatch):
@@ -365,6 +379,27 @@ def test_request_question_reports_auth_failure_without_provider_details(monkeypa
     assert draft["source"] == "fallback"
     assert "rejected the API key" in draft["fallback_reason"]
     assert "private-provider-detail" not in str(draft)
+
+
+def test_claude_can_draft_a_question_from_a_nurse_topic_in_the_simulator(monkeypatch):
+    avery, _ = make_demo_patients(playback=ShiftPlayback())
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    assert "No Claude API key" in avery.nurse_action("question/draft", {"topic": "Blankets"})["error"]
+
+    def generate(instruction, payload):
+        assert payload["topic"] == "Blankets" and payload["patient_request"] is None
+        return {"question": "Would you like a lighter blanket?", "branches": [
+            {"label": "Yes", "next_step": "Review the request for a lighter blanket."},
+            {"label": "No", "next_step": "Leave the blanket as it is."},
+        ]}
+
+    monkeypatch.setattr(nurse_ai, "_request_json", generate)
+    assert not avery.nurse_action("question/draft", {"id": "missing"})["ok"]
+    draft = avery.nurse_action("question/draft", {"topic": "Blankets"})
+    assert avery.nurse_json()["question_drafts"] and draft["source"] == "ai"
+    assert draft["question"] == "Would you like a lighter blanket?"
+    assert [branch["label"] for branch in draft["branches"]] == ["Yes", "No"]
+    assert avery.screen_json()["screen"] == "idle"
 
 
 def test_claude_key_prompt_requires_a_terminal_and_loads_only_into_the_process(monkeypatch):
