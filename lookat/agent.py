@@ -44,7 +44,7 @@ from lookat.clock import clock
 from lookat.memory import DEMO_CHART, PROFILES, Memory
 from lookat.state import log_event
 
-MODEL = "claude-opus-5-5"
+MODEL = "claude-sonnet-5-5"   # every patient-side call (episodes + Talk to AI menu); no fallback to another model
 CALL_TIMEOUT_S = 15
 MAX_TURNS = 8
 MAX_QUESTIONS = 3
@@ -638,10 +638,9 @@ class Agent:
         self.fallback = False
         messages = [{"role": "user", "content": f"Trigger: {reason}\nDecide what to do."}]
         for _ in range(MAX_TURNS):
-            resp = self.client.beta.messages.create(
+            resp = self.client.messages.create(          # only MODEL answers; if it fails, the rules take over
                 model=MODEL, max_tokens=4096, system=SYSTEM, tools=TOOLS, messages=messages,
-                output_config={"effort": "low"},
-                betas=["server-side-fallback-2026-07-01"], fallbacks="default")
+                output_config={"effort": "low"})
             if resp.stop_reason == "refusal":
                 raise RuntimeError("refusal")
             messages.append({"role": "assistant", "content": resp.content})
