@@ -14,7 +14,7 @@ def live_without_ai(monkeypatch):
 
 def test_fallback_questions_follow_the_request():
     call = fallback_questions({"kind": "call", "text": "Patient used the call signal"})
-    assert call[0]["question"] == "Do you need help right away?"
+    assert call[0]["options"] == ["I need something", "I am uncomfortable"]     # broad first
     blanket = fallback_questions({"kind": "page", "text": "Feels cold, would like a blanket."})
     assert "blanket" in blanket[0]["question"] and len(blanket[1]["options"]) == 2
     assert len(fallback_questions(None)) == 2
@@ -59,3 +59,16 @@ def test_after_an_answer_the_suggestions_follow_up(monkeypatch):
 def test_fallback_never_repeats_the_question_just_asked():
     qs = fallback_questions({"kind": "page", "text": "wants water"}, asked="Would you like some water now?")
     assert all(q["question"] != "Would you like some water now?" for q in qs) and len(qs) == 2
+
+
+def test_ai_questions_never_offer_three_alternatives(monkeypatch):
+    from lookat import nurse_ai
+    drafts = iter([
+        [{"question": "Is it pain, breathing, or something else?", "options": ["Pain", "Breathing"]},
+         {"question": "Do you need help now?", "options": ["Yes", "No"]}],
+        [{"question": "Do you need something, or are you uncomfortable?", "options": ["I need something", "I am uncomfortable"]},
+         {"question": "Do you need help right away?", "options": ["Yes", "No"]}],
+    ])
+    monkeypatch.setattr(nurse_ai, "_request_json", lambda instruction, payload: next(drafts))
+    out = nurse_ai.suggest_questions({"patient_request": "Patient used the call signal"})
+    assert out[0]["options"] == ["I need something", "I am uncomfortable"]     # the 3-option draft was redone

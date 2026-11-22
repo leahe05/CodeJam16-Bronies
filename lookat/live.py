@@ -367,14 +367,27 @@ class Live:
             room = self.room.state()
             facts = [f.get("text") for f in (self.facts or [])][:12]
             last = [{"from": c.get("from"), "text": c.get("text")} for c in self.conversation[-4:]]
-        key = (alert or {}).get("id"), (alert or {}).get("text"), len(self.conversation), \
-            (self.conversation[-1].get("text") if self.conversation else None)   # a new answer: new follow-ups
+            pairs = [{"question": q["question"], "answer": q["answer"]}      # what draft_question narrows from
+                     for q in self.session.get("thread", []) if q.get("kind", "question") == "question" and q.get("answer")]
+        profile = {}
+        if self.nurse is not None:
+            try:
+                prof = self.nurse.profile()
+                profile = {k: prof[k] for k in ("status", "awareness", "room", "last_meal", "preferences", "habits")
+                           if k in prof}
+            except Exception:   # noqa: BLE001 - the profile is extra context only
+                profile = {}
+        answers = [c for c in self.conversation if c.get("from") == "patient"]
+        key = (alert or {}).get("id"), (alert or {}).get("text"), len(answers), \
+            (answers[-1].get("text") if answers else None)       # only a new patient answer: new follow-ups
         cache = getattr(self, "_questions_cache", None)
         if cache and cache[0] == key:
             return cache[1]
-        context = {"open_request": {k: (alert or {}).get(k) for k in ("kind", "urgency", "text", "reason")} if alert else None,
+        context = {"patient_request": ((alert.get("request") or alert.get("text")) if alert else None),
+                   "request_kind": (alert or {}).get("kind"), "request_reason": (alert or {}).get("reason"),
+                   "patient_context": profile or {"facts": facts},
                    "room": {"temp_c": room["temp_c"], "lamp_on": room["lamp_on"], "fan_on": room["fan_on"]},
-                   "patient_facts": facts, "recent_conversation": last, "time": clock.hhmm()}
+                   "conversation_so_far": pairs[-8:], "time": clock.hhmm()}
         try:
             from lookat import ask
             res = ask.suggest_questions(context)

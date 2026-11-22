@@ -993,38 +993,48 @@ function renderRoom(agent, data) {
 function renderSuggestedQuestions(agent, data) {
   const box = $("suggested-questions");
   const open = list(data?.alerts).filter(alert => !alert.done);
-  const last = list(data?.conversation).at(-1);
+  const answers = list(data?.conversation).filter(line => line.from === "patient");
   const key = data ? JSON.stringify([agent.origin, open[0]?.id ?? null, open[0]?.text ?? null,
-    list(data?.conversation).length, last?.text ?? null]) : null;   // a new answer -> new follow-up suggestions
+    answers.length, answers.at(-1)?.text ?? null]) : null;   // only a new PATIENT answer brings new follow-ups
   if (data && !data.simulation && agent.state === "online" && agent.questionsKey !== key && !agent.questionsLoading) {
     agent.questionsLoading = true;
     const body = agent.data?.patient_id_guard ? { patient_id: agent.data.patient.id } : {};
     request(agent.origin, "/questions", body).then(result => {
-      if (result?.ok) agent.suggested = { key, ...result };
+      if (result?.ok) { agent.suggested = { key, ...result }; agent.sentQuestion = null; }
     }).catch(() => {}).finally(() => {
       agent.questionsKey = key;
       agent.questionsLoading = false;
       render();
     });
   }
-  const s = agent.suggested?.key === key ? agent.suggested : null;
-  box.hidden = !s || !list(s.questions).length;
-  updateRegion(box, [s, agent.question, $("question").disabled], () => {
+  // Seamless: the box never collapses. Until the first suggestions arrive it shows two placeholder cards; while
+  // new ones are drafted, the previous ones stay (dimmed) and are swapped in place.
+  const s = agent.suggested;
+  const stale = !s || s.key !== key;
+  const waiting = data?.session?.waiting === true;
+  const off = $("question").disabled;
+  box.hidden = !data || data.simulation;
+  updateRegion(box, [s, stale, waiting, off, agent.question, agent.sentQuestion], () => {
     if (box.hidden) return [];
     const head = element("div", "suggested-head");
-    head.append(element("span", "suggested-badge", s.source === "ai" ? "✦ Suggested by Claude" : "Suggested"),
-      element("span", "suggested-about", s.after ? `after "${s.after}"` : s.about ? `for: ${s.about}` : ""));
-    const off = $("question").disabled;
+    const note = waiting ? "waiting for the patient's answer…" : stale ? "updating…"
+      : s?.after ? `after "${s.after}"` : s?.about ? `for: ${s.about}` : "";
+    head.append(element("span", "suggested-badge", s?.source === "ai" ? "✦ Suggested by Claude" : "Suggested"),
+      element("span", "suggested-about" + (stale && !waiting ? " pulse" : ""), note));
+    if (!s) return [head, ...[0, 1].map(() => element("div", "suggested-card skeleton"))];
     const cards = list(s.questions).map(item => {
-      const card = element("div", "suggested-card" + (agent.question === item.question ? " picked" : ""));
+      const sent = agent.sentQuestion === item.question;
+      const card = element("div", "suggested-card" + (agent.question === item.question ? " picked" : "")
+        + (sent ? " sent" : "") + (stale || off ? " dim" : ""));
       const tags = element("div", "suggested-tags");
       tags.append(...item.options.map(option => element("span", "tag", option)));
-      const send = button("Send", "button primary small", () => {
-        if (off) return;
+      const send = button(sent ? "✓ Sent" : "Send", "button primary small", () => {
+        if (off || stale) return;
+        agent.sentQuestion = item.question;
         act(agent, "/send", { question: item.question, options: item.options },
           "Question sent to " + agentName(agent) + ".", () => {
             agent.data.session = { ...agent.data.session, active: true, waiting: true };
-          });
+          }, () => { agent.sentQuestion = null; });
       });
       const editButton = button("Edit", "button small", () => {
         agent.question = item.question;
@@ -1033,7 +1043,7 @@ function renderSuggestedQuestions(agent, data) {
         render();
         $("question").focus();
       });
-      send.disabled = editButton.disabled = off;
+      send.disabled = editButton.disabled = off || stale;
       const actions = element("div", "suggested-actions");
       actions.append(send, editButton);
       const text = element("div", "suggested-text");
@@ -1041,7 +1051,6 @@ function renderSuggestedQuestions(agent, data) {
       card.append(text, actions);
       return card;
     });
-    if (off) cards.push(element("p", "suggested-wait", "Waiting for the patient's answer…"));
     return [head, ...cards];
   });
 }

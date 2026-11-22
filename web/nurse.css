@@ -479,7 +479,7 @@ textarea, input, select { transition: border-color .2s ease, box-shadow .2s ease
 
 /* cards and messages ease in instead of popping */
 @keyframes ease-in { from { opacity: 0; transform: translateY(4px); } }
-.suggested-card { animation: ease-in .3s ease both; transition: border-color .2s ease, box-shadow .2s ease, transform .2s ease; }
+.suggested-card { animation: ease-in .3s ease both; transition: border-color .2s ease, box-shadow .2s ease, transform .2s ease, opacity .25s ease, filter .25s ease; }
 .suggested-card + .suggested-card { animation-delay: .06s; }
 .suggested-card:hover { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(30, 64, 140, .1); }
 .conversation li { animation: ease-in .25s ease both; }
@@ -488,3 +488,17 @@ textarea, input, select { transition: border-color .2s ease, box-shadow .2s ease
 @media (prefers-reduced-motion: reduce) {
   .button, .suggested-card, .conversation li { transition: none; animation: none; }
 }
+
+/* suggestions: dim (not removed) while waiting or updating; the sent one is marked; placeholders keep the height */
+.suggested { min-height: 9.4rem; }
+.suggested-card.dim { opacity: .55; filter: saturate(.7); }
+.suggested-card.dim:hover { transform: none; box-shadow: none; }
+.suggested-card.sent { opacity: 1; filter: none; border-color: #16a34a; box-shadow: 0 0 0 2px rgba(22, 163, 74, .15); }
+.suggested-card.sent .button.primary { background: #16a34a; }
+.suggested-card.skeleton { height: 4.1rem; border-color: transparent;
+  background: linear-gradient(100deg, #eaf1fb 30%, #f6f9fe 50%, #eaf1fb 70%) 0 0 / 220% 100%;
+  animation: shimmer 1.3s linear infinite; }
+@keyframes shimmer { to { background-position: -220% 0; } }
+.suggested-about.pulse { animation: pulse-text 1.2s ease-in-out infinite; }
+@keyframes pulse-text { 50% { opacity: .45; } }
+@media (prefers-reduced-motion: reduce) { .suggested-card.skeleton, .suggested-about.pulse { animation: none; } }

@@ -43,8 +43,9 @@ def fallback_questions(alert: dict | None, answer: str | None = None, asked: str
     kind = (alert or {}).get("kind")
     out = _topic_questions(answer or "")
     if out is None and (kind == "call" or "call signal" in text or "eyebrow" in text):
-        out = [{"question": "Do you need help right away?", "options": ["Yes, now", "It can wait"]},
-               {"question": "Is it pain or breathing?", "options": ["Yes", "No, something else"]}]
+        out = [{"question": "Do you need something, or are you uncomfortable?",
+                "options": ["I need something", "I am uncomfortable"]},
+               {"question": "Do you need help right away?", "options": ["Yes, now", "It can wait"]}]
     out = out or _topic_questions(text) or \
         [{"question": "Are you comfortable right now?", "options": ["Yes", "No"]},
          {"question": "Do you need me to come in?", "options": ["Yes, please", "Not now"]}]
