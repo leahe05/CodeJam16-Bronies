@@ -1,13 +1,20 @@
 """The real patient behind Paco's nurse dashboard (lookat/nurse_bridge.py)."""
+import threading
 import time
 
 import pytest
+from fastapi.testclient import TestClient
 
+from lookat import nurse_ai
+from lookat.agent import Agent
+from lookat.awake import AwakeDetector
 from lookat.clock import clock
 from lookat.devices import Room, SimPlug
 from lookat.live import Live
 from lookat.memory import profile_memory
 from lookat.nurse_bridge import NurseBridge
+from lookat.server import make_app
+from main import web_step
 
 
 @pytest.fixture(autouse=True)
@@ -18,12 +25,14 @@ def _tmp(tmp_path, monkeypatch):
     clock.reset()
 
 
-def setup(tmp_path, decide=None):
+def setup(tmp_path, decide=None, interval_s=None):
     live = Live(Room(plug_factory=SimPlug), patient="t", now=time.monotonic)
     live.profile = "margaret"
     live.memory = profile_memory("margaret", str(tmp_path))
     live.awake_state = {"awake": True, "open_ratio": 0.9}
     live.nurse = NurseBridge(live, decide=decide)
+    if interval_s is not None:
+        live.nurse.supervisor.interval_s = interval_s
     live.nurse.start()
     return live
 
@@ -130,3 +139,102 @@ def test_claudes_question_for_an_unclear_request_becomes_the_proposal(tmp_path):
     origin = [a for a in live.nurse_json()["alerts"] if a["text"] == "Wants something, did not say what."][0]
     assert origin["review"] == "clarified"
     live.nurse.stop()
+
+
+def test_patient_agent_page_round_trips_through_dashboard_and_browser_gaze(tmp_path, monkeypatch):
+    def decide(request, profile, confirmed):
+        assert "Which side is unclear" in request
+        assert profile["patient"]["id"] == "margaret"
+        assert "Feels cold below 20 °C" in profile["preferences"]
+        assert not confirmed
+        return {"priority": "soon", "action": "ask", "rationale": "Needs clarification.",
+                "recommendation": "Ask which side.", "steps": [
+                    {"question": "Would you like to turn right?", "request": "Patient asks to turn right."}]}
+
+    def generate(instruction, payload):
+        assert payload["patient_request"] == "Needs help changing position."
+        assert "Feels cold below 20 °C" in payload["patient_context"]["preferences"]
+        return {"question": "Which side would you prefer?", "branches": [
+            {"label": "Left side", "next_step": "Review the patient's preference for the left side."},
+            {"label": "Right side", "next_step": "Review the patient's preference for the right side."},
+        ]}
+
+    live = setup(tmp_path, decide=decide, interval_s=.02)
+    monkeypatch.setattr(nurse_ai, "_request_json", generate)
+    now = [time.monotonic()]
+    live.now = lambda: now[0]
+    agent = Agent(live, live.memory, profile="margaret", client=object(), memory_folder=str(tmp_path))
+    client = TestClient(make_app(live))
+    awake = AwakeDetector()
+    try:
+        agent.call("page_nurse", {"message": "Needs help changing position.", "reason": "Which side is unclear"})
+        end = time.monotonic() + 3
+        while not (live.nurse.supervisor.latest_report("margaret") or {}).get("suggested_question") and time.monotonic() < end:
+            time.sleep(.01)
+        data = client.get("/api/nurse").json()
+        assert data["agent_checkin"]["needs_attention"] and data["agent_checkin"]["suggested_question"]
+        assert live.nurse.supervisor.latest_report("james") is None
+        alert = data["alerts"][0]
+        assert alert["priority_source"] == "claude"
+        body = {"patient_id": "margaret", "id": alert["id"]}
+        draft = client.post("/api/nurse/question/draft", json=body).json()
+        assert data["question_drafts"] and draft["ok"] and draft["source"] == "ai"
+        assert client.get("/api/screen").json()["screen"] == "idle"
+        edit = "Would you prefer the left or right side?"
+        sent = client.post("/api/nurse/alert/question/send", json={**draft, **body, "question": edit}).json()
+        assert sent["ok"] and client.get("/api/nurse").json()["proposal"] is None
+        screen = client.get("/api/screen").json()
+        assert screen["title"] == edit and screen["right"]["label"] == "Right side"
+        for _ in range(8):
+            now[0] += .2
+            client.post("/api/gaze", json={"spot": "right", "face": True, "eyes_open": True})
+            web_step(live, awake, now[0])
+        now[0] += .2
+        client.post("/api/gaze", json={"spot": "right", "face": True, "events": ["confirm"]})
+        web_step(live, awake, now[0])
+        data = client.get("/api/nurse").json()
+        assert data["alerts"][0]["question_reply"]["answer"] == "Right side"
+        assert data["session"]["thread"][-1]["next_step"] == draft["branches"][1]["next_step"]
+        assert client.post("/api/nurse/session/end", json={"patient_id": "margaret"}).json()["ok"]
+        assert client.get("/api/screen").json()["screen"] == "idle"
+        assert agent.use_profile("james") == "ok"
+        live.nurse.supervisor.check_patients()
+        changed = client.get("/api/nurse").json()
+        assert changed["profile"]["patient"]["id"] == "james"
+        assert all(h["text"] != "Needs help changing position." for h in changed["history"])
+        assert not client.post("/api/nurse/send", json={"patient_id": "margaret", "question": "Hello?",
+                                                        "options": ["Yes", "No"]}).json()["ok"]
+    finally:
+        live.nurse.stop()
+
+
+def test_ending_session_cancels_a_pending_supervisor_follow_up(tmp_path, monkeypatch):
+    live = setup(tmp_path)
+    complete = threading.Event()
+    follow_up = live.nurse._follow_up
+
+    def track_follow_up(*args):
+        try:
+            follow_up(*args)
+        finally:
+            complete.set()
+
+    monkeypatch.setattr(live.nurse, "_follow_up", track_follow_up)
+    try:
+        alert = live.add_alert("page", "Needs help getting comfortable.")
+        live.nurse.supervisor.queue_question("margaret", {
+            "id": "comfort-question", "origin_alert": alert["id"], "source": "ai", "steps": [
+                {"question": "Would another pillow help?", "request": "Patient requests a pillow."},
+                {"question": "Would another blanket help?", "request": "Patient requests a blanket."},
+            ],
+        })
+        assert live.nurse_action("proposal/approve", {"id": "comfort-question", "source": "ai"})["ok"]
+        with live.lock:
+            answer(live, "No")
+            assert live.nurse_action("session/end", {})["ok"]
+        assert complete.wait(2)
+        data = live.nurse_json()
+        assert not data["session"]["active"] and data["alerts"][0]["review"] == "needs_review"
+        assert live.screen_json()["screen"] == "idle"
+    finally:
+        live.nurse.stop()

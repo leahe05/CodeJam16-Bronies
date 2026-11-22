@@ -164,7 +164,7 @@ class SimulatedPatient(Fake):
         data["patient"] = {"id": self.patient_id, "name": self.patient, "room": self.room_name}
         report = self.supervisor.latest_report(self.patient_id)
         data.update(simulation=True, proposal=self.proposal(), next_visit=[], routines=[],
-                    request_question_branches=True,
+                    request_question_branches=True, question_drafts=True,
                     profile=self.supervisor.latest_profile(self.patient_id),
                     alerts=self.supervisor.alerts(self.patient_id) + data["alerts"],
                     bedside=self.nurse_link.snapshot(time.monotonic()),
@@ -202,6 +202,15 @@ class SimulatedPatient(Fake):
     def nurse_action(self, path, body):
         if path in ("alert/question/draft", "alert/question/send"):
             return self._request_question(path, body)
+        if path == "question/draft":
+            with self.lock:
+                alert = next((item for item in self.supervisor.alerts(self.patient_id) + self.alerts
+                              if item["id"] == body.get("id") and not item["done"]), None)
+                if "id" in body and alert is None:
+                    return {"ok": False, "error": "This request is no longer open."}
+                profile = self.patient_profile()
+            request = (alert.get("request") or alert["text"]) if alert is not None else None
+            return nurse_ai.draft_question(profile, request=request, topic=body.get("topic", ""))
         if path == "proposal/refine":
             return self._refine_proposal(body.get("id"))
         if path == "check-in/suggest":

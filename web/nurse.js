@@ -73,7 +73,7 @@ function storeAgents() {
 async function request(origin, path = "", body) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(),
-    ["/suggest", "/proposal/refine", "/alert/question/draft"].includes(path) ? 20000 : 5000);
+    ["/suggest", "/proposal/refine", "/alert/question/draft", "/question/draft"].includes(path) ? 20000 : 5000);
   try {
     const response = await fetch(origin + nursePath + path, {
       cache: "no-store",
@@ -168,6 +168,11 @@ async function poll(agent) {
       const data = await request(agent.origin);
       if (data?.v !== 1 || !("alerts" in data)) throw new Error("Unexpected nurse API response.");
       if (agents.get(agent.origin) !== agent || revision !== agent.revision) return;
+      if (data.patient_id_guard && agent.data?.patient?.id !== data.patient.id) {
+        delete agent.question;
+        delete agent.options;
+        delete agent.optionsSource;
+      }
       assignPatientColor(agent, data.patient);
       if (!Array.isArray(data.history)) data.observedHistory = observeHistory(agent, data);
       attachRequestReplies(agent, data);
@@ -270,7 +275,8 @@ async function act(agent, path, body, success, onSuccess, onError) {
   agent.revision += 1;
   render();
   try {
-    const result = await request(agent.origin, path, body);
+    const payload = agent.data?.patient_id_guard ? { ...body, patient_id: agent.data.patient.id } : body;
+    const result = await request(agent.origin, path, payload);
     if (!result?.ok) throw new Error(result?.error || "The action could not be completed.");
     if (agents.get(agent.origin) !== agent) return;
     if (path === "/alert") {
@@ -410,7 +416,7 @@ function renderAlerts() {
 }
 
 function openRequestQuestion(agent, alert) {
-  requestQuestion = { agent, alertId: alert.id, drafted: false };
+  requestQuestion = { agent, alertId: alert.id, patientId: agent.data?.patient?.id, drafted: false };
   $("request-question-form").reset();
   markPatient($("request-question-context"), agent);
   updateText($("request-question-context"), `${agentName(agent)} · ${alert.request || alert.text}`);
@@ -426,12 +432,20 @@ function requestQuestionFeedback(message) {
 
 function renderRequestQuestion() {
   if (!requestQuestion) return;
-  const { agent, drafted } = requestQuestion;
+  const { agent, drafted, patientId } = requestQuestion;
+  if (agent.data?.patient_id_guard && agent.data.patient.id !== patientId) {
+    $("request-question-dialog").close();
+    requestQuestion = null;
+    notify("The active patient changed. Open their request to continue.");
+    return;
+  }
   const disabled = agent.busy || agent.state !== "online" || agent.data?.session?.waiting === true;
   $("request-branches").hidden = !drafted;
   $("send-request-question").hidden = !drafted;
   $("draft-request-branches").classList.toggle("primary", !drafted);
   $("draft-request-branches").disabled = $("send-request-question").disabled = disabled;
+  $("draft-request-question").hidden = agent.data?.question_drafts !== true;
+  $("draft-request-question").disabled = disabled;
   $("request-question").disabled = agent.busy;
   for (const input of $("request-branches").querySelectorAll("input")) input.disabled = agent.busy;
 }
@@ -510,7 +524,8 @@ function renderProposals(roster) {
   const pending = roster.filter(agent => agent.data?.proposal);
   $("supervisor-panel").hidden = pending.length === 0;
   updateText($("supervisor-mode"), roster.some(agent => agent.data?.shift) ? "Simulated shift" :
-    roster.some(agent => agent.data?.tracked_demo) ? "Live patient input + simulated patient" : "Two-patient simulation");
+    roster.some(agent => agent.data?.tracked_demo) ? "Live patient input + simulated patient" :
+    roster.some(agent => agent.data?.patient_id_guard) ? "Live patient agent" : "Two-patient simulation");
   updateRegion($("proposals"), pending.map(agent => [
     agent.origin, agentName(agent), agent.patientColor, agent.data.patient.room, agent.data.proposal,
     agent.state, agent.busy, agent.data.session?.active, agent.data.ai_drafts,
@@ -818,6 +833,8 @@ function renderPatientActions(agent, data) {
   $("question").disabled = $("options").disabled = $("send-question").disabled = disabled || data?.session?.waiting === true;
   $("suggest-choices").hidden = !data;
   $("suggest-choices").disabled = $("send-question").disabled;
+  $("draft-question").hidden = data?.question_drafts !== true;
+  $("draft-question").disabled = $("send-question").disabled;
   $("end-session").disabled = disabled;
   $("end-session").hidden = !data?.session?.active;
   const visitor = data?.bedside?.visitors_present;
@@ -826,8 +843,8 @@ function renderPatientActions(agent, data) {
   if ($("question").value !== (agent.question ?? "")) $("question").value = agent.question ?? "";
   if ($("options").value !== (agent.options ?? "Yes\nNo")) $("options").value = agent.options ?? "Yes\nNo";
   $("options-source").hidden = agent.optionsSource === "manual";
-  updateText($("options-source"), agent.optionsSource === "ai" ?
-    "Choices drafted with Claude." : "Default choices are placeholders for Claude.");
+  updateText($("options-source"), agent.optionsSource === "ai_question" ? "Question and choices drafted with Claude." :
+    agent.optionsSource === "ai" ? "Choices drafted with Claude." : "Default choices are placeholders for Claude.");
 }
 
 function renderLatestReply(data) {
@@ -846,13 +863,14 @@ function renderLatestReply(data) {
 
 function renderSimulation(agent, data) {
   const panel = $("simulation");
-  panel.hidden = !data?.simulation;
+  const simulated = data?.simulation;
   const choices = list(data?.profile?.care_choices);
-  updateRegion(panel, [agent.origin, data?.simulation, data?.agent_checkin?.interval_s, choices,
+  panel.hidden = !simulated && !(data?.patient_id_guard && choices.length);
+  updateRegion(panel, [agent.origin, simulated, panel.hidden, data?.agent_checkin?.interval_s, choices,
     agent.state, agent.busy], () => {
     if (panel.hidden) return [];
-    const rows = [element("h3", "", "Simulate patient input"),
-      element("p", "muted option-source", "Placeholder for requests from the live patient agent.")];
+    const rows = [element("h3", "", simulated ? "Simulate patient input" : "Care check-in")];
+    if (simulated) rows.push(element("p", "muted option-source", "Placeholder for requests from the live patient agent."));
     if (choices.length) {
       const label = element("label", "", "Care topic");
       label.htmlFor = "demo-care-choice";
@@ -866,12 +884,16 @@ function renderSimulation(agent, data) {
       select.value = agent.careChoice || choices[0].id;
       select.addEventListener("change", () => { agent.careChoice = select.value; });
       const controls = element("div", "form-row");
-      const push = button("Simulate patient request", "button", () =>
-        act(agent, "/simulate/agent-request", { choice: select.value }, "The patient agent sent a request."));
       const draft = button("Suggest check-in", "button", () =>
         act(agent, "/check-in/suggest", { choice: select.value }, "Check-in queued for nurse review."));
-      push.disabled = draft.disabled = select.disabled = agent.busy || agent.state !== "online";
-      controls.append(push, draft);
+      draft.disabled = select.disabled = agent.busy || agent.state !== "online";
+      if (simulated) {
+        const push = button("Simulate patient request", "button", () =>
+          act(agent, "/simulate/agent-request", { choice: select.value }, "The patient agent sent a request."));
+        push.disabled = draft.disabled;
+        controls.append(push);
+      }
+      controls.append(draft);
       rows.push(label, select, controls);
     } else if (data.agent_checkin) {
       const push = button("Simulate agent request", "button", () =>
@@ -938,10 +960,34 @@ $("request-question-dialog").addEventListener("close", () => { requestQuestion =
 $("cancel-request-question").addEventListener("click", () => $("request-question-dialog").close());
 $("request-question").addEventListener("input", () => {
   if (!requestQuestion) return;
-  requestQuestion.drafted = false;
+  if (!requestQuestion.generated) requestQuestion.drafted = false;
   requestQuestionFeedback("");
   renderRequestQuestion();
 });
+
+function applyRequestDraft(draft, branches, source, sourceText, question) {
+  if (requestQuestion !== draft) return;
+  if (question) $("request-question").value = question;
+  draft.generated = Boolean(question);
+  draft.source = source;
+  for (const [index, spot] of ["left", "right"].entries()) {
+    $("request-" + spot + "-label").value = branches[index].label;
+    $("request-" + spot + "-step").value = branches[index].next_step;
+  }
+  updateText($("request-branches-source"), sourceText);
+  draft.drafted = true;
+  requestQuestionFeedback("");
+}
+
+$("draft-request-question").addEventListener("click", () => {
+  const draft = requestQuestion;
+  if (!draft) return;
+  requestQuestionFeedback("Drafting a question and two choices…");
+  act(draft.agent, "/question/draft", { id: draft.alertId }, "Question and choices ready for review.", result => {
+    applyRequestDraft(draft, result.branches, result.source, "Question and choices drafted with Claude.", result.question);
+  }, message => { if (requestQuestion === draft) requestQuestionFeedback(message); });
+});
+
 $("request-question-form").addEventListener("submit", event => {
   event.preventDefault();
   if (!requestQuestion) return;
@@ -952,20 +998,11 @@ $("request-question-form").addEventListener("submit", event => {
   requestQuestionFeedback("Preparing two choices…");
   act(draft.agent, supported ? "/alert/question/draft" : "/suggest",
     { id: draft.alertId, question }, "Choices ready for review.", result => {
-      if (requestQuestion !== draft) return;
       const branches = supported ? result.branches : defaultLegacyBranches(question, result.options, result.source);
-      draft.source = supported && result.source === "ai" ? "ai" : "fallback";
-      for (const [index, spot] of ["left", "right"].entries()) {
-        $("request-" + spot + "-label").value = branches[index].label;
-        $("request-" + spot + "-step").value = branches[index].next_step;
-      }
-      const sourceText = draft.source === "ai" ? "Both branches drafted with Claude." :
+      const source = supported && result.source === "ai" ? "ai" : "fallback";
+      const sourceText = source === "ai" ? "Both branches drafted with Claude." :
         ["Default branch text is a placeholder for Claude.", result.fallback_reason].filter(Boolean).join(" ");
-      updateText($("request-branches-source"), sourceText);
-      draft.drafted = true;
-      requestQuestionFeedback("");
-      renderRequestQuestion();
-      $("request-left-label").focus();
+      applyRequestDraft(draft, branches, source, sourceText);
     }, message => { if (requestQuestion === draft) requestQuestionFeedback(message); });
 });
 $("send-request-question").addEventListener("click", () => {
@@ -1053,6 +1090,15 @@ $("suggest-choices").addEventListener("click", () => {
     const options = list(result.options);
     agent.options = (agent.data.simulation ? options.slice(0, 2) : options).join("\n");
     agent.optionsSource = result.source;
+  });
+});
+$("draft-question").addEventListener("click", () => {
+  const agent = agents.get(selected);
+  const topic = $("question").value.trim();
+  act(agent, "/question/draft", { topic }, "Question and choices ready for review.", result => {
+    agent.question = result.question;
+    agent.options = result.branches.map(branch => branch.label).join("\n");
+    agent.optionsSource = "ai_question";
   });
 });
 $("question-form").addEventListener("submit", event => {

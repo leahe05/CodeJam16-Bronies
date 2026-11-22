@@ -64,7 +64,7 @@ def failure_reason(error):
     if type(error).__name__ == "APIConnectionError":
         return "The app could not connect to Claude. Check network or proxy settings."
     if isinstance(error, ClaudeNotConfigured):
-        return "No Claude API key is configured. Start the demo with --prompt-claude-key."
+        return "No Claude API key is configured. Set ANTHROPIC_API_KEY before starting LookAt."
     if isinstance(error, ImportError):
         return "The Anthropic Python package could not be loaded. Check the demo dependencies."
     if isinstance(error, ValueError):
@@ -129,7 +129,7 @@ def validate_request_branches(branches):
     cleaned = []
     for item in branches:
         label, next_step = item.get("label"), item.get("next_step")
-        if (not isinstance(label, str) or not 0 < len(label.strip()) <= 60
+        if (not isinstance(label, str) or not 0 < len(label.strip()) <= 60 or len(label.strip().splitlines()) != 1
                 or not isinstance(next_step, str) or not 0 < len(next_step.strip()) <= 160):
             raise ValueError("Each branch needs a short answer and a nurse next step.")
         cleaned.append({"label": label.strip(), "next_step": next_step.strip()})
@@ -175,6 +175,32 @@ def draft_request_branches(question, request, profile):
                 "fallback_reason": failure_reason(error)}
 
 
+def draft_question(profile, *, request=None, topic=""):
+    if not isinstance(topic, str) or len(topic.strip()) > 300:
+        return {"ok": False, "error": "Enter a topic of up to 300 characters."}
+    context = {key: profile[key] for key in ("status", "awareness", "room", "last_meal", "preferences", "habits")
+               if key in profile}
+    try:
+        result = _request_json(
+            "Draft one brief, patient-facing question and exactly two distinct short answers the patient can "
+            "select by gaze. Clarify the supplied request or topic. If neither is present, ask a neutral "
+            "comfort check-in guided by the patient's preferences. Don't assume the patient has any unmet needs. "
+            "Use Yes and No for yes-or-no questions, and name the alternatives for either/or questions. "
+            "For each answer suggest a short next step for the nurse to review. Do not diagnose, suggest "
+            "medication, direct treatment, or claim care was performed. The nurse must approve the draft. "
+            'Return an object with "question" (at most 140 characters) and "branches", an array of exactly '
+            'two objects with "label" (at most 60 characters) and "next_step" (at most 160 characters).',
+            {"patient_request": request, "topic": topic.strip(), "patient_context": context},
+        )
+        question = result.get("question") if isinstance(result, dict) else None
+        if not isinstance(question, str) or not 1 < len(question.strip()) <= 140 or not question.strip().endswith("?"):
+            raise ValueError("Invalid Claude question")
+        return {"ok": True, "source": "ai", "question": question.strip(),
+                "branches": validate_request_branches(result.get("branches"))}
+    except Exception as error:
+        return {"ok": False, "error": failure_reason(error)}
+
+
 def refine_checkin(proposal):
     questions = _draft(
         "Rewrite each sample comfort question as a brief yes-or-no question. "
@@ -192,7 +218,8 @@ def refine_checkin(proposal):
 
 
 def decide_request(request, profile, confirmed=False):
-    context = {key: profile[key] for key in ("room", "last_meal", "preferences", "habits") if key in profile}
+    context = {key: profile[key] for key in ("status", "awareness", "room", "last_meal", "preferences", "habits")
+               if key in profile}
     result = _request_json(
         "You are the nurse supervisor in a fictional comfort-care demo. Rank this request urgent, soon, or routine "
         "from what the patient actually reports. Give a short rationale and a practical recommendation for the nurse, one sentence each (under 200 characters). "

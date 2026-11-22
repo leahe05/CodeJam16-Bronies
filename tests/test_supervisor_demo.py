@@ -367,6 +367,27 @@ def test_request_question_reports_auth_failure_without_provider_details(monkeypa
     assert "private-provider-detail" not in str(draft)
 
 
+def test_claude_can_draft_a_question_from_a_nurse_topic_in_the_simulator(monkeypatch):
+    avery, _ = make_demo_patients(playback=ShiftPlayback())
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    assert "No Claude API key" in avery.nurse_action("question/draft", {"topic": "Blankets"})["error"]
+
+    def generate(instruction, payload):
+        assert payload["topic"] == "Blankets" and payload["patient_request"] is None
+        return {"question": "Would you like a lighter blanket?", "branches": [
+            {"label": "Yes", "next_step": "Review the request for a lighter blanket."},
+            {"label": "No", "next_step": "Leave the blanket as it is."},
+        ]}
+
+    monkeypatch.setattr(nurse_ai, "_request_json", generate)
+    assert not avery.nurse_action("question/draft", {"id": "missing"})["ok"]
+    draft = avery.nurse_action("question/draft", {"topic": "Blankets"})
+    assert avery.nurse_json()["question_drafts"] and draft["source"] == "ai"
+    assert draft["question"] == "Would you like a lighter blanket?"
+    assert [branch["label"] for branch in draft["branches"]] == ["Yes", "No"]
+    assert avery.screen_json()["screen"] == "idle"
+
+
 def test_claude_key_prompt_requires_a_terminal_and_loads_only_into_the_process(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.setattr(nurse_ai.sys.stdin, "isatty", lambda: False)

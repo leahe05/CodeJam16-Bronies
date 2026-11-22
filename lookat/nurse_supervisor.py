@@ -61,7 +61,7 @@ class NurseSupervisor:
             try:
                 report = check_in(CHECK_IN_PROMPT)
                 with self._lock:
-                    if self._generation[patient_id] != generation:
+                    if report is None or self._generation[patient_id] != generation:
                         continue
                     self._reports[patient_id] = report
                     if report.get("profile"):
@@ -134,7 +134,7 @@ class NurseSupervisor:
         self.publish_profile(patient_id, profile)
         with self._lock:
             alert_id, created = self._receive_request(patient_id, request, at=at, request_id=request_id,
-                                                      reason=reason, review=True)
+                                                      reason=reason, time_sensitive=time_sensitive, review=True)
             if created and self.ai_enabled:
                 report = " ".join(part for part in (
                     request, reason, "The patient agent reports that this is time-sensitive." if time_sensitive else None,
