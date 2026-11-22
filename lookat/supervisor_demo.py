@@ -7,7 +7,7 @@ import time
 
 from lookat import nurse_ai
 from lookat.fake_api import Fake, opt, screen
-from lookat.nurse_link import NurseLink, valid_eta_minutes
+from lookat.nurse_link import NurseLink, eta_text, valid_eta_minutes
 from lookat.nurse_patient_profile import CARE_CHOICES, MEASUREMENTS, PATIENT_CONTEXT
 from lookat.nurse_shift import SHIFT_CAMERAS, ShiftPlayback
 from lookat.nurse_supervisor import DEFAULT_INTERVAL_S, NurseSupervisor
@@ -165,6 +165,7 @@ class SimulatedPatient(Fake):
         report = self.supervisor.latest_report(self.patient_id)
         data.update(simulation=True, proposal=self.proposal(), next_visit=[], routines=[],
                     request_question_branches=True, question_drafts=True, arrival_eta=True,
+                    eta_reminders=self.nurse_link.eta_reminders(time.monotonic()),
                     profile=self.supervisor.latest_profile(self.patient_id),
                     alerts=self.supervisor.alerts(self.patient_id) + data["alerts"],
                     bedside=self.nurse_link.snapshot(time.monotonic()),
@@ -203,6 +204,8 @@ class SimulatedPatient(Fake):
         return {**data, **base}
 
     def nurse_action(self, path, body):
+        if path == "alert/eta/follow-up":
+            return self.nurse_link.follow_up_eta(body, time.monotonic())
         if path == "alert/eta":
             minutes = body.get("eta_minutes")
             if not valid_eta_minutes(minutes):
@@ -220,8 +223,9 @@ class SimulatedPatient(Fake):
                 else:
                     alert.update(done=True, eta_minutes=minutes)
                 now = time.monotonic()
-                self.nurse_link.send_eta(alert_id, minutes, now)
-                self._interaction("Nurse", "Sent ETA", self.nurse_link.eta_message(now))
+                request = alert.get("request") or alert["text"]
+                self.nurse_link.send_eta(alert_id, minutes, now, request=request)
+                self._interaction("Nurse", "Sent ETA", f"{request} · {eta_text(minutes)}")
                 return {"ok": True}
         if path == "visit":
             self.nurse_link.clear_eta()

@@ -10,6 +10,11 @@ from lookat.nurse_patient_profile import CARE_CHOICES
 
 
 DEFAULT_MODEL = "claude-haiku-5-5"
+ANSWER_CHOICE_GUIDANCE = (
+    'Use Yes and No for yes-or-no questions. For open-ended questions, usually give the most plausible '
+    'specific answer and "Other" so the patient can signal a different answer. When a question explicitly '
+    'offers exactly two alternatives, use those alternatives. '
+)
 
 
 class ClaudeNotConfigured(ValueError):
@@ -117,7 +122,7 @@ def _draft(instruction, payload, count, max_length):
 def make_options(question, context):
     options = _draft(
         "Suggest exactly two distinct, short answers a patient can select by gaze. "
-        "Use Yes and No for yes-or-no questions. Use neutral patient-facing language.",
+        + ANSWER_CHOICE_GUIDANCE + "Use neutral patient-facing language.",
         {"question": question, "context": context}, 2, 60,
     )
     return {"options": options, "source": "ai"}
@@ -150,7 +155,7 @@ def default_request_branches(question):
     if re.match(r"\b(?:what|which|where|when|how)\b", question, flags=re.IGNORECASE):
         return [
             {"label": "Help with this request", "next_step": "Confirm the details of the original request."},
-            {"label": "Something else", "next_step": "Ask what else the patient would like."},
+            {"label": "Other", "next_step": "Ask a short follow-up about what else the patient would like."},
         ]
     return [
         {"label": "Yes", "next_step": "Review the confirmed request."},
@@ -163,8 +168,8 @@ def draft_request_branches(question, request, profile):
     try:
         result = _request_json(
             "Draft two distinct short responses to the nurse's question for a patient to choose by gaze. "
-            "Use Yes and No when the question is yes-or-no, and use the actual alternatives for an either/or question. "
-            "For each response include a short next step for the nurse to review based on that answer. "
+            + ANSWER_CHOICE_GUIDANCE +
+            'For each response include a short next step for the nurse to review. For "Other", suggest a follow-up question. '
             "Do not diagnose, suggest medication, or claim that care was performed. "
             'Return an array of exactly two objects with keys "label" and "next_step".',
             {"question": question, "patient_request": request, "patient_context": context},
@@ -185,8 +190,9 @@ def draft_question(profile, *, request=None, topic=""):
             "Draft one brief, patient-facing question and exactly two distinct short answers the patient can "
             "select by gaze. Clarify the supplied request or topic. If neither is present, ask a neutral "
             "comfort check-in guided by the patient's preferences. Don't assume the patient has any unmet needs. "
-            "Use Yes and No for yes-or-no questions, and name the alternatives for either/or questions. "
-            "For each answer suggest a short next step for the nurse to review. Do not diagnose, suggest "
+            + ANSWER_CHOICE_GUIDANCE +
+            'For each answer suggest a next step for the nurse to review. For "Other", suggest a follow-up question. '
+            "Do not diagnose, suggest "
             "medication, direct treatment, or claim care was performed. The nurse must approve the draft. "
             'Return an object with "question" (at most 140 characters) and "branches", an array of exactly '
             'two objects with "label" (at most 60 characters) and "next_step" (at most 160 characters).',

@@ -318,7 +318,26 @@ def test_arrival_estimate_reaches_patient_without_replacing_their_question(tmp_p
         assert "about 5 minutes" in screen["subtitle"]
         assert live.nurse.link.drain_responses()[0]["eta_minutes"] == 5
         assert client.get("/api/nurse").json()["alerts"][0]["eta_minutes"] == 5
-        now[0] += 300
+        second = live.add_alert("page", "Requests a pillow.")
+        assert client.post("/api/nurse/alert/eta", json={**body, "id": second["id"], "eta_minutes": 10}).json()["ok"]
+        now[0] += 299
+        assert client.get("/api/nurse").json()["eta_reminders"] == []
+        now[0] += 1
+        reminder, = client.get("/api/nurse").json()["eta_reminders"]
+        assert reminder["id"] == alert["id"] and reminder["request"] == "Requests a blanket."
+        assert "about 5 minutes" in client.get("/api/screen").json()["subtitle"]  # the second estimate
+        extend = {**reminder, "action": "extend", "eta_minutes": 3}
+        assert client.post("/api/nurse/alert/eta/follow-up", json=extend).json()["ok"]
+        assert not client.post("/api/nurse/alert/eta/follow-up", json=extend).json()["ok"]
+        assert client.get("/api/nurse").json()["eta_reminders"] == []
+        assert "about 3 minutes" in client.get("/api/screen").json()["subtitle"]
+        now[0] += 180
+        reminder, = client.get("/api/nurse").json()["eta_reminders"]
+        assert client.post("/api/nurse/alert/eta/follow-up", json={**reminder, "action": "attended"}).json()["ok"]
+        assert client.get("/api/nurse").json()["eta_reminders"] == []
+        assert "about 2 minutes" in client.get("/api/screen").json()["subtitle"]
+        now[0] += 120
+        assert client.get("/api/nurse").json()["eta_reminders"][0]["id"] == second["id"]
         assert client.get("/api/screen").json()["subtitle"] is None
     finally:
         live.nurse.stop()

@@ -185,5 +185,18 @@ No</textarea>
       </div>
     </form>
   </dialog>
+  <dialog id="eta-reminder-dialog" aria-labelledby="eta-reminder-heading" aria-describedby="eta-reminder-request">
+    <form id="eta-reminder-form">
+      <h2 id="eta-reminder-heading"></h2>
+      <p id="eta-reminder-request" class="muted"></p>
+      <button id="eta-attended" class="button primary" type="button" autofocus>Yes</button>
+      <label for="eta-extension-minutes">Extend by how many minutes?</label>
+      <div class="form-row">
+        <input id="eta-extension-minutes" type="number" min="1" max="120" step="1" required>
+        <button id="eta-extend" class="button" type="submit">Extend ETA</button>
+      </div>
+      <p id="eta-reminder-feedback" class="muted" role="status"></p>
+    </form>
+  </dialog>
 </body>
 </html>

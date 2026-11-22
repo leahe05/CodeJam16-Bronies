@@ -27,7 +27,7 @@ from typing import Optional
 from lookat import nurse_ai
 from lookat.clock import clock, parse_hhmm
 from lookat.memory import PROFILES, routine_time
-from lookat.nurse_link import NurseLink, valid_eta_minutes
+from lookat.nurse_link import NurseLink, eta_text, valid_eta_minutes
 from lookat.nurse_patient_profile import CARE_CHOICES
 from lookat.nurse_supervisor import NurseSupervisor
 from lookat.state import log_event
@@ -300,6 +300,7 @@ class NurseBridge:
                                    "needs_attention": report.get("needs_attention", False),
                                    "suggested_question": report.get("suggested_question", False)},
                     request_question_branches=True, question_drafts=True, arrival_eta=True,
+                    eta_reminders=self.link.eta_reminders(self.live.now()),
                     ai_drafts=nurse_ai.available(), patient_id_guard=True,
                     alerts=self.supervisor.alerts(self.pid) + [
                         {**alert, "eta_available": alert.get("_eta_patient_id") == self.pid}
@@ -341,6 +342,12 @@ class NurseBridge:
         """Handles the dashboard's paths that Live doesn't know; None = not mine (Live handles it)."""
         if body.get("patient_id", self.pid) != self.pid:
             return {"ok": False, "error": "The active patient changed. Review their profile before continuing."}
+        if path == "alert/eta/follow-up":
+            with self.live.lock:
+                patient_id = self.pid
+                if body.get("patient_id", patient_id) != patient_id:
+                    return {"ok": False, "error": "The active patient changed. Review their profile before continuing."}
+                return self._links[patient_id].follow_up_eta(body, self.live.now())
         if path == "alert/eta":
             minutes = body.get("eta_minutes")
             if not valid_eta_minutes(minutes):
@@ -362,8 +369,9 @@ class NurseBridge:
                     alert.update(done=True, eta_minutes=minutes)
                 now = self.live.now()
                 link = self._links[patient_id]
-                link.send_eta(alert["id"], minutes, now)
-                link.record_interaction("Nurse", "Sent ETA", link.eta_message(now))
+                request = alert.get("request") or alert["text"]
+                link.send_eta(alert["id"], minutes, now, request=request)
+                link.record_interaction("Nurse", "Sent ETA", f"{request} · {eta_text(minutes)}")
                 return {"ok": True}
         if path == "presence":
             if "present" not in body:

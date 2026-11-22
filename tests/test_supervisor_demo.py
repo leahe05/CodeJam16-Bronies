@@ -346,6 +346,7 @@ def test_request_question_defaults_keep_two_alternatives_and_route_the_selected_
 
 def test_request_question_uses_claude_when_available_and_falls_back_for_invalid_drafts(monkeypatch):
     def response(instructions, payload):
+        assert '"Other"' in instructions and "Yes and No for yes-or-no questions" in instructions
         assert payload["patient_request"] == "Patient requests a drink."
         assert payload["question"] == "Would you like water?"
         return [
@@ -362,6 +363,7 @@ def test_request_question_uses_claude_when_available_and_falls_back_for_invalid_
     assert avery.screen_json()["screen"] == "idle"
     monkeypatch.setattr(nurse_ai, "_request_json", lambda *_: [{"label": "Only one answer", "next_step": "Review."}])
     assert nurse_ai.draft_request_branches("Would you like water?", "", {})["source"] == "fallback"
+    assert nurse_ai.draft_request_branches("What would help?", "", {})["branches"][1]["label"] == "Other"
 
 
 def test_request_question_reports_auth_failure_without_provider_details(monkeypatch):

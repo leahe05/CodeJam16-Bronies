@@ -21,6 +21,7 @@ let soundEnabled = false;
 let feedbackTimer;
 let requestQuestion = null;
 let arrivalEta = null;
+let etaReminder = null;
 
 function element(tag, className, text) {
   const node = document.createElement(tag);
@@ -349,7 +350,7 @@ function alertCard({ agent, alert }, handled) {
   if (alert.suggested_question && !handled) {
     card.append(element("p", "", "Suggested question · " + alert.suggested_question));
   }
-  if (alert.eta_minutes) card.append(element("p", "muted", `Arrival estimate sent · ${alert.eta_minutes} min`));
+  if (alert.eta_minutes) card.append(element("p", "muted", `Initial arrival estimate · ${alert.eta_minutes} min`));
   if (alert.question_reply) {
     card.append(element("p", "", "Patient answered: " + alert.question_reply.answer),
       element("p", "request-recommendation", alert.question_reply.next_step));
@@ -469,6 +470,60 @@ $("arrival-eta-form").addEventListener("submit", event => {
       $("send-arrival-eta").disabled = false;
       updateText($("arrival-eta-feedback"), message);
     });
+});
+
+function closeEtaReminder() {
+  etaReminder = null;
+  $("eta-reminder-dialog").close();
+}
+
+function renderEtaReminder(roster) {
+  if (etaReminder) {
+    const { agent, patientId, reminder } = etaReminder;
+    const pending = list(agent.data?.eta_reminders).some(item => item.id === reminder.id && item.version === reminder.version);
+    if (roster.includes(agent) && agent.state === "online" && agent.data?.connected !== false &&
+        agent.data?.patient?.id === patientId && pending) {
+      const disabled = agent.busy;
+      $("eta-attended").disabled = $("eta-extend").disabled = $("eta-extension-minutes").disabled = disabled;
+      return;
+    }
+    closeEtaReminder();
+  }
+  if (document.querySelector("dialog[open]")) return;
+  const agent = roster.find(item => item.state === "online" && !item.busy && item.data?.connected !== false &&
+    list(item.data?.eta_reminders).length);
+  if (!agent) return;
+  const reminder = agent.data.eta_reminders[0];
+  etaReminder = { agent, patientId: agent.data.patient?.id, reminder };
+  $("eta-reminder-form").reset();
+  $("eta-attended").disabled = $("eta-extend").disabled = $("eta-extension-minutes").disabled = false;
+  updateText($("eta-reminder-heading"), `Have you attended to ${agentName(agent)}?`);
+  updateText($("eta-reminder-request"), reminder.request);
+  updateText($("eta-reminder-feedback"), "");
+  $("eta-reminder-dialog").showModal();
+}
+
+function respondToEtaReminder(action) {
+  const draft = etaReminder;
+  if (!draft || draft.agent.data?.patient?.id !== draft.patientId) return;
+  const { id, version } = draft.reminder;
+  const body = { id, version, action };
+  if (action === "extend") body.eta_minutes = $("eta-extension-minutes").valueAsNumber;
+  act(draft.agent, "/alert/eta/follow-up", body,
+    action === "attended" ? "Request marked attended." : "Updated arrival estimate sent.", () => {
+      draft.agent.data.eta_reminders = list(draft.agent.data.eta_reminders)
+        .filter(item => item.id !== id || item.version !== version);
+      if (etaReminder === draft) closeEtaReminder();
+    }, message => {
+      if (etaReminder === draft) updateText($("eta-reminder-feedback"), message);
+    });
+}
+
+$("eta-reminder-dialog").addEventListener("cancel", event => event.preventDefault());
+$("eta-attended").addEventListener("click", () => respondToEtaReminder("attended"));
+$("eta-reminder-form").addEventListener("submit", event => {
+  event.preventDefault();
+  respondToEtaReminder("extend");
 });
 
 function requestQuestionFeedback(message) {
@@ -997,6 +1052,7 @@ function render() {
   renderSimulation(agent, data);
   renderHistory(data);
   renderRequestQuestion();
+  renderEtaReminder(roster);
   updateRegion($("notes"), [selected, data?.profile, data?.bedside, data?.agent_checkin, data?.next_visit, data?.session, data?.facts, data?.room, data?.last_visit,
     data?.routines, data?.recent, data?.summary], () => {
     const notes = data ? patientNotes(data) : [];
