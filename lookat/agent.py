@@ -62,6 +62,19 @@ CHANGE_GAP_S = 60 if CALM else 5       # at most one room-change look per minute
 PERIODS = [(7, "morning"), (12, "afternoon"), (17, "evening"), (22, "night")]
 MENU_MAX = 3                 # options Claude writes; "Quiet for 2 hours" and "Something else" are always added
 QUIET_OPTION = "Quiet for 2 hours"
+# The Talk to AI menu offers what Room Controls can't do (needs a person meets); a lamp/fan option is dropped
+# and the menu is filled from this list.
+DIRECT_CONTROL_WORDS = {"fan", "lamp", "light", "lights", "brighter", "dim", "dark", "darker", "cooler", "warmer",
+                        "ac", "air", "aircon", "thermostat", "temperature"}
+DIRECT_CONTROL_PHRASES = ("too warm", "too hot", "cool down", "cool the room", "warm up the room", "the room")
+NEEDS_FILL = ["Some water", "Change my position", "Adjust my pillows", "A blanket, please", "Talk to my nurse"]
+
+
+def is_direct_control(option: str) -> bool:
+    """True for an option the patient can already do with Room Controls (lamp, fan, room temperature)."""
+    low = " " + str(option).lower().replace(",", " ").replace(".", " ").replace("'", " ") + " "
+    words = set(low.split())
+    return bool(action_in(option) or words & DIRECT_CONTROL_WORDS or any(p in low for p in DIRECT_CONTROL_PHRASES))
 # Respecting silence (all on the demo clock):
 AFTER_EPISODE_MIN = 3 if CALM else 0.25    # after any episode, wait this long before speaking first again
 IGNORED_HUSH_MIN = 10 if CALM else 0.5     # a suggestion the patient ignored: nothing new for this long
@@ -129,11 +142,15 @@ of a bedbound patient (comfort, position, water, temperature, light, rest, compa
 
 MENU_SYSTEM = """You write the "Talk to AI" menu for a patient who cannot speak or move and picks options by \
 looking at a screen. Give exactly 3 options, each 2 to 4 words, written as what the patient would say \
-("I'm too warm", "Change my position", "Some water"), the most likely need first, fitting the moment (time of \
-day, room, what they picked before). If you know little about the patient, offer common needs of a bedbound \
-patient (comfort, position, water, temperature, light, company).
-Rules: the screen already has Room Controls (lamp and fan switches) and Call Nurse (long eyebrow raise), so do \
-not offer bare switches ("Turn fan on") or "Call the nurse". "Quiet for 2 hours" and "Something else" are \
+("Some water", "Change my position", "A blanket, please"), the most likely need first, fitting the moment (time \
+of day, room, what they picked before).
+Priority: offer what the patient CANNOT do themselves. They already switch the lamp and the fan with Room \
+Controls, so never offer anything about the lamp, light, fan or making the room warmer or cooler. Offer needs \
+only a person can meet: water or a drink, changing position, pillows, a blanket, the toilet, mouth care, an \
+itch, glasses, company or talking to someone, and "Something hurts" (a nurse comes). This holds for every \
+patient, whatever you know about them: use what you know to pick and order these needs, not to switch to \
+room controls. If you know little about the patient, offer the most common of these needs.
+Rules: Call Nurse is the long eyebrow raise, so do not offer "Call the nurse". "Quiet for 2 hours" and "Something else" are \
 always added: do not include them. Do not repeat an option the patient just declined. The menu should feel \
 steady: keep options from the CURRENT MENU that still fit, in the same order; change only what the moment \
 changed. Plain words, no emojis."""
@@ -929,8 +946,15 @@ class Agent:
             o = " ".join(str(o).split()[:5]).strip(" .")
             if o and o.lower() not in ("something else", QUIET_OPTION.lower()) and o not in opts:
                 opts.append(o)
-        if len(opts) < 2:
-            return
+        dropped = [o for o in opts if is_direct_control(o)]
+        opts = [o for o in opts if not is_direct_control(o)]
+        for need in NEEDS_FILL:                       # keep 3: fill with needs only a person can meet
+            if len(opts) >= MENU_MAX:
+                break
+            if need not in opts:
+                opts.append(need)
+        if dropped:
+            log_event("agent_menu_dropped", options=dropped, why="Room Controls already does these")
         opts = opts[:MENU_MAX] + [QUIET_OPTION, "Something else"]
         with self.live.lock:
             self.live.sm.show_assistant(opts)

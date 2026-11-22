@@ -238,7 +238,8 @@ def test_claude_writes_the_talk_to_ai_menu(tmp_path):
     client = MenuClient(["Cool the room down", "Something else", "Dim the lamp please now ok", "Water"])
     agent, live, *_ = make(tmp_path, client=client)
     agent.refresh_menu()
-    assert live.sm.assistant["options"] == ["Cool the room down", "Dim the lamp please now", "Water",
+    # lamp / room options are dropped (Room Controls does those) and filled with needs only a person can meet
+    assert live.sm.assistant["options"] == ["Water", "Some water", "Change my position",
                                             "Quiet for 2 hours", "Something else"]
     assert any(t.startswith("Talk to AI menu") for _, t in stages(live))
 
@@ -515,3 +516,16 @@ def test_no_habit_offer_when_already_done_or_off_hours(tmp_path):
     room.execute("lamp", "on", by="nurse")
     clock.set_time("20:00")
     assert agent.trigger(agent.perceive()) is None          # too early
+
+
+def test_menu_never_offers_what_room_controls_already_does(tmp_path):
+    from lookat.agent import is_direct_control
+    for o in ("Turn the fan on", "I'm too warm", "Dim the light", "Lamp off please", "Cooler room", "Adjust the room"):
+        assert is_direct_control(o), o
+    for o in ("Some water", "Change my position", "A blanket, please", "Something hurts", "Talk to my nurse"):
+        assert not is_direct_control(o), o
+    client = MenuClient(["I'm too warm", "Turn the lamp off", "Something hurts"])
+    agent, live, *_ = make(tmp_path, client=client)
+    agent.refresh_menu()
+    opts = live.sm.assistant["options"]
+    assert opts[0] == "Something hurts" and len(opts) == 5 and not any(is_direct_control(o) for o in opts[:3])
