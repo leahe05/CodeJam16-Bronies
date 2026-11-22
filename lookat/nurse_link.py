@@ -1,6 +1,8 @@
 """Bedside status and the in-process interface between a patient agent and nurses."""
 
+import math
 from collections import deque
+from itertools import count
 from threading import Lock
 
 from lookat.clock import clock
@@ -9,6 +11,15 @@ UNKNOWN = "unknown"
 EYE_SAMPLE_GAP_S = 2.0
 OPEN_S = 1.0
 CLOSED_S = 30.0
+MAX_ETA_MINUTES = 120
+
+
+def valid_eta_minutes(minutes):
+    return type(minutes) is int and 1 <= minutes <= MAX_ETA_MINUTES
+
+
+def eta_text(minutes):
+    return f"Your nurse expects to arrive in about {minutes} {'minute' if minutes == 1 else 'minutes'}."
 
 
 class NurseLink:
@@ -16,6 +27,7 @@ class NurseLink:
         self._add_alert = add_alert
         self._lock = Lock()
         self._demo_awareness = demo_awareness
+        self._eta_versions = count(1)
         self.reset()
 
     def reset(self):
@@ -23,6 +35,7 @@ class NurseLink:
             self._responses = deque(maxlen=100)
             self._history = deque(maxlen=100)
             self._summary = None
+            self._etas = {}
             self._visitors_present = None
             self._eye_state = None
             self._eye_since = self._eye_seen = None
@@ -99,6 +112,54 @@ class NurseLink:
             responses = list(self._responses)
             self._responses.clear()
             return responses
+
+    def send_eta(self, alert_id, minutes, now, *, request):
+        with self._lock:
+            self._set_eta(alert_id, minutes, now, request)
+
+    def _set_eta(self, alert_id, minutes, now, request):
+        self._etas[alert_id] = {"version": next(self._eta_versions), "request": request,
+                                "due": now + minutes * 60, "visible": True}
+        self._responses.append({"alert_id": alert_id, "action": "eta", "eta_minutes": minutes,
+                                "time": clock.hhmm()})
+
+    def eta_reminders(self, now):
+        with self._lock:
+            due = sorted(self._etas.items(), key=lambda entry: entry[1]["due"])
+            return [{"id": alert_id, "version": eta["version"], "request": eta["request"]}
+                    for alert_id, eta in due if eta["due"] <= now]
+
+    def follow_up_eta(self, body, now):
+        alert_id, version = body.get("id"), body.get("version")
+        action, minutes = body.get("action"), body.get("eta_minutes")
+        if action not in ("attended", "extend"):
+            return {"ok": False, "error": "Choose whether you attended or want to extend the estimate."}
+        if action == "extend" and not valid_eta_minutes(minutes):
+            return {"ok": False, "error": "Enter a whole number of minutes from 1 to 120."}
+        with self._lock:
+            eta = self._etas.get(alert_id) if isinstance(alert_id, str) else None
+            if eta is None or type(version) is not int or version != eta["version"] or eta["due"] > now:
+                return {"ok": False, "error": "This arrival reminder is no longer due."}
+            request = eta["request"]
+            if action == "extend":
+                self._set_eta(alert_id, minutes, now, request)
+                history_action, text = "Extended ETA", f"{request} · {eta_text(minutes)}"
+            else:
+                del self._etas[alert_id]
+                self._responses.append({"alert_id": alert_id, "action": "attended", "time": clock.hhmm()})
+                history_action, text = "Attended to request", request
+        self.record_interaction("Nurse", history_action, text)
+        return {"ok": True}
+
+    def eta_message(self, now):
+        with self._lock:
+            due = min((eta["due"] for eta in self._etas.values() if eta["visible"] and eta["due"] > now), default=None)
+        return eta_text(math.ceil((due - now) / 60)) if due is not None else None
+
+    def clear_eta(self):
+        with self._lock:
+            for eta in self._etas.values():
+                eta["visible"] = False
 
     def set_visitors(self, present):
         if present is not None and type(present) is not bool:

@@ -3,15 +3,16 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#12243b">
+  <meta name="theme-color" content="#dbeafe">
   <title>Nurse dashboard | LookAt</title>
   <link rel="stylesheet" href="/web/nurse.css">
   <script defer src="/web/nurse.js"></script>
 </head>
 <body>
+  <div class="aurora" aria-hidden="true"><i class="b1"></i><i class="b2"></i><i class="b3"></i></div>
   <header class="topbar">
     <div class="wrap topbar-inner">
-      <div class="brand"><span class="brand-mark" aria-hidden="true"></span>LookAt</div>
+      <div class="brand"><svg class="brand-eye" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3.2"/></svg>LookAt<span class="brand-sub">Nurse</span></div>
       <button id="sound" class="button sound" type="button" aria-pressed="false">Enable alert sound</button>
     </div>
   </header>
@@ -90,12 +91,35 @@ No</textarea>
             <p id="options-source" class="muted option-source"></p>
             <div class="form-row">
               <button id="send-question" class="button primary" type="submit">Send question</button>
+              <button id="draft-question" class="button" type="button" hidden>Draft with Claude</button>
               <button id="send-message" class="button" type="button" title="The patient reads it and answers OK">Send as message</button>
               <button id="suggest-choices" class="button" type="button" hidden>Suggest choices</button>
               <button id="end-session" class="button" type="button" hidden>End conversation</button>
             </div>
           </form>
           <div id="latest-reply" class="latest-reply" role="status" hidden></div>
+          <section id="room-controls" class="room-controls" aria-labelledby="room-heading" hidden>
+            <div class="section-heading">
+              <h3 id="room-heading">Room</h3>
+              <span id="room-temp" class="room-temp"></span>
+            </div>
+            <div class="room-row">
+              <div class="setpoint">
+                <button id="setpoint-down" class="button round" type="button" aria-label="Lower the AC setpoint">−</button>
+                <span><small>AC setpoint</small><b id="setpoint-value">–</b></span>
+                <button id="setpoint-up" class="button round" type="button" aria-label="Raise the AC setpoint">+</button>
+              </div>
+              <button id="toggle-lamp" class="button switch" type="button" aria-pressed="false">Lamp</button>
+              <button id="toggle-fan" class="button switch" type="button" aria-pressed="false">Fan</button>
+            </div>
+            <form id="fact-form" class="fact-form">
+              <label for="fact">Add something the team should know</label>
+              <div class="form-row">
+                <input id="fact" maxlength="200" placeholder="e.g. Prefers the blinds half open">
+                <button class="button" type="submit">Add</button>
+              </div>
+            </form>
+          </section>
           <section id="simulated-reply" class="note simulation" aria-label="Simulate patient reply" hidden></section>
         </div>
         <details id="profile-details" class="profile-details" hidden>
@@ -166,9 +190,36 @@ No</textarea>
       <p id="request-question-feedback" class="muted" role="status" hidden></p>
       <div class="form-row">
         <button id="draft-request-branches" class="button primary" type="submit">Suggest two choices</button>
+        <button id="draft-request-question" class="button" type="button" hidden>Draft with Claude</button>
         <button id="send-request-question" class="button primary" type="button" hidden>Send question</button>
         <button id="cancel-request-question" class="button" type="button">Cancel</button>
       </div>
+    </form>
+  </dialog>
+  <dialog id="arrival-eta-dialog" aria-labelledby="arrival-eta-heading">
+    <form id="arrival-eta-form">
+      <h2 id="arrival-eta-heading">Send arrival estimate</h2>
+      <p id="arrival-eta-context" class="muted"></p>
+      <label for="arrival-eta-minutes">Estimated minutes until arrival</label>
+      <input id="arrival-eta-minutes" type="number" min="1" max="120" step="1" required autofocus>
+      <p id="arrival-eta-feedback" class="muted" role="status"></p>
+      <div class="form-row">
+        <button id="send-arrival-eta" class="button primary" type="submit">Send estimate</button>
+        <button id="cancel-arrival-eta" class="button" type="button">Cancel</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog id="eta-reminder-dialog" aria-labelledby="eta-reminder-heading" aria-describedby="eta-reminder-request">
+    <form id="eta-reminder-form">
+      <h2 id="eta-reminder-heading"></h2>
+      <p id="eta-reminder-request" class="muted"></p>
+      <button id="eta-attended" class="button primary" type="button" autofocus>Yes</button>
+      <label for="eta-extension-minutes">Extend by how many minutes?</label>
+      <div class="form-row">
+        <input id="eta-extension-minutes" type="number" min="1" max="120" step="1" required>
+        <button id="eta-extend" class="button" type="submit">Extend ETA</button>
+      </div>
+      <p id="eta-reminder-feedback" class="muted" role="status"></p>
     </form>
   </dialog>
 </body>
