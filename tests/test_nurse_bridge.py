@@ -130,3 +130,12 @@ def test_claudes_question_for_an_unclear_request_becomes_the_proposal(tmp_path):
     origin = [a for a in live.nurse_json()["alerts"] if a["text"] == "Wants something, did not say what."][0]
     assert origin["review"] == "clarified"
     live.nurse.stop()
+
+
+def test_yes_to_a_nurse_check_in_shows_the_nurse_is_coming_screen(tmp_path):
+    live = setup(tmp_path)
+    live.nurse_action("check-in/suggest", {"choice": "water"})
+    p = live.nurse_json()["proposal"]
+    live.nurse_action("proposal/approve", {"id": p["id"], "source": p.get("source")})
+    answer(live, "Yes")
+    assert (live.screen_json().get("overlay") or {}).get("kind") == "call_nurse"
