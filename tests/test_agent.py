@@ -164,7 +164,7 @@ def tool(name, **inp):
 class FakeClient:
     def __init__(self, turns=None, error=None):
         self.turns, self.error, self.calls = list(turns or []), error, []
-        self.beta = NS(messages=NS(create=self.create))
+        self.messages = NS(create=self.create)
 
     def create(self, **kw):
         self.calls.append(kw)
@@ -188,7 +188,7 @@ def test_claude_episode_uses_tools(tmp_path):
     assert room.state()["fan_on"] and len(client.calls) == 6
     assert not any(f["fallback"] for f in live.feed)
     req = client.calls[0]
-    assert req["model"] == "claude-opus-5-5" and all(t["strict"] for t in req["tools"])
+    assert req["model"] == "claude-sonnet-5-5" and "fallbacks" not in req and "betas" not in req and all(t["strict"] for t in req["tools"])
     assert client.calls[1]["messages"][1]["role"] == "assistant"          # history appended, never edited
 
 
@@ -230,7 +230,8 @@ def test_live_screens_suggestion_answered(tmp_path):
 class MenuClient(FakeClient):
     def __init__(self, options, turns=None):
         super().__init__(turns)
-        self.messages = NS(parse=lambda **kw: NS(parsed_output=NS(options=options, why="night, room warm")))
+        self.messages = NS(create=self.create,
+                           parse=lambda **kw: NS(parsed_output=NS(options=options, why="night, room warm")))
 
 
 def test_claude_writes_the_talk_to_ai_menu(tmp_path):
