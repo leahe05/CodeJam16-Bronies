@@ -423,18 +423,37 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: #3b82f6
   .chat-pane > .latest-reply { position: static; }
   .chat-pane .conversation { max-height: 12rem; }
 }
-/* two ready-made questions for the open request: one click fills the question and its answers */
-.suggested { display: grid; gap: .4rem; margin: .35rem 0 .6rem; }
-.suggested .suggested-head { font-size: .78rem; color: var(--muted); }
-.suggested-chip { display: grid; gap: .1rem; text-align: left; width: 100%; padding: .55rem .75rem; border-radius: .7rem;
-  border: 1px solid #b9cde6; background: #f1f6fd; color: inherit; font: inherit; cursor: pointer; }
-.suggested-chip:hover, .suggested-chip:focus-visible { border-color: #3b82f6; background: #e3eefc; }
-.suggested-chip.picked { border-color: #2563eb; background: #dbeafe; }
-.suggested-chip b { font-weight: 650; }
-.suggested-chip small { color: var(--muted); }
-
 /* the patient list is a strip of cards above the patient panel, so the conversation + question box get the full width */
-.dashboard { width: min(92rem, calc(100% - 2rem)); }
+.dashboard { width: min(80rem, calc(100% - 2rem)); }
 .patient-grid { grid-template-columns: minmax(0, 1fr); }
 .patient-list { grid-template-columns: repeat(auto-fill, minmax(min(100%, 15rem), 1fr)); max-height: none; margin-top: .6rem; }
-.topbar .wrap { width: min(92rem, calc(100% - 2rem)); }
+.topbar .wrap { width: min(80rem, calc(100% - 2rem)); }
+
+/* "Ask the patient": Claude's two questions first (Send / Edit), then "or write your own", then quiet extras */
+.chat-pane { grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); }
+.suggested { display: grid; gap: .55rem; margin: .5rem 0 1rem; }
+.suggested-head { display: flex; align-items: baseline; gap: .5rem; flex-wrap: wrap; }
+.suggested-badge { font-size: .78rem; font-weight: 700; letter-spacing: .02em; color: #1d4ed8; }
+.suggested-about { font-size: .8rem; color: var(--muted); }
+.suggested-card { display: flex; align-items: center; gap: .75rem; padding: .7rem .8rem .7rem .95rem; border-radius: .9rem;
+  background: linear-gradient(135deg, #eef5ff, #e6f0fd); border: 1px solid #bcd3f3; box-shadow: 0 1px 2px rgba(30, 64, 140, .06); }
+.suggested-card.picked { border-color: #2563eb; box-shadow: 0 0 0 2px rgba(37, 99, 235, .18); }
+.suggested-text { flex: 1; min-width: 0; display: grid; gap: .35rem; }
+.suggested-text b { font-size: 1.02rem; font-weight: 650; line-height: 1.3; }
+.suggested-tags { display: flex; flex-wrap: wrap; gap: .3rem; }
+.suggested-tags .tag { font-size: .78rem; padding: .1rem .55rem; border-radius: 99px; background: #fff; border: 1px solid #c9daf1; color: #33507a; }
+.suggested-actions { display: flex; gap: .35rem; flex: none; }
+.suggested-wait { margin: 0; font-size: .82rem; color: var(--muted); }
+.own-label { margin: .2rem 0 .1rem; padding-top: .8rem; border-top: 1px solid var(--line, #e2e8f0);
+  font-size: .78rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+.button.small { padding: .32rem .8rem; font-size: .85rem; min-height: 0; }
+.composer-main { margin-top: .6rem; }
+.composer-more { margin-top: .4rem; gap: .35rem; }
+.composer-more .button { background: transparent; border-color: transparent; color: var(--blue, #1d4ed8); }
+.composer-more .button:hover { background: rgba(37, 99, 235, .08); }
+.composer-more .button.end { color: #b42318; margin-left: auto; }
+@media (max-width: 860px) {
+  .chat-pane { grid-template-columns: minmax(0, 1fr); }
+  .suggested-card { flex-direction: column; align-items: stretch; }
+  .suggested-actions .button { flex: 1; }
+}

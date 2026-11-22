@@ -1011,22 +1011,38 @@ function renderSuggestedQuestions(agent, data) {
   box.hidden = !s || !list(s.questions).length;
   updateRegion(box, [s, agent.question, $("question").disabled], () => {
     if (box.hidden) return [];
-    const head = element("p", "suggested-head",
-      (s.after ? `Next, after "${s.after}"` : s.about ? `Suggested for: ${s.about}` : "Suggested questions")
-      + (s.source === "ai" ? " · drafted with Claude" : ""));
-    const chips = list(s.questions).map(item => {
-      const chip = button("", "suggested-chip" + (agent.question === item.question ? " picked" : ""), () => {
+    const head = element("div", "suggested-head");
+    head.append(element("span", "suggested-badge", s.source === "ai" ? "✦ Suggested by Claude" : "Suggested"),
+      element("span", "suggested-about", s.after ? `after "${s.after}"` : s.about ? `for: ${s.about}` : ""));
+    const off = $("question").disabled;
+    const cards = list(s.questions).map(item => {
+      const card = element("div", "suggested-card" + (agent.question === item.question ? " picked" : ""));
+      const tags = element("div", "suggested-tags");
+      tags.append(...item.options.map(option => element("span", "tag", option)));
+      const send = button("Send", "button primary small", () => {
+        if (off) return;
+        act(agent, "/send", { question: item.question, options: item.options },
+          "Question sent to " + agentName(agent) + ".", () => {
+            agent.data.session = { ...agent.data.session, active: true, waiting: true };
+          });
+      });
+      const editButton = button("Edit", "button small", () => {
         agent.question = item.question;
         agent.options = item.options.join("\n");
         agent.optionsSource = s.source === "ai" ? "ai_question" : "manual";
         render();
-        $("send-question").focus();
+        $("question").focus();
       });
-      chip.append(element("b", "", item.question), element("small", "", item.options.join(" · ")));
-      chip.disabled = $("question").disabled;
-      return chip;
+      send.disabled = editButton.disabled = off;
+      const actions = element("div", "suggested-actions");
+      actions.append(send, editButton);
+      const text = element("div", "suggested-text");
+      text.append(element("b", "", item.question), tags);
+      card.append(text, actions);
+      return card;
     });
-    return [head, ...chips];
+    if (off) cards.push(element("p", "suggested-wait", "Waiting for the patient's answer…"));
+    return [head, ...cards];
   });
 }
 
