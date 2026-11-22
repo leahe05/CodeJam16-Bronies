@@ -55,7 +55,7 @@ function agentOrigin(value) {
   const url = new URL(value);
   if (!["http:", "https:"].includes(url.protocol) || url.username || url.password ||
       url.pathname !== "/" || url.search || url.hash) {
-    throw new Error("Enter the LookAt server address, including its port if needed.");
+    throw new Error("Enter the MinimEyes server address, including its port if needed.");
   }
   if (location.protocol === "https:" && url.protocol !== "https:") {
     throw new Error("Use an HTTPS agent address from this page.");
@@ -86,10 +86,10 @@ async function request(origin, path = "", body) {
         body: JSON.stringify(body)
       })
     });
-    if (!response.ok) throw new Error("The LookAt server could not complete the request.");
+    if (!response.ok) throw new Error("The MinimEyes server could not complete the request.");
     return await response.json();
   } catch (error) {
-    if (error.name === "AbortError") throw new Error("The LookAt server took too long to respond.");
+    if (error.name === "AbortError") throw new Error("The MinimEyes server took too long to respond.");
     throw error;
   } finally {
     clearTimeout(timeout);
@@ -98,7 +98,7 @@ async function request(origin, path = "", body) {
 
 function agentName(agent) {
   return agent.data?.patient?.name || (agent.demo ? "Simulated patient" :
-    agent.origin ? new URL(agent.origin).host : "This LookAt server");
+    agent.origin ? new URL(agent.origin).host : "This MinimEyes server");
 }
 
 function assignPatientColor(agent, patient) {
@@ -992,7 +992,7 @@ function renderLatestReply(data) {
   const region = $("latest-reply");
   const waiting = data?.session?.waiting;
   const conversation = list(data?.conversation);
-  if (Array.isArray(data?.conversation)) {          // a LookAt server with the conversation log
+  if (Array.isArray(data?.conversation)) {          // a MinimEyes server with the conversation log
     region.hidden = !conversation.length && !waiting;
     updateRegion(region, [waiting, conversation], () => {
       if (region.hidden) return [];
@@ -1085,7 +1085,7 @@ function render() {
   const waiting = roster.every(agent => agent.state === "connecting");
   const connection = $("connection-summary");
   connection.dataset.state = waiting ? "waiting" : connected === roster.length ? "ready" : "partial";
-  updateText(connection, waiting ? "Connecting to LookAt…" : `${connected} of ${roster.length} agents connected`);
+  updateText(connection, waiting ? "Connecting to MinimEyes…" : `${connected} of ${roster.length} agents connected`);
   renderAlerts();
   renderRoster();
   renderShift(roster);
@@ -1363,7 +1363,7 @@ $("connect-form").addEventListener("submit", event => {
     setup.querySelector("summary").focus();
     render();
   } catch (error) {
-    notify(error instanceof TypeError ? "Enter a complete LookAt server URL." : error.message);
+    notify(error instanceof TypeError ? "Enter a complete MinimEyes server URL." : error.message);
   }
 });
 

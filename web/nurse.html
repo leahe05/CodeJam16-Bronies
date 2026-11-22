@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#dbeafe">
-  <title>Nurse dashboard | LookAt</title>
+  <title>Nurse dashboard | MinimEyes</title>
   <link rel="stylesheet" href="/web/nurse.css">
   <script defer src="/web/nurse.js"></script>
 </head>
@@ -12,14 +12,14 @@
   <div class="aurora" aria-hidden="true"><i class="b1"></i><i class="b2"></i><i class="b3"></i></div>
   <header class="topbar">
     <div class="wrap topbar-inner">
-      <div class="brand"><svg class="brand-eye" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3.2"/></svg>LookAt<span class="brand-sub">Nurse</span></div>
+      <div class="brand"><svg class="brand-eye" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3.2"/></svg>MinimEyes<span class="brand-sub">Nurse</span></div>
       <button id="sound" class="button sound" type="button" aria-pressed="false">Enable alert sound</button>
     </div>
   </header>
   <main class="wrap dashboard">
     <div class="page-heading">
       <h1>Nurse dashboard</h1>
-      <p id="connection-summary" class="connection" role="status">Connecting to LookAt…</p>
+      <p id="connection-summary" class="connection" role="status">Connecting to MinimEyes…</p>
     </div>
 
     <div id="shift-controls" class="shift-controls" hidden>
@@ -64,7 +64,7 @@
           <details class="agent-setup">
             <summary>Connect another agent</summary>
             <form id="connect-form">
-              <label for="agent-url">LookAt server URL</label>
+              <label for="agent-url">MinimEyes server URL</label>
               <input id="agent-url" name="agent-url" type="url" placeholder="http://room-device:8000" required>
               <button class="button primary" type="submit">Connect agent</button>
             </form>

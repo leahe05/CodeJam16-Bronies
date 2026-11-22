@@ -1,4 +1,4 @@
-"""LookAt: the real program.
+"""MinimEyes: the real program.
 
     py -3.11 main.py --patient NAME [--voice edge|page|windows|off]
         --gaze web: the patient page (/patient) tracks gaze AND eyebrows itself (WebGazer, big layout)
@@ -33,7 +33,7 @@ from lookat.server import PAGES, find_page, make_app
 from lookat.speech import Announcer, EdgeVoice, Speech, WebVoice, known_lines
 from lookat.state import log_event
 
-WINDOW = "LookAt operator (team only)"
+WINDOW = "MinimEyes operator (team only)"
 STATUS_EVERY_S = 30.0      # the one-line status print
 CAMERA_RETRY_S = 2.0       # camera stopped giving frames: try to reopen it this often
 CAMERA_RESTART_S = 5.0     # the camera loop crashed: restart it after this long
@@ -84,7 +84,7 @@ def start_server(live: Live, port: int):
     while not server.started and time.monotonic() < deadline:
         time.sleep(0.05)
     if not server.started:
-        raise SystemExit(f"Web server did not start on port {port} (already in use? close the other LookAt)")
+        raise SystemExit(f"Web server did not start on port {port} (already in use? close the other MinimEyes)")
     return server
 
 
@@ -125,7 +125,7 @@ def calibrate(tracker, live: Live, speaker, patient: str, what: str):
     finally:
         live.set_calibration(None)
         # the calibration windows would stay on screen, frozen, on top of the live one
-        for name in ("LookAt gaze (operator)", "LookAt gestures (operator)"):
+        for name in ("MinimEyes gaze (operator)", "MinimEyes gestures (operator)"):
             try:
                 cv2.destroyWindow(name)
             except cv2.error:
@@ -280,7 +280,7 @@ def run_camera(args, live: Live) -> None:
                         raise_window()
                         raised = True
                     key = cv2.waitKey(1) & 0xFF
-            except Exception as e:   # noqa: BLE001 - one bad frame must never stop LookAt
+            except Exception as e:   # noqa: BLE001 - one bad frame must never stop MinimEyes
                 errors += 1
                 log_event("frame_error", error=repr(e))
                 if errors == 1 or errors % 100 == 0:
@@ -423,7 +423,7 @@ def run_keyboard(args, live: Live) -> None:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="LookAt")
+    ap = argparse.ArgumentParser(description="MinimEyes")
     ap.add_argument("--patient", default="demo")
     ap.add_argument("--profile", default="margaret", choices=("margaret", "james"),
                     help="the demo patient whose memory the agent uses (switch on the panel)")
@@ -487,7 +487,7 @@ def main() -> None:
         server.should_exit = True
         room.close()
         args.speech.close()
-        print("LookAt stopped.", flush=True)
+        print("MinimEyes stopped.", flush=True)
         # end the process for sure: a stuck camera/voice/web thread kept it alive before, holding
         # port 8000 and the camera, so the next start failed with "port already in use"
         os._exit(0)

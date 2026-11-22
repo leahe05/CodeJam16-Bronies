@@ -1,4 +1,4 @@
-"""All LookAt constants. Change numbers here, nowhere else."""
+"""All MinimEyes constants. Change numbers here, nowhere else."""
 import os
 from typing import Optional
 

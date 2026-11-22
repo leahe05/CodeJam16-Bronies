@@ -5,7 +5,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>LookAt test page</title>
+<title>MinimEyes test page</title>
 <style>
   body { margin: 0; background: #0b1d3f; color: #fff; font: 600 3vh "Segoe UI", system-ui, sans-serif; height: 100vh; display: flex; flex-direction: column; }
   .tag { position: fixed; top: 8px; right: 12px; font-size: 1.6vh; color: #9cc8ff; }
@@ -91,7 +91,7 @@ async function poll() {
     text($("foot"), foot);
     drawOverlay(d.overlay);
   } catch (e) {
-    text($("title"), "Can't reach the LookAt program");
+    text($("title"), "Can't reach the MinimEyes program");
   }
   setTimeout(poll, 150);
 }

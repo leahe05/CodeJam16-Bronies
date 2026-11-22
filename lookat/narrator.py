@@ -1,4 +1,4 @@
-"""What LookAt says out loud, decided from what the patient screen shows (pure logic, no audio).
+"""What MinimEyes says out loud, decided from what the patient screen shows (pure logic, no audio).
 
     narrator = Narrator()
     for text in narrator.update(live.screen_json()):   # call every frame

@@ -171,7 +171,7 @@
   const menuHTML = (d) => BIG ? `<div class="panel enter">${chip(d)}<h1>${esc(d.title)}</h1>${sub(d)}${bigCols(d, true)}</div>` : `<div class="panel enter">${chip(d)}<h1>${esc(d.title)}</h1>${sub(d)}${cards(d, "stack")}${center(d)}${dots(d.page)}</div>`;
 
   function headHTML(d) {
-    const brand = (cls) => `<div class="brand ${cls}">${icon("eye")}<span>LookAt</span></div>`;
+    const brand = (cls) => `<div class="brand ${cls}">${icon("eye")}<span>MinimEyes</span></div>`;
     if (d.screen === "nurse")
       return `${brand("start")}<div class="nursepill">${icon("nurse")}${esc(d.badge || "From your nurse")}</div>`
         + `<div class="conn"><span class="ok">Connected</span><span class="lost">Reconnecting…</span></div>`;

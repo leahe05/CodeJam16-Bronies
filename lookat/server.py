@@ -1,4 +1,4 @@
-"""The one web server for LookAt: serves Lea's pages and the JSON API (docs/API.md).
+"""The one web server for MinimEyes: serves Lea's pages and the JSON API (docs/API.md).
 
 Both the fake backend (lookat/fake_api.py) and the real program (main.py) use
 make_app(backend), so the URLs and JSON are identical: a page that works with
@@ -84,7 +84,7 @@ class LastGood:
         return data
 
 
-def make_app(backend, title: str = "LookAt", web_dir: str = WEB_DIR):
+def make_app(backend, title: str = "MinimEyes", web_dir: str = WEB_DIR):
     from fastapi import FastAPI, Request
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import FileResponse, HTMLResponse
@@ -127,7 +127,7 @@ def make_app(backend, title: str = "LookAt", web_dir: str = WEB_DIR):
     def index():
         links = "".join(f"<li><a href='/{n}'>/{n}</a> ({'Lea' if find_page(n, web_dir)[1] else 'test page'})</li>"
                         for n in PAGES)
-        return HTMLResponse(f"<h1>LookAt</h1><ul>{links}</ul>")
+        return HTMLResponse(f"<h1>MinimEyes</h1><ul>{links}</ul>")
 
     good = LastGood(backend)
 

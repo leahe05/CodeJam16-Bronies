@@ -287,13 +287,13 @@ class Fake:
 def make_app(fake: Fake):
     """The same server the real program uses (lookat/server.py)."""
     from lookat.server import make_app as server_app
-    return server_app(fake, title="LookAt fake API")
+    return server_app(fake, title="MinimEyes fake API")
 
 
 def main():
     import uvicorn
 
-    ap = argparse.ArgumentParser(description="Fake LookAt backend for building the pages")
+    ap = argparse.ArgumentParser(description="Fake MinimEyes backend for building the pages")
     ap.add_argument("--port", type=int, default=8000)
     ap.add_argument("--still", help="always show this screen id (idle, checkin, nurse, ...; calibrate = the calibration overlay)")
     args = ap.parse_args()
@@ -305,7 +305,7 @@ def main():
             fake.tick()
 
     threading.Thread(target=ticker, daemon=True).start()
-    print(f"Fake LookAt API on http://localhost:{args.port}  ->  /patient  /nurse  /panel   (Ctrl+C to stop)")
+    print(f"Fake MinimEyes API on http://localhost:{args.port}  ->  /patient  /nurse  /panel   (Ctrl+C to stop)")
     uvicorn.run(make_app(fake), host="0.0.0.0", port=args.port, log_level="warning")
 
 

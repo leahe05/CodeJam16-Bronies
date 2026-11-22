@@ -159,7 +159,7 @@ def calibrate(tracker, say, patient: str, frames: int = CALIB_FRAMES, show: bool
         frame, f = tracker.read()
         if show and frame is not None:
             cv2.putText(frame, label, (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 200, 255), 3)
-            cv2.imshow("LookAt gaze (operator)", frame)
+            cv2.imshow("MinimEyes gaze (operator)", frame)
             cv2.waitKey(1)
         return f
 
@@ -249,7 +249,7 @@ class SystemVoice:
 
 
 class AvaVoice:
-    """LookAt's own voice: Microsoft "Ava" (calm, caring neural voice) through edge-tts.
+    """MinimEyes' own voice: Microsoft "Ava" (calm, caring neural voice) through edge-tts.
 
     Needs internet the FIRST time a sentence is spoken; every sentence is then cached in
     cache/voice/, so repeated prompts work offline. Any failure (edge-tts missing or blocked,
@@ -310,7 +310,7 @@ class AvaVoice:
 
 
 class LocalSpeaker:
-    """LookAt's voice for every spoken prompt. Never blocks the caller: sentences are queued and
+    """MinimEyes' voice for every spoken prompt. Never blocks the caller: sentences are queued and
     spoken one after another by a worker thread. Uses Ava (AvaVoice) when it works, otherwise the
     computer's own female voice (SystemVoice), so the prompts are never silent."""
 
@@ -419,7 +419,7 @@ def _self_test(patient: str, recalibrate: bool, camera: int) -> None:
             color = (0, 200, 0) if spot else (0, 165, 255)
             cv2.putText(frame, label.upper(), (40, 160), cv2.FONT_HERSHEY_SIMPLEX, 4, color, 8)
             cv2.putText(frame, f"confidence {conf:.2f}", (40, 230), cv2.FONT_HERSHEY_SIMPLEX, 1.2, color, 3)
-            cv2.imshow("LookAt gaze (operator)", frame)
+            cv2.imshow("MinimEyes gaze (operator)", frame)
             key = cv2.waitKey(1) & 0xFF
             if key == ord("q"):
                 break

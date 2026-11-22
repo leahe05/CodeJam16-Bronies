@@ -93,7 +93,7 @@ def failure_reason(error):
     if type(error).__name__ == "APIConnectionError":
         return "The app could not connect to Claude. Check network or proxy settings."
     if isinstance(error, ClaudeNotConfigured):
-        return "No Claude API key is configured. Set ANTHROPIC_API_KEY before starting LookAt."
+        return "No Claude API key is configured. Set ANTHROPIC_API_KEY before starting MinimEyes."
     if isinstance(error, ImportError):
         return "The Anthropic Python package could not be loaded. Check the demo dependencies."
     if isinstance(error, ValueError):
