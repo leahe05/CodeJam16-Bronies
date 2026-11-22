@@ -32,6 +32,7 @@
     backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); flex-wrap: wrap; }
   .brand { display: flex; align-items: center; gap: 9px; font-weight: 650; font-size: 19px; }
   .brand svg { width: 30px; height: 28px; }
+  .brand .eyes { color: #60a5fa; }
   .brand small { font-weight: 500; color: var(--hint); font-size: 14px; }
   .clock { font-size: 22px; font-weight: 650; font-variant-numeric: tabular-nums; }
   .clock small { font-size: 12px; font-weight: 600; letter-spacing: .1em; color: var(--warn); margin-left: 8px; }
@@ -123,7 +124,7 @@
 <header>
   <div class="brand">
     <svg class="logo" viewBox="0 0 76 70" aria-hidden="true"><path d="M20 2H56Q74 2 74 20V38Q74 56 56 56H38L24 68L26 56H20Q2 56 2 38V20Q2 2 20 2Z" fill="#bfdbfe" stroke="#60a5fa" stroke-width="3" stroke-linejoin="round"/><g fill="none" stroke="#1d4ed8" stroke-linecap="round"><path d="M21 28Q27 21 33 28" stroke-width="4.5"/><path d="M43 28Q49 21 55 28" stroke-width="4.5"/><path d="M28 38Q38 46 48 38" stroke-width="4"/></g></svg>
-    MinimEyes <small>agent reasoning</small>
+    <span>Minim<span class="eyes">Eyes</span></span> <small>agent reasoning</small>
   </div>
   <div class="clock" id="clock">--:--</div>
   <div class="status" id="status"></div>

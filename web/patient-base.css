@@ -50,6 +50,8 @@ header { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center
 .brand { display: flex; align-items: center; gap: calc(var(--u) * 1); font-weight: 600; font-size: calc(var(--u) * 3); justify-self: end; }
 .brand svg { font-size: calc(var(--u) * 4.2); color: var(--brand-icon); }
 .brand svg.logo { width: 1.1em; height: 1em; }
+.brand .eyes { color: #60a5fa; }
+html[data-theme="day"] .brand .eyes { color: #2563eb; }
 .brand.start { justify-self: start; }
 .corner {
   position: relative; justify-self: start; display: flex; align-items: center; gap: calc(var(--u) * 1.4);

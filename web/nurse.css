@@ -335,6 +335,7 @@ body { min-height: 100vh; -webkit-font-smoothing: antialiased; }
 }
 .brand { font-size: 1.3rem; font-weight: 650; letter-spacing: -.01em; }
 .brand-eye { width: 2rem; height: 1.85rem; }
+.brand .eyes { color: #2563eb; }
 .brand-sub {
   margin-left: .2rem; padding: .12rem .6rem; border-radius: 99px; font-size: .78rem; font-weight: 650;
   letter-spacing: .04em; text-transform: uppercase; color: #1d4ed8; background: rgba(29, 78, 216, .1);
