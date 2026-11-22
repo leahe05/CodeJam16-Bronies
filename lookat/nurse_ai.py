@@ -217,6 +217,41 @@ def refine_checkin(proposal):
     ]}
 
 
+def assess_status(profile, changes):
+    """Assess a patient-agent update for a nurse-reviewed comfort check-in or concern."""
+    context = {key: profile[key] for key in ("status", "awareness", "room", "habits",
+                                            "minutes_past_bedtime") if key in profile}
+    context["preferences"] = profile.get("_comfort_preferences", [])
+    result = _request_json(
+        "Review a patient agent's changes for a fictional bedside comfort demo. Default to ignore for normal "
+        "activity, isolated wakefulness, minor sensor fluctuations, or a concern already handled by the patient agent. "
+        "Choose ask when a concrete non-clinical comfort question fits the observed change and known preferences. "
+        "Only ask when the patient is awake. Choose flag only for a concrete unresolved change the nurse should see "
+        "even without asking the patient. Base everything on these observations. Never diagnose, infer an emergency, "
+        "suggest medication or treatment, or claim any care was done. These are suggestions for nurse review. "
+        'Return an object with "action" ("ignore", "ask", or "flag") and "rationale" (one brief sentence). '
+        'For ask or flag, include a short patient-facing yes-or-no "question" and a matching "choice" from '
+        'the care options. If the patient is asleep, a flagged question is for the nurse to consider for later.',
+        {"patient_context": context, "changes": changes,
+         "care_choices": {key: values[0] for key, values in CARE_CHOICES.items()}},
+    )
+    action = result.get("action") if isinstance(result, dict) else None
+    if action == "ignore":
+        return None
+    rationale = result.get("rationale") if action in ("ask", "flag") else None
+    if not isinstance(rationale, str) or not rationale.strip():
+        raise ValueError("Invalid Claude status assessment")
+    assessment = {"action": action, "rationale": _short(rationale)}
+    if action == "ask" and profile.get("awareness", {}).get("state") != "awake":
+        return None
+    choice, question = result.get("choice"), result.get("question")
+    if (not isinstance(choice, str) or choice not in CARE_CHOICES or not isinstance(question, str)
+            or not 1 < len(question.strip()) <= 140 or not question.strip().endswith("?")):
+        raise ValueError("Invalid Claude check-in question")
+    assessment["step"] = {"question": question.strip(), "request": CARE_CHOICES[choice][2]}
+    return assessment
+
+
 def decide_request(request, profile, confirmed=False):
     context = {key: profile[key] for key in ("status", "awareness", "room", "last_meal", "preferences", "habits")
                if key in profile}

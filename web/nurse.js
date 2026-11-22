@@ -20,6 +20,7 @@ let audio = null;
 let soundEnabled = false;
 let feedbackTimer;
 let requestQuestion = null;
+let arrivalEta = null;
 
 function element(tag, className, text) {
   const node = document.createElement(tag);
@@ -312,6 +313,7 @@ function showTab(tab, moveFocus = false) {
 }
 
 function alertOrigin(alert) {
+  if (alert.delivery === "status-update") return "Nurse supervisor concern";
   if (alert.delivery === "check-in") return "Reported at check-in";
   if (alert.delivery === "proactive" && alert.kind !== "call") return "Proactive patient-agent request";
   if (alert.source === "patient") return "Patient requested";
@@ -344,6 +346,10 @@ function alertCard({ agent, alert }, handled) {
   card.append(meta, element("h3", "", alert.request || alert.text || "Patient alert"));
   if (!alert.request && alert.kind === "call") card.append(element("p", "muted", "Patient did not specify what they need."));
   if (alert.reason) card.append(element("p", "muted", alert.reason));
+  if (alert.suggested_question && !handled) {
+    card.append(element("p", "", "Suggested question · " + alert.suggested_question));
+  }
+  if (alert.eta_minutes) card.append(element("p", "muted", `Arrival estimate sent · ${alert.eta_minutes} min`));
   if (alert.question_reply) {
     card.append(element("p", "", "Patient answered: " + alert.question_reply.answer),
       element("p", "request-recommendation", alert.question_reply.next_step));
@@ -377,6 +383,11 @@ function alertCard({ agent, alert }, handled) {
       control.disabled = agent.state !== "online" || agent.busy;
       row.append(control);
     });
+    if (agent.data?.arrival_eta && alert.eta_available !== false && ["page", "call"].includes(alert.kind)) {
+      const eta = button("On my way with ETA", "button", () => openArrivalEta(agent, alert));
+      eta.disabled = agent.state !== "online" || agent.busy;
+      row.append(eta);
+    }
     const ask = button("Ask a question", "button", () => openRequestQuestion(agent, alert));
     ask.id = "ask-request-" + encodeURIComponent(JSON.stringify([agent.origin, alert.id]));
     ask.disabled = agent.state !== "online" || agent.busy || agent.data?.session?.waiting === true;
@@ -418,12 +429,47 @@ function renderAlerts() {
 function openRequestQuestion(agent, alert) {
   requestQuestion = { agent, alertId: alert.id, patientId: agent.data?.patient?.id, drafted: false };
   $("request-question-form").reset();
+  $("request-question").value = alert.suggested_question || "";
   markPatient($("request-question-context"), agent);
   updateText($("request-question-context"), `${agentName(agent)} · ${alert.request || alert.text}`);
   requestQuestionFeedback("");
   renderRequestQuestion();
   $("request-question-dialog").showModal();
 }
+
+function openArrivalEta(agent, alert) {
+  arrivalEta = { agent, alertId: alert.id, patientId: agent.data?.patient?.id };
+  $("arrival-eta-form").reset();
+  updateText($("arrival-eta-context"), agentName(agent));
+  updateText($("arrival-eta-feedback"), "");
+  $("send-arrival-eta").disabled = false;
+  $("arrival-eta-dialog").showModal();
+}
+
+$("arrival-eta-dialog").addEventListener("close", () => { arrivalEta = null; });
+$("cancel-arrival-eta").addEventListener("click", () => $("arrival-eta-dialog").close());
+$("arrival-eta-form").addEventListener("submit", event => {
+  event.preventDefault();
+  if (!arrivalEta) return;
+  const draft = arrivalEta;
+  if (draft.patientId !== draft.agent.data?.patient?.id) {
+    updateText($("arrival-eta-feedback"), "The active patient changed. Open the current patient’s request.");
+    return;
+  }
+  if (draft.agent.busy || draft.agent.state !== "online") {
+    updateText($("arrival-eta-feedback"), "The patient connection is busy or unavailable. Try again.");
+    return;
+  }
+  $("send-arrival-eta").disabled = true;
+  act(draft.agent, "/alert/eta", { id: draft.alertId, eta_minutes: $("arrival-eta-minutes").valueAsNumber },
+    "Arrival estimate sent.", () => {
+      if (arrivalEta === draft) $("arrival-eta-dialog").close();
+    }, message => {
+      if (arrivalEta !== draft) return;
+      $("send-arrival-eta").disabled = false;
+      updateText($("arrival-eta-feedback"), message);
+    });
+});
 
 function requestQuestionFeedback(message) {
   $("request-question-feedback").hidden = !message;
@@ -758,8 +804,10 @@ function patientNotes(data) {
       ...vitalLines(bedside.vitals)
     ]),
     checkIn && note("Agent check-ins", [
-      `Every ${checkIn.interval_s} seconds`,
-      checkIn.time ? `Last reply ${checkIn.time}` : "Waiting for the patient agent’s reply",
+      checkIn.last_update && `Last status update ${checkIn.last_update}`,
+      `Scheduled check-in every ${checkIn.interval_s} seconds`,
+      checkIn.time ? `Last scheduled reply ${checkIn.time}` : "Waiting for the patient agent’s reply",
+      checkIn.status_review_error,
       checkIn.time && (checkIn.needs_attention ? "Requested nurse attention" :
         checkIn.suggested_question ? "Suggested a question" : "Nothing needs attention")
     ]),

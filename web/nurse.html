@@ -172,5 +172,18 @@ No</textarea>
       </div>
     </form>
   </dialog>
+  <dialog id="arrival-eta-dialog" aria-labelledby="arrival-eta-heading">
+    <form id="arrival-eta-form">
+      <h2 id="arrival-eta-heading">Send arrival estimate</h2>
+      <p id="arrival-eta-context" class="muted"></p>
+      <label for="arrival-eta-minutes">Estimated minutes until arrival</label>
+      <input id="arrival-eta-minutes" type="number" min="1" max="120" step="1" required autofocus>
+      <p id="arrival-eta-feedback" class="muted" role="status"></p>
+      <div class="form-row">
+        <button id="send-arrival-eta" class="button primary" type="submit">Send estimate</button>
+        <button id="cancel-arrival-eta" class="button" type="button">Cancel</button>
+      </div>
+    </form>
+  </dialog>
 </body>
 </html>

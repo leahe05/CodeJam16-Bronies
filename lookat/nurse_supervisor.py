@@ -119,6 +119,35 @@ class NurseSupervisor:
         with self._lock:
             self._questions[patient_id].pop(question_id, None)
 
+    def publish_status_assessment(self, patient_id, assessment, profile, changes):
+        """Queue a supervisor suggestion or observation for the nurse to review."""
+        with self._lock:
+            if self._questions[patient_id] or any(
+                not alert["done"] and alert["delivery"] == "status-update" for alert in self._requests[patient_id]
+            ):
+                return
+            evidence = " · ".join(changes)
+            if assessment["action"] == "ask":
+                question_id = f"status-{next(self._ids)}"
+                self._questions[patient_id][question_id] = {
+                    "id": question_id, "evidence": evidence, "preference": assessment["rationale"],
+                    "steps": [assessment["step"]], "source": "ai", "status_update": True,
+                }
+                return
+            self._receive_request(patient_id, "Patient status changed", at=profile["reported_at"],
+                                  reason=evidence, kind="flag", delivery="status-update")
+            self._requests[patient_id][0].update(
+                source="ai", request=None, recommendation=assessment["rationale"],
+                suggested_question=assessment["step"]["question"],
+                actions=[{"id": "ack", "label": "Acknowledge"}],
+            )
+
+    def clear_status_questions(self, patient_id):
+        with self._lock:
+            questions = self._questions[patient_id]
+            for question_id in [key for key, question in questions.items() if question.get("status_update")]:
+                del questions[question_id]
+
     def receive_request(self, patient_id, request, *, profile=None, **details):
         with self._lock:
             if profile is not None:
@@ -234,10 +263,12 @@ class NurseSupervisor:
             ))
             return [dict(alert) for alert in ordered]
 
-    def acknowledge(self, patient_id, alert_id):
+    def acknowledge(self, patient_id, alert_id, *, eta_minutes=None):
         with self._lock:
             alert = next((item for item in self._requests[patient_id] if item["id"] == alert_id), None)
-            if alert is None:
+            if alert is None or (eta_minutes is not None and alert["done"]):
                 return False
             alert["done"] = True
+            if eta_minutes is not None:
+                alert["eta_minutes"] = eta_minutes
             return True

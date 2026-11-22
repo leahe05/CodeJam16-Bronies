@@ -16,15 +16,18 @@ urgent / soon / routine, explains it, and may draft a yes/no question for the nu
     live.nurse = NurseBridge(live); live.nurse.start()      # main.py does this
 """
 import itertools
+import logging
+import math
 import threading
 import time
+from collections import deque
 from datetime import timedelta
 from typing import Optional
 
 from lookat import nurse_ai
-from lookat.clock import clock
-from lookat.memory import PROFILES
-from lookat.nurse_link import NurseLink
+from lookat.clock import clock, parse_hhmm
+from lookat.memory import PROFILES, routine_time
+from lookat.nurse_link import NurseLink, valid_eta_minutes
 from lookat.nurse_patient_profile import CARE_CHOICES
 from lookat.nurse_supervisor import NurseSupervisor
 from lookat.state import log_event
@@ -34,25 +37,61 @@ ROOMS = {"margaret": "Room 12", "james": "Room 14"}
 VITALS = {"margaret": ((74, 97, 16, 124, 76), (76, 97, 16, 126, 77), (75, 98, 15, 125, 76)),
           "james": ((68, 98, 14, 132, 84), (70, 98, 15, 130, 83), (69, 97, 14, 131, 84))}
 FEED_ACTIONS = {"decided": "Decided", "did": "Did", "outcome": "Outcome", "learned": "Learned"}
+STATUS_SAMPLE_S = 2.0
+STATUS_REVIEW_GAP_S = 20.0
+STATUS_NOTE_MAX_AGE_S = 60.0
+log = logging.getLogger(__name__)
+
+
+def observation_changes(previous, current):
+    changes = []
+    overdue = current.get("minutes_past_bedtime")
+    if overdue and not previous.get("minutes_past_bedtime"):
+        changes.append(f"Patient appears awake {overdue} minutes past their usual bedtime.")
+    before, after = previous["room"], current["room"]
+    if abs(after["temp_c"] - before["temp_c"]) >= 1:
+        changes.append(f"Room reading changed from {before['temp_c']:g} to {after['temp_c']:g} °C.")
+    for device in ("fan", "lamp"):
+        if before[f"{device}_on"] != after[f"{device}_on"]:
+            changes.append(f"{device.capitalize()} is now {'on' if after[f'{device}_on'] else 'off'}.")
+    old_awareness, awareness = previous["awareness"]["state"], current["awareness"]["state"]
+    if old_awareness != awareness and awareness in ("awake", "asleep"):
+        changes.append(f"Patient now appears {'awake' if awareness == 'awake' else 'to be resting'}.")
+    if previous["preferences"] != current["preferences"] or previous["habits"] != current["habits"]:
+        changes.append("The patient agent updated the patient's preferences or habits.")
+    return changes
 
 
 class NurseBridge:
-    def __init__(self, live, decide=None):
+    def __init__(self, live, decide=None, *, assess=None):
         self.live = live
         self._links = {pid: NurseLink(None) for pid in PROFILES}
         for link in self._links.values():
             link.set_visitors(False)
         if decide is None and nurse_ai.available():
             decide = nurse_ai.decide_request
+        if assess is None and nurse_ai.available():
+            assess = nurse_ai.assess_status
         self.supervisor = NurseSupervisor(decide=decide)
         for pid in PROFILES:
             self.supervisor.register(pid, lambda prompt, pid=pid: self.check_in(pid, prompt))
         self.refined: dict = {}                    # proposal id -> the version Claude reworded
         self._ids = itertools.count(1)
         self._stop = threading.Event()
+        self._assess = assess
+        self._status_changed = threading.Event()
+        self._status_notes = {pid: deque(maxlen=4) for pid in PROFILES}
+        self._status_profiles = {}
+        self._status_reviewed_at = {}
+        self._status_failure = {}
+        self._status_generation = 0
+        self._status_inflight = set()
+        self._attach_eta_view()
+        self._track_eta_recipients()
 
     def start(self) -> None:
         threading.Thread(target=self.supervisor.run, args=(self._stop,), daemon=True, name="nurse-check-in").start()
+        threading.Thread(target=self._monitor_status, daemon=True, name="nurse-status").start()
         if self.supervisor.ai_enabled:
             for _ in range(2):
                 threading.Thread(target=self.supervisor.run_reviews, args=(self._stop,), daemon=True,
@@ -60,6 +99,7 @@ class NurseBridge:
 
     def stop(self) -> None:
         self._stop.set()
+        self._status_changed.set()
 
     def reset(self) -> None:
         """Reset demo: the dashboard's history, requests and proposals go too (the profiles stay)."""
@@ -68,7 +108,13 @@ class NurseBridge:
             link.set_visitors(False)
         for pid in PROFILES:
             self.supervisor.reset_patient(pid)
+            self._status_notes[pid].clear()
+        self._status_profiles.clear()
+        self._status_reviewed_at.clear()
+        self._status_failure.clear()
+        self._status_generation += 1
         self.refined.clear()
+        self._attach_eta_view()
 
     @property
     def proposal(self) -> Optional[dict]:
@@ -84,6 +130,37 @@ class NurseBridge:
     @property
     def link(self) -> NurseLink:
         return self._links[self.pid]
+
+    def _attach_eta_view(self) -> None:
+        """Present the nurse message through the patient screen's existing subtitle."""
+        screen = self.live.sm
+        if getattr(self, "_eta_screen", None) is screen:
+            return
+        original_view = screen.view
+
+        def view(now):
+            data = original_view(now)
+            message = self.link.eta_message(now)
+            if message:
+                data["subtitle"] = " ".join(filter(None, (message, data.get("subtitle"))))
+            return data
+
+        screen.view = view
+        self._eta_screen = screen
+
+    def _track_eta_recipients(self) -> None:
+        """Bind native calls and urgent pages to their original patient profile."""
+        add_alert = self.live.add_alert
+
+        def tagged_alert(*args, **kwargs):
+            with self.live.lock:
+                patient_id = self.pid
+                alert = add_alert(*args, **kwargs)
+                if alert["kind"] in ("call", "page") and not alert["id"].startswith("agent-"):
+                    alert["_eta_patient_id"] = patient_id
+                return alert
+
+        self.live.add_alert = tagged_alert
 
     def patient(self) -> dict:
         return {"id": self.pid, "name": PROFILES[self.pid]["name"], "room": ROOMS.get(self.pid, "Room 12")}
@@ -111,14 +188,87 @@ class NurseBridge:
         r = self.live.room.state()
         aware = self._awareness()
         status = {"awake": "Awake in bed", "asleep": "Resting with eyes closed"}.get(aware["state"], "In bed")
-        return {"patient": self.patient(), "_observed_at": time.monotonic(), "reported_at": clock.now().strftime("%H:%M:%S"),
+        now = clock.now()
+        minutes_past_bedtime = None
+        bedtime = routine_time(memory, "bedtime") if memory is not None else None
+        if bedtime and aware["state"] == "awake":
+            try:
+                hour, minute = parse_hhmm(bedtime)
+                elapsed = (now.hour * 60 + now.minute - hour * 60 - minute) % (24 * 60)
+                if 30 <= elapsed <= 180:
+                    minutes_past_bedtime = elapsed
+            except ValueError:
+                pass  # The patient chart may contain an invalid time.
+        return {"patient": self.patient(), "_observed_at": time.monotonic(), "reported_at": now.strftime("%H:%M:%S"),
                 "status": status + (f" · LookAt: {self.live.agent_status}" if getattr(self.live, "agent_status", None) else ""),
+                "minutes_past_bedtime": minutes_past_bedtime,
                 "posture": "In bed", "awareness": aware, "visitors_present": self.link.snapshot(time.monotonic())["visitors_present"],
                 "room": {"temp_c": r["temp_c"], "setpoint_c": r["setpoint_c"], "lamp_on": r["lamp_on"], "fan_on": r["fan_on"]},
                 "vitals": self._vitals(),
                 "preferences": [f["text"] for f in facts if f.get("kind") != "routine"],
+                "_comfort_preferences": [f["text"] for f in facts if f.get("kind") in ("comfort", "preference")],
                 "habits": [f["text"] for f in facts if f.get("kind") == "routine"] + habits,
                 "care_choices": [{"id": k, "label": v[0]} for k, v in CARE_CHOICES.items()]}
+
+    def _monitor_status(self) -> None:
+        while not self._stop.is_set():
+            self._status_changed.clear()
+            try:
+                self._review_status_change()
+            except Exception as error:
+                log.warning("Patient status sampling failed (%s)", type(error).__name__)
+            self._status_changed.wait(STATUS_SAMPLE_S)
+
+    def _status_review_paused(self) -> bool:
+        return (self.live.session["active"] or self.live.calibration is not None or not self.live.sm.can_interrupt()
+                or self.live.machine.busy
+                or self.live.agent_status.startswith("Quiet: the patient asked for quiet")
+                or any(alert.get("urgency") == "urgent" and not alert.get("done")
+                       for alert in self.live.alerts + self.supervisor.alerts(self.pid)))
+
+    def _review_status_change(self) -> None:
+        with self.live.lock:
+            profile = self.profile()
+            pid = profile["patient"]["id"]
+            self.supervisor.publish_profile(pid, profile)
+            previous = self._status_profiles.setdefault(pid, {**profile, "minutes_past_bedtime": None})
+            changes = observation_changes(previous, profile)
+            if changes or profile["awareness"]["state"] != "awake":
+                self.supervisor.clear_status_questions(pid)
+            now = time.monotonic()
+            last_review = self._status_reviewed_at.get(pid, -math.inf)
+            notes = self._status_notes[pid]
+            changes.extend(text for at, text, pending in notes if pending and now - at <= STATUS_NOTE_MAX_AGE_S)
+            token = (pid, self._status_generation)
+            if (self._assess is None or not changes or now - last_review < STATUS_REVIEW_GAP_S
+                    or token in self._status_inflight or self._status_review_paused()):
+                return
+            self._status_profiles[pid] = profile
+            self._status_reviewed_at[pid] = now
+            self._status_notes[pid] = deque(((at, text, False) for at, text, _ in notes), maxlen=notes.maxlen)
+            self._status_inflight.add(token)
+        threading.Thread(target=self._assess_status, args=(token, profile, changes), daemon=True,
+                         name="nurse-status-review").start()
+
+    def _assess_status(self, token, profile, changes) -> None:
+        try:
+            assessment = self._assess(profile, changes)
+            failure = None
+        except Exception as error:
+            assessment, failure = None, nurse_ai.failure_reason(error)
+        with self.live.lock:
+            self._status_inflight.discard(token)
+            pid, generation = token
+            if self._stop.is_set() or self._status_generation != generation or pid != self.pid:
+                return
+            self._status_failure[pid] = failure
+            if not assessment or self._status_review_paused():
+                return
+            current = self.profile()
+            if assessment["action"] == "ask" and current["awareness"]["state"] != "awake":
+                return
+            if not observation_changes(profile, current):
+                self.supervisor.publish_status_assessment(pid, assessment, profile, changes)
 
     def check_in(self, patient_id: str, prompt: str) -> Optional[dict]:
         with self.live.lock:
@@ -141,13 +291,20 @@ class NurseBridge:
         snap["awareness"] = self._awareness()
         snap["vitals"] = {"simulated": True, **{k: v for k, v in self._vitals()["current"].items() if k != "time"}}
         report = self.supervisor.latest_report(self.pid) or {}
+        latest = self.supervisor.latest_profile(self.pid) or {}
         data.update(patient=self.patient(), profile=self.profile(), bedside=snap,
                     history=self.link.interaction_history(), proposal=self.proposal,
                     agent_checkin={"interval_s": self.supervisor.interval_s, "time": report.get("time"),
+                                   "last_update": latest.get("reported_at"),
+                                   "status_review_error": self._status_failure.get(self.pid),
                                    "needs_attention": report.get("needs_attention", False),
                                    "suggested_question": report.get("suggested_question", False)},
-                    request_question_branches=True, question_drafts=True, ai_drafts=nurse_ai.available(), patient_id_guard=True,
-                    alerts=self.supervisor.alerts(self.pid) + list(data.get("alerts") or []))
+                    request_question_branches=True, question_drafts=True, arrival_eta=True,
+                    ai_drafts=nurse_ai.available(), patient_id_guard=True,
+                    alerts=self.supervisor.alerts(self.pid) + [
+                        {**alert, "eta_available": alert.get("_eta_patient_id") == self.pid}
+                        for alert in data.get("alerts") or []
+                    ])
         return data
 
     # ----- what happened (the dashboard's timeline) ---------------------------------------------
@@ -157,6 +314,16 @@ class NurseBridge:
     def on_feed(self, stage: str, text: str) -> None:
         if stage in FEED_ACTIONS:
             self.record("Patient agent", FEED_ACTIONS[stage], text)
+        if ((stage == "noticed" and text != "Read memory + room")
+                or (stage == "outcome" and text.startswith("For the next visit:"))
+                or (stage == "learned" and text.startswith("Remembered:"))):
+            with self.live.lock:
+                notes = self._status_notes[self.pid]
+                now = time.monotonic()
+                text = text[:300]
+                if not any(note == text and now - at <= STATUS_NOTE_MAX_AGE_S for at, note, _ in notes):
+                    notes.append((now, text, True))
+                self._status_changed.set()
 
     # ----- the agent's pages go through the nurse supervisor (Claude triage) ---------------------
     def page(self, text: str, reason: Optional[str]) -> dict:
@@ -174,6 +341,30 @@ class NurseBridge:
         """Handles the dashboard's paths that Live doesn't know; None = not mine (Live handles it)."""
         if body.get("patient_id", self.pid) != self.pid:
             return {"ok": False, "error": "The active patient changed. Review their profile before continuing."}
+        if path == "alert/eta":
+            minutes = body.get("eta_minutes")
+            if not valid_eta_minutes(minutes):
+                return {"ok": False, "error": "Enter a whole number of minutes from 1 to 120."}
+            with self.live.lock:
+                patient_id = self.pid
+                if body.get("patient_id", patient_id) != patient_id:
+                    return {"ok": False, "error": "The active patient changed. Review their profile before continuing."}
+                alert = self._find_alert(body.get("id"), patient_id=patient_id)
+                if alert is None or alert.get("kind") not in ("page", "call"):
+                    return {"ok": False, "error": "This patient request is no longer open."}
+                if alert["id"].startswith("agent-"):
+                    if not self.supervisor.acknowledge(patient_id, alert["id"], eta_minutes=minutes):
+                        return {"ok": False, "error": "This patient request is no longer open."}
+                    self._resolve_alert_proposal(alert["id"], patient_id=patient_id)
+                else:
+                    if alert.get("_eta_patient_id") != patient_id:
+                        return {"ok": False, "error": "This request belongs to a different patient profile."}
+                    alert.update(done=True, eta_minutes=minutes)
+                now = self.live.now()
+                link = self._links[patient_id]
+                link.send_eta(alert["id"], minutes, now)
+                link.record_interaction("Nurse", "Sent ETA", link.eta_message(now))
+                return {"ok": True}
         if path == "presence":
             if "present" not in body:
                 return {"ok": False, "error": "present is required"}
@@ -182,6 +373,7 @@ class NurseBridge:
                 self.record("Nurse", "Updated", {True: "Visitors present", False: "No visitors"}.get(body["present"], "Visitors unknown"))
             return res
         if path == "visit":
+            self.link.clear_eta()
             self.record("Nurse", "Visited", "Nurse visit logged")
             memory = getattr(self.live, "memory", None)
             if memory is not None:
@@ -191,8 +383,9 @@ class NurseBridge:
             ok = body.get("action") == "ack" and self.supervisor.acknowledge(self.pid, body["id"])
             if ok:
                 self._resolve_alert_proposal(body["id"])
-                self.record("Nurse", "On my way", next((a["text"] for a in self.supervisor.alerts(self.pid)
-                                                        if a["id"] == body["id"]), ""))
+                alert = next((a for a in self.supervisor.alerts(self.pid) if a["id"] == body["id"]), {})
+                self.record("Nurse", "Acknowledged" if alert.get("delivery") == "status-update" else "On my way",
+                            alert.get("text", ""))
             return {"ok": True} if ok else {"ok": False, "error": "No such alert action."}
         if path == "patient/request":
             req, reason = body.get("request"), body.get("reason")
@@ -244,6 +437,12 @@ class NurseBridge:
                         return {"ok": False, "error": "Review the updated proposal before sending it."}
                     if self._awaiting_answer():
                         return {"ok": False, "error": "The patient is still answering a question."}
+                    if p.get("status_update"):
+                        current = self.profile()
+                        prior = self._status_profiles.get(self.pid, current)
+                        if (self._status_review_paused() or current["awareness"]["state"] != "awake"
+                                or observation_changes(prior, current)):
+                            return {"ok": False, "error": "The bedside status changed. Review the patient before sending."}
                     self._send_check_in(p["steps"], origin)
                     if origin:
                         self._update_request(origin, "waiting_answer")
@@ -292,8 +491,8 @@ class NurseBridge:
             return None                                    # Live returns the patient screen to normal
         return None
 
-    def _find_alert(self, alert_id) -> Optional[dict]:
-        for a in self.supervisor.alerts(self.pid) + list(self.live.alerts):
+    def _find_alert(self, alert_id, *, patient_id=None) -> Optional[dict]:
+        for a in self.supervisor.alerts(patient_id or self.pid) + list(self.live.alerts):
             if a["id"] == alert_id and not a.get("done"):
                 return a
         return None
@@ -330,9 +529,9 @@ class NurseBridge:
             self.record("Nurse", "Asked", question)
             return {"ok": True, "qid": qid}
 
-    def _resolve_alert_proposal(self, alert_id: str) -> None:
+    def _resolve_alert_proposal(self, alert_id: str, *, patient_id=None) -> None:
         proposal_id = f"{alert_id}-question"
-        self.supervisor.resolve_question(self.pid, proposal_id)
+        self.supervisor.resolve_question(patient_id or self.pid, proposal_id)
         self.refined.pop(proposal_id, None)
 
     def _send_check_in(self, steps: list, origin: Optional[str]) -> None:

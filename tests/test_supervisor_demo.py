@@ -141,6 +141,18 @@ def test_patient_agent_can_push_and_retry_with_its_own_identity():
     assert morgan.nurse_json()["alerts"][0]["done"]
 
 
+def test_arrival_estimate_is_shown_only_to_the_target_simulated_patient():
+    avery, morgan = make_demo_patients(playback=ShiftPlayback())
+    result = morgan.nurse_action("patient/request", {"request": "Could you adjust my pillow?"})
+    body = {"id": result["id"], "eta_minutes": 3}
+    assert not avery.nurse_action("alert/eta", body)["ok"]
+    assert morgan.nurse_action("alert/eta", body)["ok"]
+    assert "about 3 minutes" in morgan.screen_json()["subtitle"]
+    assert avery.screen_json()["subtitle"] is None
+    assert morgan.nurse_action("visit", {})["ok"]
+    assert morgan.screen_json()["subtitle"] is None
+
+
 def eventually(predicate):
     deadline = time.monotonic() + 2
     while time.monotonic() < deadline:

@@ -25,12 +25,12 @@ def _tmp(tmp_path, monkeypatch):
     clock.reset()
 
 
-def setup(tmp_path, decide=None, interval_s=None):
+def setup(tmp_path, decide=None, interval_s=None, assess=None):
     live = Live(Room(plug_factory=SimPlug), patient="t", now=time.monotonic)
     live.profile = "margaret"
     live.memory = profile_memory("margaret", str(tmp_path))
     live.awake_state = {"awake": True, "open_ratio": 0.9}
-    live.nurse = NurseBridge(live, decide=decide)
+    live.nurse = NurseBridge(live, decide=decide, assess=assess)
     if interval_s is not None:
         live.nurse.supervisor.interval_s = interval_s
     live.nurse.start()
@@ -236,5 +236,108 @@ def test_ending_session_cancels_a_pending_supervisor_follow_up(tmp_path, monkeyp
         data = live.nurse_json()
         assert not data["session"]["active"] and data["alerts"][0]["review"] == "needs_review"
         assert live.screen_json()["screen"] == "idle"
+    finally:
+        live.nurse.stop()
+
+
+def test_status_stream_only_surfaces_actionable_updates_with_a_question(tmp_path, monkeypatch):
+    monkeypatch.setattr("lookat.nurse_bridge.STATUS_SAMPLE_S", .02)
+    monkeypatch.setattr("lookat.nurse_bridge.STATUS_REVIEW_GAP_S", .05)
+    status_calls = []
+
+    def assess(instruction, payload):
+        profile, changes = payload["patient_context"], payload["changes"]
+        assert all("Margaret Chen" not in fact for fact in profile["preferences"])
+        status_calls.append(changes)
+        if any("usual bedtime" in change for change in changes):
+            assert "When warm, prefers the fan over removing a blanket" in profile["preferences"]
+            return {"action": "ask", "rationale": "A fan is their usual preference when warm.",
+                    "question": "Would a fan on low help you get comfortable?", "choice": "fan"}
+        if any("next visit" in change for change in changes):
+            return {"action": "flag", "rationale": "The patient agent deferred a pillow check.",
+                    "question": "Would you like fewer pillows?", "choice": "remove_pillow"}
+        return {"action": "ignore"}
+
+    def wait_for(predicate):
+        stop = time.monotonic() + 3
+        while time.monotonic() < stop:
+            if predicate():
+                return
+            time.sleep(.01)
+        assert predicate()
+
+    clock.set_time("21:30")
+    monkeypatch.setattr(nurse_ai, "_request_json", assess)
+    live = setup(tmp_path, interval_s=30, assess=nurse_ai.assess_status)
+    supervisor = live.nurse.supervisor
+    try:
+        wait_for(lambda: supervisor.latest_profile("margaret"))
+        live.room.set_temp(22.3)
+        wait_for(lambda: supervisor.latest_profile("margaret")["room"]["temp_c"] == 22.3)
+        assert status_calls == [] and live.nurse.proposal is None
+        live.room.execute("lamp", "on", by="patient")
+        wait_for(lambda: len(status_calls) == 1)
+        assert live.nurse.proposal is None and not live.nurse_json()["alerts"]
+        clock.set_time("22:30")
+        live.room.set_temp(24)
+        wait_for(lambda: live.nurse.proposal is not None)
+        proposal = live.nurse.proposal
+        assert "22.3 to 24 °C" in proposal["evidence"]
+        assert "fan on low" in proposal["steps"][0]["question"]
+        assert live.screen_json()["screen"] == "idle"
+        assert live.nurse_action("proposal/dismiss", {"id": proposal["id"]})["ok"]
+        note = "For the next visit: Check whether the patient needs fewer pillows."
+        live.add_feed("outcome", note)
+        wait_for(lambda: bool(live.nurse_json()["alerts"]))
+        alert, = live.nurse_json()["alerts"]
+        assert alert["delivery"] == "status-update" and alert["source"] == "ai"
+        assert alert["suggested_question"] == "Would you like fewer pillows?"
+        assert live.nurse_action("alert", {"id": alert["id"], "action": "ack"})["ok"]
+        live.add_feed("outcome", note)
+        time.sleep(.12)
+        assert len(status_calls) == 3 and len(live.nurse_json()["alerts"]) == 1
+        assert supervisor.latest_report("margaret") is None  # the scheduled check-in has not run
+    finally:
+        live.nurse.stop()
+
+
+def test_arrival_estimate_reaches_patient_without_replacing_their_question(tmp_path):
+    live = setup(tmp_path)
+    now = [100.0]
+    live.now = lambda: now[0]
+    client = TestClient(make_app(live))
+    try:
+        alert = live.add_alert("page", "Requests a blanket.")
+        body = {"patient_id": "margaret", "id": alert["id"]}
+        assert not client.post("/api/nurse/alert/eta", json={**body, "eta_minutes": True}).json()["ok"]
+        assert client.post("/api/nurse/send", json={"question": "Would a blanket help?", "options": ["Yes", "No"]}).json()["ok"]
+        assert client.post("/api/nurse/alert/eta", json={**body, "eta_minutes": 5}).json()["ok"]
+        assert not client.post("/api/nurse/alert/eta", json={**body, "eta_minutes": 1}).json()["ok"]
+        screen = client.get("/api/screen").json()
+        assert screen["title"] == "Would a blanket help?" and screen["left"]["label"] == "Yes"
+        assert "about 5 minutes" in screen["subtitle"]
+        assert live.nurse.link.drain_responses()[0]["eta_minutes"] == 5
+        assert client.get("/api/nurse").json()["alerts"][0]["eta_minutes"] == 5
+        now[0] += 300
+        assert client.get("/api/screen").json()["subtitle"] is None
+    finally:
+        live.nurse.stop()
+
+
+def test_eta_for_a_native_call_cannot_go_to_a_different_profile(tmp_path):
+    live = setup(tmp_path)
+    try:
+        with live.lock:
+            live._handle(("call_nurse",), live.now())
+        call, = live.nurse_json()["alerts"]
+        assert call["eta_available"] and call["urgency"] == "urgent"
+        live.profile = "james"
+        assert not live.nurse_json()["alerts"][0]["eta_available"]
+        estimate = {"id": call["id"], "eta_minutes": 4}
+        assert not live.nurse_action("alert/eta", {**estimate, "patient_id": "james"})["ok"]
+        assert live.nurse.link.eta_message(live.now()) is None
+        live.profile = "margaret"
+        assert live.nurse_action("alert/eta", {**estimate, "patient_id": "margaret"})["ok"]
+        assert "about 4 minutes" in live.screen_json()["subtitle"]
     finally:
         live.nurse.stop()

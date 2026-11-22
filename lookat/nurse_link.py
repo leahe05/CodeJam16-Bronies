@@ -1,5 +1,6 @@
 """Bedside status and the in-process interface between a patient agent and nurses."""
 
+import math
 from collections import deque
 from threading import Lock
 
@@ -9,6 +10,11 @@ UNKNOWN = "unknown"
 EYE_SAMPLE_GAP_S = 2.0
 OPEN_S = 1.0
 CLOSED_S = 30.0
+MAX_ETA_MINUTES = 120
+
+
+def valid_eta_minutes(minutes):
+    return type(minutes) is int and 1 <= minutes <= MAX_ETA_MINUTES
 
 
 class NurseLink:
@@ -23,6 +29,7 @@ class NurseLink:
             self._responses = deque(maxlen=100)
             self._history = deque(maxlen=100)
             self._summary = None
+            self._eta_until = None
             self._visitors_present = None
             self._eye_state = None
             self._eye_since = self._eye_seen = None
@@ -99,6 +106,23 @@ class NurseLink:
             responses = list(self._responses)
             self._responses.clear()
             return responses
+
+    def send_eta(self, alert_id, minutes, now):
+        with self._lock:
+            self._eta_until = now + minutes * 60
+            self._responses.append({"alert_id": alert_id, "action": "eta", "eta_minutes": minutes,
+                                    "time": clock.hhmm()})
+
+    def eta_message(self, now):
+        with self._lock:
+            if self._eta_until is None or now >= self._eta_until:
+                return None
+            minutes = math.ceil((self._eta_until - now) / 60)
+        return f"Your nurse expects to arrive in about {minutes} {'minute' if minutes == 1 else 'minutes'}."
+
+    def clear_eta(self):
+        with self._lock:
+            self._eta_until = None
 
     def set_visitors(self, present):
         if present is not None and type(present) is not bool:
